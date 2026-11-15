@@ -2,10 +2,9 @@ package io.github.jaeseongs95.portal.domain.operation;
 
 import static io.github.jaeseongs95.portal.domain.operation.OperationFixtures.REVISION;
 import static io.github.jaeseongs95.portal.domain.operation.OperationFixtures.T0;
-import static io.github.jaeseongs95.portal.domain.operation.OperationFixtures.accepted;
+import static io.github.jaeseongs95.portal.domain.operation.OperationFixtures.review;
 import static io.github.jaeseongs95.portal.domain.operation.OperationFixtures.assertInvalidTransition;
 import static io.github.jaeseongs95.portal.domain.operation.OperationFixtures.command;
-import static io.github.jaeseongs95.portal.domain.operation.OperationFixtures.evaluating;
 import static io.github.jaeseongs95.portal.domain.operation.OperationFixtures.id;
 import static io.github.jaeseongs95.portal.domain.operation.OperationFixtures.pending;
 import static io.github.jaeseongs95.portal.domain.operation.OperationFixtures.queued;
@@ -39,13 +38,11 @@ class OperationTransitionTest {
     private static final Instant HOUR_AFTER_T0 = T0.plus(Duration.ofHours(1));
 
     @Test
-    @DisplayName("RC-A-765 the intent is stored as accepted, goes to the owner as pending, is queued by the owner's start, then claimed, run and completed with its evidence")
+    @DisplayName("RC-A-765 S-D0119-12 a request no rule covers is stored as pending (there is no accepted), is queued by the owner's start, then claimed, run and completed with its evidence")
     void lifeOfAnOwnerApprovedCommand() {
-        Operation accepted = accepted();
-        assertThat(accepted.state()).isEqualTo(OperationState.ACCEPTED);
-        assertThat(accepted.version()).isEqualTo(1);
-        assertThat(accepted.input()).isEqualTo(new CommandInput(new CommandText("printf ok"), new Utf8Text(""), new Utf8Text("")));
         Operation pending = pending();
+        assertThat(pending.version()).as("the first stored state is the judgement").isEqualTo(1);
+        assertThat(pending.input()).isEqualTo(new CommandInput(new CommandText("printf ok"), new Utf8Text(""), new Utf8Text("")));
         assertThat(pending.state()).isEqualTo(OperationState.PENDING);
         assertThat(pending.approvalMode()).as("nothing runs before the approval").isEqualTo(ApprovalMode.NOT_DECIDED);
         Operation queued = queued();
@@ -55,7 +52,7 @@ class OperationTransitionTest {
         assertThat(running.state()).isEqualTo(OperationState.RUNNING);
         Operation completed = running.settle(ExecutionOutcome.exited(0, List.of("done")), T0.plusSeconds(5));
         assertThat(completed.state()).isEqualTo(OperationState.COMPLETED);
-        assertThat(completed.version()).isEqualTo(6);
+        assertThat(completed.version()).isEqualTo(5);
         assertThat(completed.approvalMode()).isEqualTo(ApprovalMode.OWNER);
         assertThat(completed.settlement()).isInstanceOfSatisfying(Settlement.Settled.class, settled -> {
             assertThat(settled.certainty()).isEqualTo(OutcomeCertainty.EXITED);
@@ -68,11 +65,11 @@ class OperationTransitionTest {
     @Test
     @DisplayName("RC-A-083 the default deadline is one hour after the request; a requested deadline at or before the request, or later than one hour, is refused")
     void deadlineOfTheApproval() {
-        assertThat(accepted().expiry()).isEqualTo(new Deadline.At(HOUR_AFTER_T0));
-        assertThat(Operation.accept(command("fixture-key-000002", "ls", "alpha", new ConflictKey.None(), new Deadline.At(HOUR_AFTER_T0)), id('2'), T0).expiry())
+        assertThat(pending().expiry()).isEqualTo(new Deadline.At(HOUR_AFTER_T0));
+        assertThat(Operation.admit(command("fixture-key-000002", "ls", "alpha", new ConflictKey.None(), new Deadline.At(HOUR_AFTER_T0)), id('2'), T0, review()).expiry())
             .as("exactly one hour is allowed").isEqualTo(new Deadline.At(HOUR_AFTER_T0));
         for (Instant refused : List.of(T0, T0.minusMillis(1), HOUR_AFTER_T0.plusMillis(1))) {
-            assertThatThrownBy(() -> Operation.accept(command("fixture-key-000003", "ls", "alpha", new ConflictKey.None(), new Deadline.At(refused)), id('3'), T0))
+            assertThatThrownBy(() -> Operation.admit(command("fixture-key-000003", "ls", "alpha", new ConflictKey.None(), new Deadline.At(refused)), id('3'), T0, review()))
                 .as("deadline %s", refused).isInstanceOf(IllegalArgumentException.class).hasMessage("Invalid approval deadline");
         }
         assertThatThrownBy(() -> new Deadline.At(null)).isInstanceOf(NullPointerException.class);
@@ -86,8 +83,7 @@ class OperationTransitionTest {
         Operation expired = pending.expire(HOUR_AFTER_T0);
         assertThat(expired.state()).isEqualTo(OperationState.EXPIRED);
         assertThat(pending.expire(HOUR_AFTER_T0.plusNanos(1)).state()).isEqualTo(OperationState.EXPIRED);
-        Operation shortLived = Operation.accept(command("fixture-key-000004", "ls", "alpha", new ConflictKey.None(), new Deadline.At(T0.plusSeconds(600))), id('4'), T0)
-            .awaitOwnerDecision(T0.plusSeconds(1));
+        Operation shortLived = Operation.admit(command("fixture-key-000004", "ls", "alpha", new ConflictKey.None(), new Deadline.At(T0.plusSeconds(600))), id('4'), T0, review());
         Operation restored = Operation.restore(shortLived.snapshot());
         assertThat(restored.expiry()).isEqualTo(new Deadline.At(T0.plusSeconds(600)));
         assertThat(restored.expire(T0.plusSeconds(600)).state()).isEqualTo(OperationState.EXPIRED);
@@ -110,20 +106,15 @@ class OperationTransitionTest {
     @DisplayName("S2-ST-01 every transition method refuses a state the table does not allow, with INVALID_OPERATION_TRANSITION")
     void methodsRefuseWrongStates() {
         DispatchFailure refusal = DispatchFailure.refused(DispatchReason.AUTHORITY, DispatchStage.AUTHORITY);
-        assertInvalidTransition(() -> accepted().enqueue(new StartAuthority.Owner(), T0));
-        assertInvalidTransition(() -> evaluating().enqueue(new StartAuthority.Owner(), T0));
+        assertInvalidTransition(() -> queued().enqueue(new StartAuthority.Owner(), T0));
         assertInvalidTransition(() -> pending().claim(T0));
         assertInvalidTransition(() -> queued().markRunning(T0));
         assertInvalidTransition(() -> running().claim(T0));
         assertInvalidTransition(() -> running().deny(T0));
         assertInvalidTransition(() -> running().expire(HOUR_AFTER_T0));
-        assertInvalidTransition(() -> running().awaitOwnerDecision(T0));
-        assertInvalidTransition(() -> queued().beginEvaluation(T0));
         assertInvalidTransition(() -> starting().refuseBeforeDispatch(refusal, T0).claim(T0));
         assertInvalidTransition(() -> running().refuseBeforeDispatch(refusal, T0));
         assertInvalidTransition(() -> pending().settle(ExecutionOutcome.exited(0, List.of()), T0));
-        assertInvalidTransition(() -> queued().recordDecision(new DecisionRecord.NoDecision(), T0));
-        assertInvalidTransition(() -> pending().abortEvaluation(T0));
         assertInvalidTransition(() -> running().reconcile(new ReconciliationEvidence.Failed(), T0));
     }
 
@@ -219,14 +210,14 @@ class OperationTransitionTest {
         assertThat(unknown.recoverAfterRestart(T0.plusSeconds(7))).as("a restart does not touch an unknown operation").isSameAs(unknown);
         assertThat(unknown.requestCancel(T0.plusSeconds(7))).isSameAs(unknown);
         assertThat(Operation.restore(unknown.snapshot()).state()).isEqualTo(OperationState.UNKNOWN);
-        assertThat(unknown.hasContract(accepted().contractDigest())).as("the same request is the same operation").isTrue();
+        assertThat(unknown.hasContract(pending().contractDigest())).as("the same request is the same operation").isTrue();
     }
 
     @Test
     @DisplayName("S2-ST-04 RC-B-200 a restart makes in-flight operations unknown, an owner step expires, a queued one stays queued (and the scheduler expires it past its deadline)")
     void recoverAfterRestart() {
         Instant restart = T0.plusSeconds(100);
-        for (Operation inFlight : List.of(accepted(), evaluating(), starting(), running(), terminating())) {
+        for (Operation inFlight : List.of(starting(), running(), terminating())) {
             Operation recovered = inFlight.recoverAfterRestart(restart);
             assertThat(recovered.state()).as("from %s", inFlight.state()).isEqualTo(OperationState.UNKNOWN);
             assertThat(recovered.recovery()).isEqualTo(RecoveryReason.BRIDGE_RESTART);
@@ -253,7 +244,7 @@ class OperationTransitionTest {
     @Test
     @DisplayName("RC-B-195 an owner's denial before dispatch ends the operation without any start")
     void denialBeforeDispatch() {
-        for (Operation waiting : List.of(evaluating(), pending(), queued())) {
+        for (Operation waiting : List.of(pending(), queued())) {
             Operation denied = waiting.deny(T0.plusSeconds(10));
             assertThat(denied.state()).isEqualTo(OperationState.DENIED);
             assertThat(denied.settlement()).isInstanceOfSatisfying(Settlement.Settled.class, settled -> {
@@ -261,7 +252,7 @@ class OperationTransitionTest {
                 assertThat(settled.result()).isEqualTo(new RecordedResult.NoResult());
             });
         }
-        assertInvalidTransition(() -> accepted().deny(T0));
+        assertInvalidTransition(() -> running().deny(T0));
     }
 
     @Test
@@ -303,7 +294,7 @@ class OperationTransitionTest {
     @Test
     @DisplayName("S2-ST-01 a cancel before dispatch cancels at once; while starting or running it is terminating until the executor settles")
     void cancellation() {
-        for (Operation waiting : List.of(accepted(), evaluating(), pending(), queued())) {
+        for (Operation waiting : List.of(pending(), queued())) {
             assertThat(waiting.requestCancel(T0.plusSeconds(9)).state()).isEqualTo(OperationState.CANCELLED);
         }
         for (Operation active : List.of(starting(), running())) {
@@ -336,14 +327,13 @@ class OperationTransitionTest {
     @Test
     @DisplayName("S2-ST-05 the contract does not change in any transition, every transition adds one to the version, and the contract digest stays")
     void contractIsImmutable() {
-        Operation first = accepted();
+        Operation first = pending();
         List<Operation> chain = new ArrayList<>();
         chain.add(first);
-        chain.add(chain.get(0).awaitOwnerDecision(T0.plusSeconds(1)));
-        chain.add(chain.get(1).enqueue(new StartAuthority.Owner(), T0.plusSeconds(2)));
-        chain.add(chain.get(2).claim(T0.plusSeconds(3)));
-        chain.add(chain.get(3).markRunning(T0.plusSeconds(4)));
-        chain.add(chain.get(4).settle(ExecutionOutcome.exited(0, List.of()), T0.plusSeconds(5)));
+        chain.add(chain.get(0).enqueue(new StartAuthority.Owner(), T0.plusSeconds(2)));
+        chain.add(chain.get(1).claim(T0.plusSeconds(3)));
+        chain.add(chain.get(2).markRunning(T0.plusSeconds(4)));
+        chain.add(chain.get(3).settle(ExecutionOutcome.exited(0, List.of()), T0.plusSeconds(5)));
         for (int i = 0; i < chain.size(); i++) {
             Operation step = chain.get(i);
             assertThat(step.version()).isEqualTo(i + 1);
@@ -359,15 +349,15 @@ class OperationTransitionTest {
             assertThat(step.conflictKey()).isEqualTo(first.conflictKey());
             assertThat(step.contractDigest()).isEqualTo(first.contractDigest());
         }
-        assertThat(chain.get(0).state()).isEqualTo(OperationState.ACCEPTED);
-        assertThat(chain.get(5).state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(chain.get(0).state()).isEqualTo(OperationState.PENDING);
+        assertThat(chain.get(4).state()).isEqualTo(OperationState.COMPLETED);
     }
 
     @Test
     @DisplayName("RC-A-771 the identity of a submission is kept in the operation: id, key, owner and the contract digest")
     void submissionIdentity() {
         NewOperation spec = command("owner-request-key", "printf ok");
-        Operation operation = Operation.accept(spec, id('9'), T0);
+        Operation operation = Operation.admit(spec, id('9'), T0, review());
         assertThat(operation.id()).isEqualTo(id('9'));
         assertThat(operation.requestKey()).isEqualTo(new RequestKey("owner-request-key"));
         assertThat(operation.owner().value()).isEqualTo("fixture-owner");
@@ -416,19 +406,56 @@ class OperationTransitionTest {
     }
 
     @Test
-    @DisplayName("S2-ST-05 a decision is recorded without moving the state; the audit failure is a flag that does not change the state")
-    void decisionAndAuditFailure() {
-        DecisionRecord decided = new DecisionRecord.Decided(DecisionKind.EXECUTE, DecisionReason.COMMAND_SET, ReviewReason.NONE, 7);
-        Operation recorded = evaluating().recordDecision(decided, T0.plusSeconds(2));
-        assertThat(recorded.state()).isEqualTo(OperationState.EVALUATING);
-        assertThat(recorded.version()).isEqualTo(3);
-        assertThat(recorded.decision().isExecute()).isTrue();
-        Operation audited = recorded.recordAuditFailure(T0.plusSeconds(3));
-        assertThat(audited.audit()).isEqualTo(AuditState.FAILED);
-        assertThat(audited.state()).isEqualTo(OperationState.EVALUATING);
-        assertThat(new DecisionRecord.NoDecision().isExecute()).isFalse();
+    @DisplayName("S-D0119-10 an operation is stored once, in the state its admission decided: queued under a policy, denied by a rule, or pending for the owner")
+    void admissionDecidesTheFirstState() {
+        NewOperation spec = command("admission-key-0001", "ls /tmp");
+        Operation queued = Operation.admit(spec, id('3'), T0, Admission.of(DecisionReason.COMMAND_SET, OperationKind.COMMAND, 7));
+        assertThat(queued.state()).isEqualTo(OperationState.QUEUED);
+        assertThat(queued.version()).isEqualTo(1);
+        assertThat(queued.approvalMode()).isEqualTo(ApprovalMode.AUTOMATIC);
+        assertThat(queued.decision()).isEqualTo(new DecisionRecord.Decided(DecisionKind.EXECUTE, DecisionReason.COMMAND_SET, ReviewReason.NONE, 7));
+        assertThat(queued.event()).isEqualTo(new OperationEvent(1, OperationState.QUEUED, T0));
+        assertThat(Operation.restore(queued.snapshot()).snapshot()).isEqualTo(queued.snapshot());
+        Operation denied = Operation.admit(spec, id('4'), T0, Admission.of(DecisionReason.POLICY_DENIED, OperationKind.COMMAND, 7));
+        assertThat(denied.state()).isEqualTo(OperationState.DENIED);
+        assertThat(denied.approvalMode()).isEqualTo(ApprovalMode.NOT_DECIDED);
+        assertThat(denied.settlement()).isInstanceOfSatisfying(Settlement.Settled.class, settled -> {
+            assertThat(settled.certainty()).isEqualTo(OutcomeCertainty.NOT_DISPATCHED);
+            assertThat(settled.result()).isEqualTo(new RecordedResult.NoResult());
+            assertThat(settled.finishedAt()).isEqualTo(T0);
+        });
+        assertThat(Operation.restore(denied.snapshot()).snapshot()).isEqualTo(denied.snapshot());
+        Operation review = Operation.admit(spec, id('5'), T0, Admission.of(DecisionReason.SUDO_NOT_ENABLED, OperationKind.COMMAND, 7));
+        assertThat(review.state()).isEqualTo(OperationState.PENDING);
+        assertThat(review.approvalMode()).isEqualTo(ApprovalMode.NOT_DECIDED);
+        assertThat(review.decision().isExecute()).isFalse();
+        assertThat(Arrays.stream(OperationState.values()).map(OperationState::name)).as("there is no state before the judgement").doesNotContain("ACCEPTED", "EVALUATING");
+    }
+
+    @Test
+    @DisplayName("S-D0119-15 the authority of a queued operation covers its kind; the admission of a reason fixes the kind of decision")
+    void admissionKindsAndAuthority() {
+        assertThat(Admission.of(DecisionReason.READ_ONLY, OperationKind.COMMAND, 0)).isInstanceOfSatisfying(Admission.Queue.class,
+            queue -> assertThat(queue.authority()).isEqualTo(new StartAuthority.Policy(StartAuthority.PolicyScope.READ)));
+        assertThat(Admission.of(DecisionReason.AUTOMATIC_UPLOAD, OperationKind.UPLOAD, 0)).isInstanceOfSatisfying(Admission.Queue.class,
+            queue -> assertThat(queue.authority()).isEqualTo(new StartAuthority.Policy(StartAuthority.PolicyScope.UPLOAD)));
+        assertThat(Admission.of(DecisionReason.NO_MATCHING_RULE, OperationKind.UPLOAD, 0)).isInstanceOf(Admission.Review.class);
+        assertThat(Admission.of(DecisionReason.AGENT_CLI_REVIEW, OperationKind.AGENT_CLI, 0)).isInstanceOf(Admission.Review.class);
+        assertThatThrownBy(() -> Operation.admit(command("admission-key-0002", "ls"), id('6'), T0, Admission.of(DecisionReason.AUTOMATIC_UPLOAD, OperationKind.UPLOAD, 0)))
+            .isInstanceOf(IllegalArgumentException.class);
         assertThat(Arrays.stream(DecisionReason.values()).filter(DecisionReason::isAutomatic)).containsExactlyInAnyOrder(DecisionReason.COMMAND_SET, DecisionReason.MODEL_PASSED,
-            DecisionReason.TEST_SERVER_BYPASS);
+            DecisionReason.TEST_SERVER_BYPASS, DecisionReason.READ_ONLY, DecisionReason.AUTOMATIC_UPLOAD, DecisionReason.AUTOMATIC_DOWNLOAD);
+        assertThat(Arrays.stream(DecisionReason.values()).filter(reason -> reason.kind() == DecisionKind.DENY)).containsExactly(DecisionReason.POLICY_DENIED);
+    }
+
+    @Test
+    @DisplayName("S2-ST-05 the audit failure is a flag that does not change the state or the decision")
+    void auditFailure() {
+        Operation audited = pending().recordAuditFailure(T0.plusSeconds(3));
+        assertThat(audited.audit()).isEqualTo(AuditState.FAILED);
+        assertThat(audited.state()).isEqualTo(OperationState.PENDING);
+        assertThat(audited.decision()).isEqualTo(pending().decision());
+        assertThat(new DecisionRecord.NoDecision().isExecute()).isFalse();
     }
 
     private static ExecutionOutcome outcome(ExecutionReason reason, RemoteState remote, ExitStatus exit, CleanupState cleanup, Reconciliation reconciliation, ResultFlag failed,

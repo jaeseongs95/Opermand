@@ -81,7 +81,6 @@ class FullAssemblyFlowTest {
 
     private static final Sha256Digester DIGEST = new Sha256Digester();
     private static final OwnerId OWNER = new OwnerId("verified-owner");
-    private static final StartAuthority APPROVED_BY_OWNER = new StartAuthority.Owner();
     private static final Duration LIMIT = Duration.ofSeconds(30);
 
     private final OperationIntake intake;
@@ -117,7 +116,7 @@ class FullAssemblyFlowTest {
         Operation submitted = intake.submit(command(FullAssemblyApplication.COMMAND));
         assertThat(submitted.state()).isEqualTo(OperationState.PENDING);
 
-        intake.approve(submitted.id(), APPROVED_BY_OWNER);
+        intake.approve(submitted.id());
         Operation done = awaitTerminal(submitted.id());
 
         assertThat(done.state()).isEqualTo(OperationState.COMPLETED);
@@ -131,7 +130,7 @@ class FullAssemblyFlowTest {
     @DisplayName("S3-UC-08: a command that the server does not know exits with 127 and the operation is FAILED, not completed")
     void aCommandThatExitsWithAFailureIsFailed() throws Exception {
         Operation submitted = intake.submit(command("portal-unknown-command"));
-        intake.approve(submitted.id(), APPROVED_BY_OWNER);
+        intake.approve(submitted.id());
 
         Operation done = awaitTerminal(submitted.id());
 
@@ -154,7 +153,7 @@ class FullAssemblyFlowTest {
 
         assertThat(placement).isInstanceOf(StagedPlacement.Placed.class);
         OperationId id = ((StagedPlacement.Placed) placement).operation();
-        intake.approve(id, APPROVED_BY_OWNER);
+        intake.approve(id);
         Operation done = awaitTerminal(id);
 
         assertThat(done.state()).isEqualTo(OperationState.COMPLETED);
@@ -174,7 +173,7 @@ class FullAssemblyFlowTest {
 
         OperationId id = placed(staged.place(new StagedPlacementRequest(OWNER, uuid, StagedActionKind.MOVE, newKey().value(), target, target.revision(),
             new PosixRemotePath("/moved.bin"), OverwriteMode.REPLACE, Elevation.NONE)));
-        intake.approve(id, APPROVED_BY_OWNER);
+        intake.approve(id);
 
         assertThat(awaitTerminal(id).state()).isEqualTo(OperationState.COMPLETED);
         assertThat(Files.readAllBytes(sftpRoot().resolve("moved.bin"))).isEqualTo(bytes);
@@ -196,7 +195,7 @@ class FullAssemblyFlowTest {
 
         OperationId id = placed(staged.place(new StagedPlacementRequest(OWNER, uuid, StagedActionKind.MOVE, newKey().value(), target, target.revision(),
             new PosixRemotePath("/taken.bin"), OverwriteMode.FAIL_IF_EXISTS, Elevation.NONE)));
-        intake.approve(id, APPROVED_BY_OWNER);
+        intake.approve(id);
 
         assertThat(awaitTerminal(id).state()).isEqualTo(OperationState.FAILED);
         assertThat(Files.readAllBytes(sftpRoot().resolve("taken.bin"))).as("the file of the target is unchanged").isEqualTo(new byte[] {1});

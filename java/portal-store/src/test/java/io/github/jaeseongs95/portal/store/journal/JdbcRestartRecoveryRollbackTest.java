@@ -35,7 +35,7 @@ class JdbcRestartRecoveryRollbackTest {
 
     @AfterEach
     void removeTheRows() {
-        for (String table : List.of("operation_event", "operation_command", "operation")) {
+        for (String table : List.of("operation_event", "operation_decision", "operation_command", "operation")) {
             jdbc.update("DELETE FROM " + table);
         }
     }

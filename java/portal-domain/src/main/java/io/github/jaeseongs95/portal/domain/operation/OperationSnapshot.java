@@ -80,11 +80,6 @@ public record OperationSnapshot(OperationId id, RequestKey requestKey, OwnerId o
             updatedAt, mode, decision, settlement, recovery, cancellation, profile, audit);
     }
 
-    OperationSnapshot withDecision(DecisionRecord recorded) {
-        return new OperationSnapshot(id, requestKey, owner, targetId, targetRevision, kind, input, contractDigest, createdAt, expiry, conflictKey, state, version,
-            updatedAt, approvalMode, recorded, settlement, recovery, cancellation, profile, audit);
-    }
-
     OperationSnapshot withSettlement(Settlement settled) {
         return new OperationSnapshot(id, requestKey, owner, targetId, targetRevision, kind, input, contractDigest, createdAt, expiry, conflictKey, state, version,
             updatedAt, approvalMode, decision, settled, recovery, cancellation, profile, audit);

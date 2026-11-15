@@ -82,7 +82,7 @@ class ContractRecordsStructureTest {
         assertThat(minimal.path("execution").isNull()).isTrue();
         assertThat(minimal.has("operationKey")).isTrue();
         assertThat(minimal.path("operationKey").isNull()).isTrue();
-        assertThat(minimal.path("state").stringValue()).isEqualTo("accepted");
+        assertThat(minimal.path("state").stringValue()).isEqualTo("pending");
     }
 
     @Test
@@ -410,12 +410,12 @@ class ContractRecordsStructureTest {
     }
 
     private OperationData minimalOperation() {
-        return new OperationData(ID, null, OperationKindWire.DOWNLOAD, OperationState.ACCEPTED, null, null, null, 0L, null, null, null, false, null, null, null, null, null,
+        return new OperationData(ID, null, OperationKindWire.DOWNLOAD, OperationState.PENDING, null, null, null, 0L, null, null, null, false, null, null, null, null, null,
             null, null, null, null, null, false);
     }
 
     private OperationData operationWith(String id, String operationKey) {
-        return new OperationData(id, operationKey, OperationKindWire.COMMAND, OperationState.ACCEPTED, null, null, null, 0L, null, null, null, false, null, null, null,
+        return new OperationData(id, operationKey, OperationKindWire.COMMAND, OperationState.PENDING, null, null, null, 0L, null, null, null, false, null, null, null,
             null, null, null, null, null, null, null, false);
     }
 

@@ -45,8 +45,6 @@ import io.github.jaeseongs95.portal.domain.operation.StartAuthority;
 @UseCaseTest
 class OperationIntakeTest {
 
-    private static final StartAuthority OWNER = new StartAuthority.Owner();
-
     private final OperationIntake intake;
     private final OperationsService operations;
     private final OperationJournal journal;
@@ -93,7 +91,7 @@ class OperationIntakeTest {
     @Test
     @DisplayName("RC-B-233 the same key and contract is one operation: a second and a parallel submit return the same identity, and the journal holds one row for the key")
     void theSameKeyIsOneOperation() throws Exception {
-        NewOperation spec = kit.command("echo same-key");
+        NewOperation spec = kit.command("touch same-key");
         Operation first = intake.submit(spec);
         CompletableFuture<Operation> parallel = CompletableFuture.supplyAsync(() -> intake.submit(spec));
         CompletableFuture<Operation> another = CompletableFuture.supplyAsync(() -> intake.submit(spec));
@@ -109,10 +107,10 @@ class OperationIntakeTest {
     @DisplayName("RC-B-235 the same key with a changed command is OPERATION_KEY_CONFLICT, and an independent key is accepted; the first operation is untouched")
     void aChangedContractForAKnownKeyIsRefused() {
         RequestKey key = kit.newKey();
-        Operation first = intake.submit(kit.command(key, "echo original"));
-        assertThatThrownBy(() -> intake.submit(kit.command(key, "echo changed"))).isInstanceOfSatisfying(RequestRefusedException.class,
+        Operation first = intake.submit(kit.command(key, "touch original"));
+        assertThatThrownBy(() -> intake.submit(kit.command(key, "touch changed"))).isInstanceOfSatisfying(RequestRefusedException.class,
             e -> assertThat(e.code()).isEqualTo(RequestErrorCode.OPERATION_KEY_CONFLICT));
-        Operation independent = intake.submit(kit.command("echo independent"));
+        Operation independent = intake.submit(kit.command("touch independent"));
         assertThat(independent.id()).isNotEqualTo(first.id());
         assertThat(kit.find(first.id()).state()).isEqualTo(OperationState.PENDING);
         intake.deny(first.id());
@@ -122,14 +120,14 @@ class OperationIntakeTest {
     @Test
     @DisplayName("RC-B-234 an operation for a target revision that is not the current one is TARGET_REVISION_CONFLICT, a switched-off target is TARGET_UNAVAILABLE, and nothing is written")
     void theTargetIsCheckedAtTheDoor() {
-        NewOperation stale = kit.command("echo stale");
+        NewOperation stale = kit.command("touch stale");
         targets.change("Web changed");
         assertThatThrownBy(() -> intake.submit(stale)).isInstanceOfSatisfying(RequestRefusedException.class,
             e -> assertThat(e.code()).isEqualTo(RequestErrorCode.TARGET_REVISION_CONFLICT));
         assertThat(journal.findByRequestKey(stale.requestKey())).isEmpty();
         targets.reset();
         targets.disable();
-        NewOperation disabled = kit.command("echo disabled");
+        NewOperation disabled = kit.command("touch disabled");
         assertThatThrownBy(() -> intake.submit(disabled)).isInstanceOfSatisfying(RequestRefusedException.class,
             e -> assertThat(e.code()).isEqualTo(RequestErrorCode.TARGET_UNAVAILABLE));
         assertThat(journal.findByRequestKey(disabled.requestKey())).isEmpty();
@@ -139,7 +137,7 @@ class OperationIntakeTest {
     @DisplayName("RC-B-238 RC-A-469 a request in a maintenance window is MAINTENANCE_ACTIVE and writes nothing, so the same key is accepted after the window")
     void aRefusedRequestFreesItsKey() {
         OwnerHash owner = newOwner();
-        NewOperation spec = kit.command("echo window");
+        NewOperation spec = kit.command("touch window");
         maintenance.reserve(owner);
         try {
             assertThatThrownBy(() -> intake.submit(spec)).isInstanceOfSatisfying(RequestRefusedException.class,
@@ -157,9 +155,9 @@ class OperationIntakeTest {
     @Test
     @DisplayName("RC-A-145 an audit that does not become durable stops the approval with StepFailed(START_AUDIT, AUDIT_FAILED): the operation stays pending, nothing runs, and the approval works when the audit does")
     void anApprovalNeedsItsAudit() throws Exception {
-        Operation pending = intake.submit(kit.command("echo audited-approval"));
+        Operation pending = intake.submit(kit.command("touch audited-approval"));
         audit.failOn(AuditAction.EXECUTION_QUEUED);
-        assertThatThrownBy(() -> intake.approve(pending.id(), OWNER)).isInstanceOfSatisfying(DispatchRefusedException.class, e -> {
+        assertThatThrownBy(() -> intake.approve(pending.id())).isInstanceOfSatisfying(DispatchRefusedException.class, e -> {
             assertThat(e.failure()).isEqualTo(DispatchFailure.stepFailed(DispatchStage.START_AUDIT, DispatchReason.AUDIT_FAILED));
             assertThat(e.getMessage()).doesNotContain("SECRET-AUDIT-DETAIL");
         });
@@ -167,7 +165,7 @@ class OperationIntakeTest {
         assertThat(executor.requestsSent()).isZero();
 
         audit.failNothing();
-        intake.approve(pending.id(), OWNER);
+        intake.approve(pending.id());
         assertThat(kit.awaitTerminal(pending.id()).state()).isEqualTo(OperationState.COMPLETED);
         assertThat(executor.requestsSent()).isEqualTo(1);
     }
@@ -175,10 +173,10 @@ class OperationIntakeTest {
     @Test
     @DisplayName("RC-A-144 a denied operation never runs, is audited and announced once, and cannot be approved afterwards")
     void aDeniedOperationNeverRuns() {
-        Operation pending = intake.submit(kit.command("echo denied"));
+        Operation pending = intake.submit(kit.command("touch denied"));
         Operation denied = intake.deny(pending.id());
         assertThat(denied.state()).isEqualTo(OperationState.DENIED);
-        assertThatThrownBy(() -> intake.approve(pending.id(), OWNER)).isInstanceOfSatisfying(DispatchRefusedException.class,
+        assertThatThrownBy(() -> intake.approve(pending.id())).isInstanceOfSatisfying(DispatchRefusedException.class,
             e -> assertThat(e.failure()).isEqualTo(DispatchFailure.refused(DispatchReason.REQUEST_STATE, DispatchStage.REQUEST_STATE)));
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             assertThat(audit.actionsOf(pending.id())).containsExactly(AuditAction.SUBMITTED, AuditAction.DENIED);
@@ -190,11 +188,11 @@ class OperationIntakeTest {
     @Test
     @DisplayName("RC-A-146 RC-A-470 an operation whose deadline passes while it waits for the owner expires by its own timer, wakes the observer, is audited, and can no longer be approved")
     void aPendingOperationExpiresByItsTimer() throws Exception {
-        Operation pending = intake.submit(kit.command("echo late", new Deadline.At(Instant.now().plusMillis(400))));
+        Operation pending = intake.submit(kit.command("touch late", new Deadline.At(Instant.now().plusMillis(400))));
         Observation seen = operations.observe(pending.id(), Duration.ofSeconds(10), new CancelSource()).toCompletableFuture().get(15, TimeUnit.SECONDS);
         assertThat(seen.operation().state()).isEqualTo(OperationState.EXPIRED);
         assertThat(seen.waitTimedOut()).isFalse();
-        assertThatThrownBy(() -> intake.approve(pending.id(), OWNER)).isInstanceOf(DispatchRefusedException.class);
+        assertThatThrownBy(() -> intake.approve(pending.id())).isInstanceOf(DispatchRefusedException.class);
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             assertThat(audit.actionsOf(pending.id())).contains(AuditAction.EXPIRED);
             assertThat(listener.timesTold(pending.id())).isEqualTo(1);
@@ -205,10 +203,10 @@ class OperationIntakeTest {
     @Test
     @DisplayName("RC-A-142 an observer that waits for a change is woken by the approval and sees the new state, not a timeout")
     void anObserverIsWokenByTheApproval() throws Exception {
-        Operation pending = intake.submit(kit.command("echo wake-me"));
+        Operation pending = intake.submit(kit.command("touch wake-me"));
         CompletableFuture<Observation> watching = operations.observe(pending.id(), Duration.ofSeconds(20), new CancelSource()).toCompletableFuture();
         assertThat(watching).isNotDone();
-        intake.approve(pending.id(), OWNER);
+        intake.approve(pending.id());
         Observation seen = watching.get(15, TimeUnit.SECONDS);
         assertThat(seen.operation().version()).isGreaterThan(pending.version());
         assertThat(seen.waitTimedOut()).isFalse();
@@ -221,7 +219,7 @@ class OperationIntakeTest {
         CountDownLatch release = new CountDownLatch(1);
         executor.when("held", executor.blocksUntil(release));
         Operation running = intake.submit(kit.command("held"));
-        intake.approve(running.id(), OWNER);
+        intake.approve(running.id());
         kit.await(running.id(), operation -> operation.state() == OperationState.RUNNING);
 
         CompletableFuture<Observation> immediate = operations.observe(running.id(), Duration.ZERO, new CancelSource()).toCompletableFuture();
@@ -243,7 +241,7 @@ class OperationIntakeTest {
     @Test
     @DisplayName("RC-B-234 an observer that waited, and a cancel, are TARGET_REVISION_CONFLICT when the target changed since the operation was approved")
     void aChangedTargetIsAConflictAfterTheWaitAndForACancel() throws Exception {
-        Operation pending = intake.submit(kit.command("echo moved-target"));
+        Operation pending = intake.submit(kit.command("touch moved-target"));
         CompletionStage<Observation> waiting = operations.observe(pending.id(), Duration.ofMillis(300), new CancelSource());
         targets.change("Web changed while observed");
         assertThat(refusalOf(waiting).code()).isEqualTo(RequestErrorCode.TARGET_REVISION_CONFLICT);

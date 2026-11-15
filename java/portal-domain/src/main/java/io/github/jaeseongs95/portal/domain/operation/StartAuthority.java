@@ -35,6 +35,23 @@ public sealed interface StartAuthority permits StartAuthority.Owner, StartAuthor
             Objects.requireNonNull(scope, "scope");
         }
 
+        /**
+         * The authority a stored decision stands for: the read authority for {@link DecisionReason#READ_ONLY}, otherwise the one the kind of operation has. The scope is
+         * not stored; it follows from the reason and the kind, so nothing has to infer it from the profile or the absence of a decision (defect D-0119, A6).
+         */
+        public static Policy of(DecisionReason reason, OperationKind kind) {
+            Objects.requireNonNull(reason, "reason");
+            Objects.requireNonNull(kind, "kind");
+            if (reason == DecisionReason.READ_ONLY) {
+                return new Policy(PolicyScope.READ);
+            }
+            return new Policy(switch (kind) {
+                case COMMAND, SOURCE, AGENT_CLI -> PolicyScope.COMMAND;
+                case UPLOAD -> PolicyScope.UPLOAD;
+                case DOWNLOAD -> PolicyScope.DOWNLOAD;
+            });
+        }
+
         @Override
         public ApprovalMode mode() {
             return ApprovalMode.AUTOMATIC;

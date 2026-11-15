@@ -934,3 +934,8 @@ Java 판에 같은 행동이 없다. 각 묶음의 대체 사례는 8.5절에서
 | C app 포트·실행 유스케이스·오류 코드 | `portal-app/…/app/{remote,execution,event,admission,operation,recovery,config,target}/**`, `portal-domain/…/domain/error/**`, `portal-web/src/test/resources/contract/mcp/envelope.schema.json` | 2.2절 포트(1차 납품), D3-03·13·14·17, S3-UC-01~04·07, G2·G3·G5·G6·G8 |
 | D 파일·artifact·출력·store·서버 조립 | `portal-app/…/app/{file,artifact,output,storage,agentcli,history,capacity,lifecycle}/**`, `portal-store/src/**`, `portal-server/src/**` | 1.3절 이월, 5절, D3-04·12, S3-AR·S3-UC-06·08, G4·G7·G9 |
 | E 아키텍처 규칙·사례 표·CI·문서 | `portal-arch-checks/**`, `docs/migration/regression-cases*.md`, `.github/workflows/java-openssh.yml`(새), `java/ci/**`(새), `docs/external-programs.{en,ko}.md` | 2.1절 규칙 8개(A-MINA 등, 위반 고정 fixture 포함), D3-16·18 사례 표 정정, S3-RO·S3-RW용 CI 준비(D3-11), 외부 프로그램 문서 |
+
+### 11.7 접수 판정과 감사의 개정(SSH_PORTAL-D-0119)
+- 접수는 규칙 판정으로 첫 저장 상태(`QUEUED`·`DENIED`·`PENDING`)를 정하고, 새 작업의 감사 줄(`submitted`, 이어서 `execution-queued` 또는 `denied`)은 행을 저장하기 전에 쓴다(결정 D3-14의 fail-closed를 접수에도 적용). 감사가 실패하면 아무것도 저장하지 않고 `DispatchRefusedException(DECISION_AUDIT, AUDIT_FAILED)`로 거절한다.
+- 동작 변화: 검토 판정(`PENDING`)에서도 감사가 실패하면 거절하므로, 업로드 배치(`UploadAdmission.admit`)도 거절된다. 이 거절은 `RequestRefusedException`이 아니라 `DispatchRefusedException`이다.
+- 감사 로그를 읽는 쪽의 규칙: 작업의 정본은 저널이다. 감사 로그에만 있고 저널에 행이 없는 id는 저장되지 않은 작업이다. 행을 저장하지 못한 줄에는 `not-stored` 줄(`AuditAction.NOT_STORED`)을 한 번 시도해 결말을 남기며, 커밋 결과를 알 수 없을 때 남은 `not-stored` 줄도 저널이 이긴다. 코드는 바꾸지 않으며 재시작 때 고아 id를 정리하는 기능은 없다.

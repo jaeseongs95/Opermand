@@ -42,7 +42,7 @@
           "profile": { "type": "string" },
           "commandClass": { "type": "string" },
           "target": { "type": "string" },
-          "state": { "enum": ["accepted", "pending", "evaluating", "queued", "starting", "running", "terminating", "completed", "failed", "cancelled", "denied", "expired", "unknown"] },
+          "state": { "enum": ["pending", "queued", "starting", "running", "terminating", "completed", "failed", "cancelled", "denied", "expired", "unknown"] },
           "approvalMode": { "enum": ["automatic", "owner"] },
           "createdAt": { "type": "number" },
           "expiresAt": { "type": "number" },

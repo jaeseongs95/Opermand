@@ -23,6 +23,7 @@ import io.github.jaeseongs95.portal.domain.error.OperationErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
 import io.github.jaeseongs95.portal.domain.operation.ApprovalMode;
+import io.github.jaeseongs95.portal.domain.operation.DecisionReason;
 import io.github.jaeseongs95.portal.domain.operation.DecisionRecord;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
 import io.github.jaeseongs95.portal.domain.operation.OperationState;
@@ -74,11 +75,12 @@ public class DispatchChecks {
         if (!(lookup instanceof TargetLookup.Found found) || !found.target().revision().equals(operation.targetRevision())) {
             throw refused(DispatchReason.TARGET_CHANGED, DispatchStage.TARGET_GUARD);
         }
-        if (approvalPolicy.checkDispatch(operation, found.target().target().readProfile(), maintenance.state(), now) instanceof StartDecision.Refused refusedStart) {
+        if (approvalPolicy.checkDispatch(operation, maintenance.state(), now) instanceof StartDecision.Refused refusedStart) {
             throw new DispatchRefusedException(refusedStart.failure());
         }
+        // The revision comparison is defect D-0121's to replace (the read authority needs none, as before).
         if (operation.approvalMode() == ApprovalMode.AUTOMATIC && operation.decision() instanceof DecisionRecord.Decided decided
-            && !policies.current().isRevision(decided.policyRevision())) {
+            && decided.reason() != DecisionReason.READ_ONLY && !policies.current().isRevision(decided.policyRevision())) {
             throw refused(DispatchReason.POLICY_CHANGED, DispatchStage.POLICY_GUARD);
         }
         audit.appendBefore(DispatchStage.START_AUDIT, new AuditEvent(operation.approvalMode() == ApprovalMode.AUTOMATIC ? AuditAction.POLICY_EXECUTION_STARTED

@@ -1,10 +1,8 @@
 package io.github.jaeseongs95.portal.domain.operation;
 
-import static io.github.jaeseongs95.portal.domain.operation.OperationState.ACCEPTED;
 import static io.github.jaeseongs95.portal.domain.operation.OperationState.CANCELLED;
 import static io.github.jaeseongs95.portal.domain.operation.OperationState.COMPLETED;
 import static io.github.jaeseongs95.portal.domain.operation.OperationState.DENIED;
-import static io.github.jaeseongs95.portal.domain.operation.OperationState.EVALUATING;
 import static io.github.jaeseongs95.portal.domain.operation.OperationState.EXPIRED;
 import static io.github.jaeseongs95.portal.domain.operation.OperationState.FAILED;
 import static io.github.jaeseongs95.portal.domain.operation.OperationState.PENDING;
@@ -28,8 +26,6 @@ class OperationStateTest {
 
     /** The moves of design 2.3, transitions T1 to T25, written out by the state they start in. */
     private static final Map<OperationState, Set<OperationState>> ALLOWED = Map.of(
-        ACCEPTED, EnumSet.of(EVALUATING, PENDING, EXPIRED, CANCELLED, UNKNOWN),
-        EVALUATING, EnumSet.of(PENDING, DENIED, EXPIRED, CANCELLED, UNKNOWN),
         PENDING, EnumSet.of(QUEUED, DENIED, EXPIRED, CANCELLED, FAILED),
         QUEUED, EnumSet.of(STARTING, DENIED, EXPIRED, CANCELLED, FAILED, UNKNOWN),
         STARTING, EnumSet.of(RUNNING, TERMINATING, COMPLETED, FAILED, CANCELLED, EXPIRED, UNKNOWN),
@@ -38,7 +34,7 @@ class OperationStateTest {
         UNKNOWN, EnumSet.of(COMPLETED, FAILED, CANCELLED));
 
     @Test
-    @DisplayName("S2-ST-01 all 13 x 13 = 169 combinations: only the moves of 2.3 are possible, the five final states move nowhere, unknown moves only to a confirmed result")
+    @DisplayName("S2-ST-01 all 11 x 11 = 121 combinations (D-0119: no accepted, no evaluating): only the moves of 2.3 are possible, the five final states move nowhere, unknown moves only to a confirmed result")
     void everyCombination() {
         int possible = 0;
         for (OperationState from : OperationState.values()) {
@@ -50,7 +46,7 @@ class OperationStateTest {
                 }
             }
         }
-        assertThat(possible).isEqualTo(40);
+        assertThat(possible).isEqualTo(30);
         for (OperationState finalState : List.of(COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED)) {
             assertThat(EnumSet.allOf(OperationState.class).stream().anyMatch(finalState::canMoveTo)).as("%s is final", finalState).isFalse();
         }
@@ -58,38 +54,31 @@ class OperationStateTest {
     }
 
     @Test
-    @DisplayName("S2-ST-01 nothing moves back to ACCEPTED, no state skips the approval, and an execution is not undone")
+    @DisplayName("S2-ST-01 S-D0119-13 no state skips the approval, and an execution is not undone")
     void forbiddenMoves() {
-        for (OperationState from : OperationState.values()) {
-            assertThat(from.canMoveTo(ACCEPTED)).as("%s to accepted", from).isFalse();
-        }
-        for (OperationState from : List.of(ACCEPTED, EVALUATING, PENDING)) {
-            assertThat(from.canMoveTo(STARTING)).isFalse();
-            assertThat(from.canMoveTo(RUNNING)).isFalse();
-        }
-        assertThat(EVALUATING.canMoveTo(QUEUED)).as("an evaluation ends in the owner's step").isFalse();
+        assertThat(PENDING.canMoveTo(STARTING)).isFalse();
+        assertThat(PENDING.canMoveTo(RUNNING)).isFalse();
         assertThat(QUEUED.canMoveTo(RUNNING)).as("a claim comes first").isFalse();
         assertThat(RUNNING.canMoveTo(EXPIRED)).isFalse();
         assertThat(RUNNING.canMoveTo(DENIED)).isFalse();
         for (OperationState active : List.of(STARTING, RUNNING, TERMINATING)) {
-            assertThat(List.of(QUEUED, PENDING, EVALUATING, ACCEPTED)).noneMatch(active::canMoveTo);
+            assertThat(List.of(QUEUED, PENDING)).noneMatch(active::canMoveTo);
         }
     }
 
     @Test
-    @DisplayName("S2-ST-01 the classes of states: terminal six, final five, active three, before dispatch four")
+    @DisplayName("S2-ST-01 the classes of states: terminal six, final five, active three, before dispatch two")
     void stateClasses() {
         assertThat(Arrays.stream(OperationState.values()).filter(OperationState::isTerminal)).containsExactlyInAnyOrder(COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN);
         assertThat(Arrays.stream(OperationState.values()).filter(OperationState::isFinal)).containsExactlyInAnyOrder(COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED);
         assertThat(Arrays.stream(OperationState.values()).filter(OperationState::isActive)).containsExactlyInAnyOrder(STARTING, RUNNING, TERMINATING);
-        assertThat(Arrays.stream(OperationState.values()).filter(OperationState::isPreDispatch)).containsExactlyInAnyOrder(ACCEPTED, EVALUATING, PENDING, QUEUED);
+        assertThat(Arrays.stream(OperationState.values()).filter(OperationState::isPreDispatch)).containsExactlyInAnyOrder(PENDING, QUEUED);
     }
 
     @Test
-    @DisplayName("S2-CO-04 the wire values are the thirteen of public-contract.mjs:15, in that order, written by Jackson as lowercase JSON text")
+    @DisplayName("S2-CO-04 S-D0119-13 the wire values are the eleven of public-contract.mjs:15 without accepted and evaluating, in that order, written by Jackson as lowercase JSON text")
     void wireValues() throws Exception {
-        List<String> contract = List.of("accepted", "pending", "evaluating", "queued", "starting", "running", "terminating", "completed", "failed", "cancelled", "denied", "expired",
-            "unknown");
+        List<String> contract = List.of("pending", "queued", "starting", "running", "terminating", "completed", "failed", "cancelled", "denied", "expired", "unknown");
         assertThat(Arrays.stream(OperationState.values()).map(OperationState::wire)).containsExactlyElementsOf(contract);
         JsonMapper mapper = new JsonMapper();
         for (OperationState state : OperationState.values()) {
