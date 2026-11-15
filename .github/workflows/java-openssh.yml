@@ -197,6 +197,26 @@ jobs:
           $watchLog = Join-Path $env:RUNNER_TEMP 'idle-watch.log'
           if (Test-Path -LiteralPath $watchLog) { Get-Content -LiteralPath $watchLog | ForEach-Object { Write-Host $_ } } else { Write-Host '(no note)' }
           Show-Processes 'processes before anything is ended'
+          # The same probe as the one before the tests (ssh -N on the idle port, no keep-alive, 20 s limit), now while what the tests left behind is alive, and again after the
+          # leftover ping commands were ended: if only the first one outlasts the timeout, the leftovers keep the server end of a closed connection open.
+          function Invoke-Probe([string] $label) {
+            $ssh = Join-Path $env:SystemRoot 'System32\OpenSSH\ssh.exe'
+            $err = Join-Path $env:RUNNER_TEMP 'probe-after.err'
+            $argList = @('-N', '-p', $env:PORTAL_OPENSSH_IDLE_PORT, '-i', $env:PORTAL_OPENSSH_KEY_FILE, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
+              '-o', 'StrictHostKeyChecking=yes', '-o', ('UserKnownHostsFile=' + $env:PORTAL_OPENSSH_KNOWN_HOSTS), ($env:PORTAL_OPENSSH_USER + '@127.0.0.1'))
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $p = Start-Process -FilePath $ssh -ArgumentList $argList -PassThru -NoNewWindow -RedirectStandardError $err
+            $exited = $p.WaitForExit(20000)
+            $ms = $sw.ElapsedMilliseconds
+            if (-not $exited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+            Write-Host ('--- probe ' + $label + ': exited=' + $exited + ' after ' + $ms + ' ms')
+          }
+          Invoke-Probe 'with the leftovers of the tests alive'
+          $pings = @(Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -ge $since -and $_.CommandLine -like '*ping*-n*' } | ForEach-Object { $_.ProcessId })
+          Write-Host ('--- ending ' + $pings.Count + ' leftover ping commands')
+          $pings | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+          $pings | ForEach-Object { Wait-Process -Id $_ -Timeout 10 -ErrorAction SilentlyContinue }
+          Invoke-Probe 'after the leftover ping commands were ended'
           function Read-SshdLog {
             $fs = [System.IO.File]::Open($log, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]'ReadWrite,Delete')
             try { $text = [System.IO.StreamReader]::new($fs).ReadToEnd() } finally { $fs.Dispose() }
