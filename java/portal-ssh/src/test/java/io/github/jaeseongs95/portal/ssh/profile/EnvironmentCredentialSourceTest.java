@@ -48,7 +48,7 @@ class EnvironmentCredentialSourceTest {
     @TempDir
     Path directory;
 
-    private final TomlProfileLoader loader = new TomlProfileLoader(new FileAccessGuard(List.of(FixedAccessRule.open())), VALIDATOR, new RecordingProfileEvents());
+    private final TomlProfileLoader loader = new TomlProfileLoader(VALIDATOR, new RecordingProfileEvents());
 
     private StandardEnvironment environment(Map<String, String> values) {
         StandardEnvironment environment = new StandardEnvironment();
@@ -235,13 +235,54 @@ class EnvironmentCredentialSourceTest {
     }
 
     @Test
-    @DisplayName("VR-389 (2.x와 다름: 2.x threw the read error; the port answers with a result, not an exception, and the cause is logged): a key path that is a folder is not skipped: the lookup is a miss that says the file cannot be read")
+    @DisplayName("VR-389, S-D0117-05 (2.x와 다름: 2.x threw the read error; the port answers with a result, not an exception): a key path that is a folder is not skipped and not read: the lookup is a miss that says it is not a regular file")
     void aKeyPathThatIsAFolderIsNotSkipped() throws IOException {
         Path folder = Files.createDirectory(directory.resolve("a-folder"));
 
         CredentialLookup lookup = resolve("aws-local", "auth = \"key\"\nkeyRef = " + literal(folder), Map.of("SSH_MCP_PASSWORD", "p"));
 
-        assertThat(missesOf(lookup)).singleElement().satisfies(miss -> assertThat(miss.place()).contains("keyRef of the profile").contains("cannot be read").doesNotContain(folder.toString()));
+        assertThat(missesOf(lookup)).singleElement().satisfies(miss -> assertThat(miss.place()).contains("keyRef of the profile").contains("is not a regular file").doesNotContain(folder.toString()));
+    }
+
+    @Test
+    @DisplayName("S-D0117-05: an empty key file is a miss that says it is empty")
+    void anEmptyKeyFileIsAMiss() throws IOException {
+        Path empty = file("keys/empty", "");
+
+        CredentialLookup lookup = resolve("aws-local", "auth = \"key\"\nkeyRef = " + literal(empty), Map.of());
+
+        assertThat(missesOf(lookup)).singleElement().satisfies(miss -> assertThat(miss.place()).contains("keyRef of the profile").contains("is empty").doesNotContain(empty.toString()));
+    }
+
+    @Test
+    @DisplayName("S-D0117-01: a key file that other accounts may read and change is used")
+    void aKeyFileThatOthersMayUseIsUsed() throws IOException {
+        Path key = file("keys/wide", "key wide\n");
+        TestFiles.openUp(key);
+        TestFiles.openUp(key.getParent());
+
+        assertThat(revealed(keyOf(resolve("aws-local", "auth = \"key\"\nkeyRef = " + literal(key), Map.of())).pem())).isEqualTo("key wide\n");
+    }
+
+    @Test
+    @DisplayName("S-D0117-03: a key path that is a symbolic link to a key file is followed and the key is used (runs where symbolic links can be made)")
+    void aKeyReachedByALinkIsUsed() throws IOException {
+        Path real = file("keys/real", "key by link\n");
+        Path link = directory.resolve("keys").resolve("link");
+        TestFiles.requireOrSkip("links", TestFiles.canLink(link, real),
+            "the file store or the account of the test cannot make symbolic links (a Windows user token); the Linux CI requires them (-Pportal.test.require=posix,links) and fails instead of skipping");
+
+        assertThat(revealed(keyOf(resolve("aws-local", "auth = \"key\"\nkeyRef = " + literal(link), Map.of())).pem())).isEqualTo("key by link\n");
+    }
+
+    @Test
+    @DisplayName("S-D0117-02: a key file that another account owns is used (a system file stands in for the key: only whether it is read is asserted)")
+    void aKeyFileOfAnotherOwnerIsUsed() throws IOException {
+        Path foreign = TestFiles.foreignOwnedFile();
+
+        SshCredential.PrivateKey credential = keyOf(resolve("aws-local", "auth = \"key\"\nkeyRef = " + literal(foreign), Map.of()));
+
+        assertThat(revealed(credential.pem())).isEqualTo(new String(Files.readAllBytes(foreign), java.nio.charset.StandardCharsets.UTF_8));
     }
 
     @Test
@@ -287,6 +328,20 @@ class EnvironmentCredentialSourceTest {
         assertThat(keyOf(resolve("aws-local", "auth = \"key\"\ncert = true\nkeyRef = " + literal(key), Map.of())).certificate().isGiven()).isFalse();
         file("keys/id-cert.pub", "the certificate\n");
         assertThat(keyOf(resolve("aws-local", "auth = \"key\"\nkeyRef = " + literal(key), Map.of())).certificate().isGiven()).isFalse();
+    }
+
+    @Test
+    @DisplayName("S-D0117-05: an empty certificate file is a miss that says it is empty, like an empty key file (it is not used as no certificate)")
+    void anEmptyCertificateFileIsAMiss() throws IOException {
+        Path key = file("keys/id", "the key\n");
+        Path certificate = file("keys/id-cert.pub", "");
+
+        CredentialLookup lookup = resolve("aws-local", "auth = \"key\"\ncert = true\nkeyRef = " + literal(key), Map.of());
+
+        assertThat(missesOf(lookup)).singleElement().satisfies(miss -> {
+            assertThat(miss.part()).isEqualTo(CredentialPart.CERTIFICATE);
+            assertThat(miss.place()).contains("the certificate next to the key named by keyRef of the profile").contains("is empty").doesNotContain(certificate.toString());
+        });
     }
 
     @Test
@@ -442,7 +497,7 @@ class EnvironmentCredentialSourceTest {
     }
 
     @Test
-    @DisplayName("S-D0137-12: a certificate file that cannot be read is a miss that names where it was set, for a variable and for the file next to the key")
+    @DisplayName("S-D0137-12, S-D0117-05: a certificate path that is not a regular file (a folder) is a miss that names where it was set, for a variable and for the file next to the key")
     void anUnreadableCertificateNamesItsSource() throws IOException {
         Path key = file("keys/id", "the key\n");
         Files.createDirectories(directory.resolve("keys/id-cert.pub"));
@@ -453,9 +508,9 @@ class EnvironmentCredentialSourceTest {
 
         assertThat(missesOf(next)).singleElement().satisfies(miss -> {
             assertThat(miss.part()).isEqualTo(CredentialPart.CERTIFICATE);
-            assertThat(miss.place()).contains("next to the key named by SSH_MCP_AWS_LOCAL_KEY").contains("cannot be read");
+            assertThat(miss.place()).contains("next to the key named by SSH_MCP_AWS_LOCAL_KEY").contains("is not a regular file");
         });
-        assertThat(missesOf(named)).singleElement().satisfies(miss -> assertThat(miss.place()).contains("named by SSH_MCP_AWS_LOCAL_CERT").contains("cannot be read"));
+        assertThat(missesOf(named)).singleElement().satisfies(miss -> assertThat(miss.place()).contains("named by SSH_MCP_AWS_LOCAL_CERT").contains("is not a regular file"));
     }
 
     @Test

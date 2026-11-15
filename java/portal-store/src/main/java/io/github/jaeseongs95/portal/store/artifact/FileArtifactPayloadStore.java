@@ -35,10 +35,11 @@ import io.github.jaeseongs95.portal.store.storage.UnsafeStorageException;
  * {@link ArtifactPayloadStore} over one folder, {@code StorageRoots#artifacts()}: the bytes of an artifact are the file {@code <id>.part} (2.x
  * {@code artifacts.mjs:84-149}; design 8.5, a 64 MiB body is not put in a BLOB). Every method does file I/O, so it is called outside a transaction (Principles 4.4).
  *
- * <p>Safety rules of 2.x, kept and now applied on every kind of file store: the folder and the files are private to the owner, and a symbolic link or a file that
- * is not a regular file is refused. How "private" is made and checked belongs to {@link PrivateStorages}, which picks the rule by what the file store offers (permission
- * bits, or an access control list on an NTFS volume) and refuses a file store with neither; this class holds no copy of that rule. A refusal is
- * {@code ARTIFACT_STORAGE_UNSAFE}; a link is never followed or removed.
+ * <p>What is created is private to its owner: the folder and the files this store makes. How "private" is made belongs to {@link PrivateStorages}, which picks the rule by
+ * what the file store offers (permission bits, or an access control list on an NTFS volume) and refuses a file store with neither; this class holds no copy of that rule.
+ * What exists is used as it is (decision D-0117): who else may use the folder or a payload, who owns it and whether it is reached through a link (a link is followed) are
+ * not asked. A path that is not a folder where the folder should be, or not a regular file where a payload should be, and a file store that cannot make a new path private are
+ * refused with {@code ARTIFACT_STORAGE_UNSAFE}, and nothing else is.
  *
  * <p>An append writes at the current end, takes a lock on the file so that two writers of one artifact cannot interleave, and calls
  * {@code FileChannel#force(true)} before it returns: the use case commits the metadata only after that (design 8.5). Not done: the directory entry of a new file is
@@ -73,7 +74,7 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
         try {
             boolean exists = Files.exists(file, LinkOption.NOFOLLOW_LINKS);
             if (exists) {
-                storages.requireSafeFile(file);
+                storages.requireRegularFile(file);
             } else if (offset != 0) {
                 // A file is created by its first chunk only; creating it for a later one would leave an empty file behind a refusal.
                 throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_CHUNK_CONFLICT);
@@ -108,7 +109,7 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
             throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
         }
         Path file = existingFile(id);
-        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS); FileLock lock = channel.tryLock()) {
+        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.WRITE); FileLock lock = channel.tryLock()) {
             if (lock == null) {
                 throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_BUSY);
             }
@@ -138,7 +139,7 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
     public PayloadRead open(ArtifactId id) {
         Path file = existingFile(id);
         try {
-            FileChannel channel = FileChannel.open(file, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
+            FileChannel channel = FileChannel.open(file, StandardOpenOption.READ);
             try {
                 return new PayloadRead(channel, channel.size());
             } catch (IOException | RuntimeException e) {
@@ -154,7 +155,7 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
         }
     }
 
-    /** Deletes the file; a file that is not there is already deleted. A symbolic link is removed as a link, its target is not touched. */
+    /** Deletes the file; a file that is not there is already deleted. A symbolic link is removed as a link, its target is not touched; one name of a hard-linked file is removed. */
     @Override
     public void delete(ArtifactId id) {
         Path file = fileOf(preparedRoot(), id);
@@ -192,7 +193,7 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
             for (Path entry : entries) {
                 String name = entry.getFileName().toString();
                 if (STORED_NAME.matcher(name).matches()) {
-                    storages.requireSafeFile(entry);
+                    storages.requireRegularFile(entry);
                     found.add(new ArtifactId(name.substring(0, name.length() - SUFFIX.length())));
                 }
             }
@@ -237,13 +238,13 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
         }
     }
 
-    /** The root folder, created private when it is not there; a link, a plain file or a folder that others can use is refused, on every kind of file store. */
+    /** The root folder, created private when it is not there; a path that is not a folder is refused, on every kind of file store. A folder that exists is used as it is. */
     private Path preparedRoot() {
         try {
             if (!Files.exists(root, LinkOption.NOFOLLOW_LINKS)) {
                 storages.createFolder(root);
             }
-            storages.requireSafeFolder(root);
+            storages.requireFolder(root);
             return root;
         } catch (UnsafeStorageException e) {
             throw unsafe(e);
@@ -258,11 +259,9 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
             throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_NOT_FOUND);
         }
         try {
-            storages.requireSafeFile(file);
+            storages.requireRegularFile(file);
         } catch (UnsafeStorageException e) {
             throw unsafe(e);
-        } catch (IOException e) {
-            throw ioFailure(e);
         }
         return file;
     }
@@ -281,8 +280,7 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
     }
 
     private FileChannel openForWrite(Path file, boolean create) throws IOException {
-        Set<OpenOption> options = create ? Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)
-            : Set.of(StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS);
+        Set<OpenOption> options = create ? Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE) : Set.of(StandardOpenOption.WRITE);
         return storages.open(file, options);
     }
 

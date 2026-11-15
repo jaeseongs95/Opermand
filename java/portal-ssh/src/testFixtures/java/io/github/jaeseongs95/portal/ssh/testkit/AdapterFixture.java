@@ -5,7 +5,7 @@ import io.github.jaeseongs95.portal.app.remote.HostKeyMode;
 import io.github.jaeseongs95.portal.ssh.hostkey.HostKeyEvents;
 import io.github.jaeseongs95.portal.ssh.hostkey.HostKeyRefusal;
 import io.github.jaeseongs95.portal.ssh.hostkey.ServerKeyPolicy;
-import io.github.jaeseongs95.portal.ssh.profile.FileAccessGuard;
+import io.github.jaeseongs95.portal.ssh.profile.PrivateFiles;
 import io.github.jaeseongs95.portal.app.remote.CommandKind;
 import io.github.jaeseongs95.portal.app.remote.CredentialLookup;
 import io.github.jaeseongs95.portal.app.remote.CredentialMiss;
@@ -128,7 +128,7 @@ public final class AdapterFixture implements AutoCloseable {
         // The mode is insecure, so only a pinned key is checked: it is the pin of a profile that the session tests exercise (the modes are the tests of ServerKeyPolicy).
         SshSettings insecure = new SshSettings(settings.connectTimeout(), settings.heartbeatInterval(), settings.heartbeatNoReplyMax(), settings.idleProbeAfter(),
             settings.execReplyTimeout(), settings.channelPermits(), settings.consecutiveOpenRejections(), HostKeyMode.INSECURE, settings.knownHosts());
-        ServerKeyPolicy hostKeys = new ServerKeyPolicy(insecure, new FileAccessGuard(List.of()), new QuietHostKeyEvents());
+        ServerKeyPolicy hostKeys = new ServerKeyPolicy(insecure, new PrivateFiles(List.of()), new QuietHostKeyEvents());
         SessionConnector connector = new SessionConnector(new ProxyJumpResolver(profiles, credentials), new MinaClientFactory(settings, algorithms), hostKeys, settings);
         pool = new SshSessionPool(settings, connector, clock, taskExecutor, scheduler, reap);
         pool.afterPropertiesSet();

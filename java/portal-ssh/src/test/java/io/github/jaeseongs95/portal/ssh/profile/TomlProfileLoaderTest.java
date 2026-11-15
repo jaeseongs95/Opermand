@@ -2,6 +2,7 @@ package io.github.jaeseongs95.portal.ssh.profile;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -38,7 +39,7 @@ class TomlProfileLoaderTest {
     Path directory;
 
     private final RecordingProfileEvents events = new RecordingProfileEvents();
-    private final TomlProfileLoader loader = new TomlProfileLoader(new FileAccessGuard(List.of(FixedAccessRule.open())), VALIDATOR, events);
+    private final TomlProfileLoader loader = new TomlProfileLoader(VALIDATOR, events);
 
     private Path write(String toml) throws IOException {
         return Files.writeString(directory.resolve("config.toml"), toml);
@@ -95,7 +96,6 @@ class TomlProfileLoaderTest {
         assertThat(catalog.entries().get(2).connection().auth()).isEqualTo(AuthMethod.KEYCHAIN);
         assertThat(catalog.defaults().transferRoot()).isEqualTo(Setting.given("/srv/transfer"));
         assertThat(catalog.defaults().approval()).isEqualTo(ProfileApproval.ASK_ALL);
-        assertThat(events.accessWarnings()).isEmpty();
         assertThat(events.policyReports()).as("the file has a [policy] table").isEqualTo(1);
     }
 
@@ -117,23 +117,66 @@ class TomlProfileLoaderTest {
     }
 
     @Test
-    @DisplayName("VR-319: the access check comes before the parsing: a file that others may read and that is not TOML is reported for its mode")
-    void theAccessCheckComesBeforeTheParsing() throws IOException {
-        TomlProfileLoader strict = new TomlProfileLoader(new FileAccessGuard(List.of(new FixedAccessRule(new AccessVerdict.Refused("Config file is group/world accessible (mode 644)")))),
-            VALIDATOR, events);
-        Path path = write("this is = = not toml [[[");
+    @DisplayName("S-D0117-01 (replaces VR-319, VR-325 to VR-329): a file and a folder that other accounts may read and change load, nothing is refused and nothing is reported for the rights")
+    void aFileThatOthersMayUseLoads() throws IOException {
+        Path path = write(document(null, ""));
+        TestFiles.openUp(path);
+        TestFiles.openUp(directory);
 
-        assertThatThrownBy(() -> strict.load(path)).isInstanceOf(ProfileConfigException.class).hasMessageContaining("mode 644").hasMessageNotContaining("Failed to parse");
+        ProfileCatalog catalog = loader.load(path);
+
+        assertThat(catalog.entries()).extracting(entry -> entry.alias().value()).containsExactly("a");
+        assertThat(events.policyReports()).isZero();
     }
 
     @Test
-    @DisplayName("VR-329: a file that others may only read loads, and the warning is reported to the events")
-    void aReadableFileLoadsWithAWarning() throws IOException {
-        TomlProfileLoader warning = new TomlProfileLoader(new FileAccessGuard(List.of(new FixedAccessRule(new AccessVerdict.Exposed("can be read by Users")))), VALIDATOR, events);
+    @DisplayName("S-D0117-03: a profile path that is a symbolic link to the profile file is followed and the profiles load (runs where symbolic links can be made)")
+    void aProfileFileReachedByALinkLoads() throws IOException {
+        Path real = write(document(null, ""));
+        Path link = directory.resolve("profiles-link.toml");
+        TestFiles.requireOrSkip("links", TestFiles.canLink(link, real),
+            "the file store or the account of the test cannot make symbolic links (a Windows user token); the Linux CI requires them (-Pportal.test.require=posix,links) and fails instead of skipping");
 
-        warning.load(write(document(null, "")));
+        assertThat(loader.load(link).entries()).extracting(entry -> entry.alias().value()).containsExactly("a");
+    }
 
-        assertThat(events.accessWarnings()).containsExactly("can be read by Users");
+    @Test
+    @DisplayName("S-D0117-04: a folder in place of the profile file is UNREADABLE and a file that is not TOML is reported for its text, never for its rights")
+    void aFolderInPlaceOfTheFileIsUnreadable() throws IOException {
+        Path folder = Files.createDirectory(directory.resolve("profiles.toml"));
+        Path notToml = write("this is = = not toml [[[");
+
+        assertThatThrownBy(() -> loader.load(folder)).isInstanceOfSatisfying(ProfileConfigException.class, e -> assertThat(e.code()).isEqualTo(ProfileConfigException.Code.UNREADABLE))
+            .hasMessageEndingWith("is not a regular file");
+        assertThatThrownBy(() -> loader.load(notToml)).isInstanceOfSatisfying(ProfileConfigException.class, e -> assertThat(e.code()).isEqualTo(ProfileConfigException.Code.NOT_TOML))
+            .hasMessageContaining("Failed to parse");
+    }
+
+    @Test
+    @DisplayName("S-D0117-05: an empty profile file is refused for what it is (UNREADABLE, the file is empty), not reported as a missing profile; a file with a comment only is not empty")
+    void anEmptyProfileFileIsRefused() throws IOException {
+        Path empty = Files.writeString(directory.resolve("empty.toml"), "");
+
+        assertThatThrownBy(() -> loader.load(empty)).isInstanceOfSatisfying(ProfileConfigException.class, e -> assertThat(e.code()).isEqualTo(ProfileConfigException.Code.UNREADABLE))
+            .hasMessageEndingWith("is empty");
+        assertThatThrownBy(() -> loader.load(write("# nothing yet\n"))).as("a comment is a file with content: it is refused by the schema, not as empty")
+            .isInstanceOfSatisfying(ProfileConfigException.class, e -> assertThat(e.code()).isNotEqualTo(ProfileConfigException.Code.UNREADABLE));
+    }
+
+    @Test
+    @DisplayName("S-D0117-05: a FIFO in place of the profile file is refused before any read starts (it would block); runs where permission bits exist, the FIFO made by mkfifo")
+    void aFifoInPlaceOfTheFileIsRefusedBeforeReading() throws Exception {
+        TestFiles.requireOrSkip("posix", Files.getFileStore(directory).supportsFileAttributeView("posix"),
+            "the file store of the test folder has no posix view (it is an NTFS volume); the Linux CI requires it (-Pportal.test.require=posix) and fails instead of skipping");
+        Path fifo = directory.resolve("profiles.fifo");
+        // Java has no API to create a FIFO, so the system tool does it (the product itself starts no local process, only this test does, and only to make the fixture).
+        Process made = new ProcessBuilder("mkfifo", fifo.toString()).inheritIO().start();
+        assertThat(made.waitFor()).as("mkfifo").isZero();
+
+        // Preemptive: a loader that starts reading the FIFO would block for ever, and the test must fail instead of hanging.
+        assertTimeoutPreemptively(Duration.ofSeconds(20), () -> assertThatThrownBy(() -> loader.load(fifo))
+            .isInstanceOfSatisfying(ProfileConfigException.class, e -> assertThat(e.code()).isEqualTo(ProfileConfigException.Code.UNREADABLE))
+            .hasMessageEndingWith("is not a regular file"));
     }
 
     @Test
@@ -153,10 +196,10 @@ class TomlProfileLoaderTest {
     }
 
     @Test
-    @DisplayName("VR-324: a path that is a folder cannot be read: the error says so and keeps the cause, and it is not a not-found error")
+    @DisplayName("VR-324 (S-D0117-05, 2.x와 다름: the loader refuses a path that is not a regular file before it reads, so there is no read error and no cause): a path that is a folder is refused, and it is not a not-found error")
     void aFolderCannotBeRead() {
         assertThatThrownBy(() -> loader.load(directory)).isNotInstanceOf(ConfigNotFoundException.class).isInstanceOf(ProfileConfigException.class)
-            .hasMessageStartingWith("Config file " + directory).hasMessageContaining("could not be read").hasCauseInstanceOf(IOException.class);
+            .hasMessageStartingWith("Config file " + directory).hasMessageEndingWith("is not a regular file");
     }
 
     @Test

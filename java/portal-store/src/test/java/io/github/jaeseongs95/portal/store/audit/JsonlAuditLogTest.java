@@ -100,8 +100,7 @@ class JsonlAuditLogTest {
     @Test
     @DisplayName("RC-A-623: an existing file is appended to, and a note with a line break, a quote and Korean text stays on one line and reads back unchanged")
     void anExistingFileIsAppendedAndANoteStaysOnOneLine(@TempDir Path directory) throws IOException {
-        // The audit file must be private to its owner, so the folder that the earlier file is written in is made private first (the product's own folders are).
-        Path path = TestStorage.privateFolder(directory).resolve("audit.jsonl");
+        Path path = directory.resolve("audit.jsonl");
         Files.writeString(path, "{\"kept\":true}\n", StandardCharsets.UTF_8);
         String note = "line one\nline \"two\" 승인";
         try (JsonlAuditLog log = new JsonlAuditLog(new AuditFileLocation(path), CLOCK, mapper, TestStorage.rules())) {

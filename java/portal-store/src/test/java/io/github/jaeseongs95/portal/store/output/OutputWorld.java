@@ -43,7 +43,7 @@ final class OutputWorld {
         this.formats = formats;
         this.pages = pages;
         this.aggregates = aggregates;
-        this.files = new OutputFiles(new StorageRoots(TestStorage.privateFolder(folder), folder), TestStorage.rules());
+        this.files = new OutputFiles(new StorageRoots(folder, folder), TestStorage.rules());
         this.payloads = new FileOutputPayloadStore(files, new Sha256Digester(), limits);
         this.manifests = new JdbcOutputManifestStore(rows, formats, pages, aggregates, mapper, new OperationIdGenerator(new SecureRandom()), payloads, transactionManager,
             limits);

@@ -8,7 +8,7 @@ import java.util.Objects;
  * default (the product is installed on the host of an arbitrary user). Stage 4 replaces this value by a {@code @ConfigurationProperties} record of the {@code bridge.*} prefix
  * with the same components.
  *
- * @param profileFile the TOML file of the profiles; it must exist and be private to its owner
+ * @param profileFile the TOML file of the profiles; it must exist and be a regular file (who else may use it is not checked)
  * @param knownHosts the file of the recorded host keys (created when the first key is recorded)
  */
 public record ConnectionFiles(Path profileFile, Path knownHosts) {

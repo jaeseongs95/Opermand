@@ -19,7 +19,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -28,9 +27,9 @@ import org.junit.jupiter.api.io.TempDir;
 import io.github.jaeseongs95.portal.store.TestStorage;
 
 /**
- * S2-DB-10, the protection of the stores on a file store with an access control list (an NTFS volume). The tests change real ACLs of real folders and files, no mock:
- * what Windows does with inherited entries, with the account names and with the entries that are added afterwards is what is asserted. Java SE API:
- * https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/nio/file/attribute/AclFileAttributeView.html
+ * S-D0117-06 and S-D0117-01, what the rule makes on a file store with an access control list (an NTFS volume), and that it leaves what exists as it is. The tests change real
+ * ACLs of real folders and files, no mock: what Windows does with inherited entries, with the account names and with the entries that are added afterwards is what is
+ * asserted. Java SE API: https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/nio/file/attribute/AclFileAttributeView.html
  */
 class AclPrivateStorageTest {
 
@@ -41,8 +40,8 @@ class AclPrivateStorageTest {
 
     @BeforeEach
     void onlyWhereTheFileStoreHasAnAcl() throws IOException {
-        Assumptions.assumeTrue(rule.supports(Files.getFileStore(directory)),
-            "the file store of the test folder has no acl view (it is a posix store); runs on the Windows CI (Windows CI에서 실행)");
+        TestStorage.requireOrSkip("acl", rule.supports(Files.getFileStore(directory)),
+            "the file store of the test folder has no acl view (it is a posix store); a run on a machine with ACLs states -Pportal.test.require=acl and fails instead of skipping");
     }
 
     private AclFileAttributeView view(Path path) {
@@ -75,30 +74,44 @@ class AclPrivateStorageTest {
         return expected;
     }
 
-    private byte[] read(Path file) throws IOException {
-        return Files.readAllBytes(file);
-    }
-
     private void write(Path file, String text) throws IOException {
-        try (FileChannel channel = rule.open(file, Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS))) {
+        try (FileChannel channel = rule.open(file, Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE))) {
             channel.write(ByteBuffer.wrap(text.getBytes(StandardCharsets.UTF_8)));
         }
     }
 
     @Test
-    @DisplayName("S2-DB-10, RC-A-178: a folder made by the rule is private: its list allows the owner and the system account and nobody else, and the check accepts it")
+    @DisplayName("S-D0117-06, RC-A-178: a folder made by the rule is private: its list allows the owner and the system account and nobody else")
     void aNewFolderIsOwnerOnly() throws IOException {
         Path folder = directory.resolve("private");
 
         rule.createFolder(folder);
 
         assertThat(allowedPrincipals(folder)).isNotEmpty().isSubsetOf(ownerAndSystem(folder));
-        rule.requireProtected(folder);
+        TestStorage.assertOwnerOnly(folder);
         assertThat(allowedPrincipals(folder)).doesNotContain(TestStorage.outsider(folder));
     }
 
     @Test
-    @DisplayName("S2-DB-10: a folder that exists is left as it is by createFolder; the check is what judges it")
+    @DisplayName("S-D0117-06: the missing parents of a folder are private too, even below a folder whose rights let others in")
+    void newParentsAreOwnerOnlyBelowAnOpenFolder() throws IOException {
+        Path open = Files.createDirectory(directory.resolve("open"));
+        TestStorage.openUp(open);
+        TestStorage.assertTheOpenEntryIsInherited(open); // the condition is real: a plain file below this folder has the entry for others
+        Path folder = open.resolve("outer").resolve("inner");
+
+        rule.createFolder(folder);
+
+        TestStorage.assertOwnerOnly(folder);
+        TestStorage.assertOwnerOnly(folder.getParent());
+        assertThat(allowedPrincipals(folder.getParent())).doesNotContain(TestStorage.outsider(folder));
+        // Neither made for them nor inherited: an implementation that keeps the inherited list and only adds the owner's entries has the entry for others here and fails.
+        TestStorage.assertNoEntryForOthers(folder);
+        TestStorage.assertNoEntryForOthers(folder.getParent());
+    }
+
+    @Test
+    @DisplayName("S-D0117-01: a folder that exists is left as it is by createFolder, whoever may use it")
     void anExistingFolderIsNotChanged() throws IOException {
         Path existing = Files.createDirectory(directory.resolve("existing"));
         TestStorage.openUp(existing);
@@ -107,25 +120,26 @@ class AclPrivateStorageTest {
         rule.createFolder(existing);
 
         assertThat(view(existing).getAcl()).isEqualTo(before);
-        assertThatThrownBy(() -> rule.requireProtected(existing)).isInstanceOf(UnsafeStorageException.class);
     }
 
     @Test
-    @DisplayName("S2-DB-10, RC-A-178: a file made by the rule is private even in a folder whose rights let others in; its bytes are written and read by the owner")
+    @DisplayName("S-D0117-06, RC-A-178: a file made by the rule is private even in a folder whose rights let others in; its bytes are written and read by the owner")
     void aNewFileIsOwnerOnlyEvenWhereTheFolderIsOpen() throws IOException {
         Path open = Files.createDirectory(directory.resolve("open"));
         TestStorage.openUp(open);
+        TestStorage.assertTheOpenEntryIsInherited(open); // the condition is real: a plain file below this folder has the entry for others
         Path file = open.resolve("payload.part");
 
         write(file, "payload");
 
         assertThat(allowedPrincipals(file)).isNotEmpty().isSubsetOf(ownerAndSystem(file));
-        rule.requireProtected(file);
-        assertThat(read(file)).isEqualTo("payload".getBytes(StandardCharsets.UTF_8));
+        TestStorage.assertOwnerOnly(file);
+        TestStorage.assertNoEntryForOthers(file); // an implementation that keeps the inherited list and only adds the owner's entries has the entry for others here and fails
+        assertThat(Files.readAllBytes(file)).isEqualTo("payload".getBytes(StandardCharsets.UTF_8));
     }
 
     @Test
-    @DisplayName("S2-DB-10: what is made in a folder of the rule inherits a private list, so a file made by a plain call is accepted too (the inherited entries are the owner's)")
+    @DisplayName("S-D0117-06: what is made in a folder of the rule inherits a private list (the inherited entries are the owner's)")
     void whatIsMadeInAPrivateFolderInheritsItsList() throws IOException {
         Path folder = directory.resolve("inherits");
         rule.createFolder(folder);
@@ -135,55 +149,113 @@ class AclPrivateStorageTest {
 
         assertThat(allowedPrincipals(child)).isSubsetOf(ownerAndSystem(child));
         assertThat(allowedPrincipals(subfolder)).isSubsetOf(ownerAndSystem(subfolder));
-        rule.requireProtected(child);
-        rule.requireProtected(subfolder);
+        TestStorage.assertOwnerOnly(child);
+        TestStorage.assertOwnerOnly(subfolder);
+    }
+
+    /** A folder in which nothing can be made private, and that the account can still change and delete (see {@link TestStorage#forbidChangingTheListOfWhatIsMadeIn}). */
+    private Path folderThatForbidsChangingTheList() throws IOException {
+        Path parent = Files.createDirectory(directory.resolve("no-write-dac"));
+        TestStorage.forbidChangingTheListOfWhatIsMadeIn(parent);
+        return parent;
     }
 
     @Test
-    @DisplayName("S2-DB-10, RC-A-179: an entry for Everyone (or Users) on the folder is refused, and the file in it is not touched")
-    void anOutsiderOnTheFolderIsRefused() throws IOException {
-        Path folder = directory.resolve("shared");
-        rule.createFolder(folder);
-        Path file = folder.resolve("payload.part");
-        write(file, "secret bytes");
-        byte[] before = read(file);
+    @DisplayName("S-D0117-07: when the list of a new folder cannot be set, every folder that the call created is removed and the answer is UnsafeStorageException (a real denial of the right to change the list); the denial is not undone and the account still deletes the folder it made")
+    void aFolderWhoseListCannotBeSetIsRemoved() throws IOException {
+        Path parent = folderThatForbidsChangingTheList();
+        try {
+            Path inner = parent.resolve("outer").resolve("inner");
 
-        TestStorage.openUp(folder);
+            assertThatThrownBy(() -> rule.createFolder(inner)).isInstanceOf(UnsafeStorageException.class).hasMessageContaining("could not be made private");
 
-        assertThatThrownBy(() -> rule.requireProtected(folder)).isInstanceOf(UnsafeStorageException.class).hasMessageContaining("allows");
-        assertThat(read(file)).isEqualTo(before);
-        assertThat(Files.exists(file, LinkOption.NOFOLLOW_LINKS)).isTrue();
+            assertThat(Files.exists(parent.resolve("outer"), LinkOption.NOFOLLOW_LINKS)).isFalse();
+        } finally {
+            TestStorage.deleteTree(parent); // without undoing the denial: what a test that dies before its cleanup has to be able to rely on
+        }
     }
 
     @Test
-    @DisplayName("S2-DB-10, RC-A-179: an entry for Everyone (or Users) on a file is refused, and its bytes are not touched")
-    void anOutsiderOnTheFileIsRefused() throws IOException {
+    @DisplayName("S-D0117-07: when the list of a new file cannot be set, the file is closed and removed and the answer is UnsafeStorageException (a real denial of the right to change the list)")
+    void aFileWhoseListCannotBeSetIsRemoved() throws IOException {
+        Path parent = folderThatForbidsChangingTheList();
+        try {
+            Path file = parent.resolve("payload.part");
+
+            assertThatThrownBy(() -> rule.open(file, Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE))).isInstanceOf(UnsafeStorageException.class);
+
+            assertThat(Files.exists(file, LinkOption.NOFOLLOW_LINKS)).isFalse();
+        } finally {
+            TestStorage.deleteTree(parent);
+        }
+    }
+
+    @Test
+    @DisplayName("S-D0117-07: a folder and a file that cannot be removed again are named in the message and stay (nothing is claimed to be removed that was not); the owner gives the rights back and deletes them afterwards")
+    void whatCannotBeRemovedAgainIsNamed() throws IOException {
+        Path parent = Files.createDirectory(directory.resolve("no-delete"));
+        TestStorage.forbidDeletingWhatIsMadeIn(parent);
+        try {
+            TestStorage.assumeDeletingIsBlockedIn(parent);
+            Path outer = parent.resolve("outer");
+            assertThatThrownBy(() -> rule.createFolder(outer)).isInstanceOfSatisfying(UnsafeStorageException.class,
+                e -> assertThat(e).hasMessageContaining("could not be made private").hasMessageContaining(outer.toString()).hasMessageContaining("could not be removed again"));
+            assertThat(Files.exists(outer, LinkOption.NOFOLLOW_LINKS)).as("the folder that could not be removed stays").isTrue();
+
+            Path file = parent.resolve("payload.part");
+            assertThatThrownBy(() -> rule.open(file, Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE))).isInstanceOfSatisfying(UnsafeStorageException.class,
+                e -> assertThat(e).hasMessageContaining(file.toString()).hasMessageContaining("could not be removed again"));
+            assertThat(Files.exists(file, LinkOption.NOFOLLOW_LINKS)).isTrue();
+        } finally {
+            TestStorage.undoTheDenial(parent); // gives the owner DELETE_CHILD back: what the folder holds can be deleted again
+            TestStorage.deleteTree(parent);
+        }
+    }
+
+    @Test
+    @DisplayName("S-D0117-07: the folder that forbids changing the list is never locked itself: with the denial still in place, the account deletes it with what was made below it (the proof for a test that dies before its cleanup)")
+    void theAccountDeletesAFolderThatStillHasTheDenial() throws IOException {
+        Path parent = folderThatForbidsChangingTheList();
+        Path child = Files.createDirectory(parent.resolve("outer"));
+        Files.writeString(Files.createDirectory(child.resolve("inner")).resolve("payload.part"), "bytes");
+        assertThatThrownBy(() -> TestStorage.undoTheDenial(child)).as("what is made below the folder has the denial").isInstanceOf(IOException.class);
+
+        TestStorage.deleteTree(parent);
+
+        assertThat(Files.exists(parent, LinkOption.NOFOLLOW_LINKS)).isFalse();
+    }
+
+    @Test
+    @DisplayName("S-D0117-07: when the denial is undone the same call makes the folder private, and the folder and what is below it are deleted afterwards (the control of the denial tests)")
+    void theCallWorksWhenTheDenialIsUndone() throws IOException {
+        Path parent = folderThatForbidsChangingTheList();
+        TestStorage.undoTheDenial(parent);
+        try {
+            Path inner = parent.resolve("outer").resolve("inner");
+
+            rule.createFolder(inner);
+
+            TestStorage.assertOwnerOnly(inner);
+        } finally {
+            TestStorage.deleteTree(parent);
+        }
+    }
+
+    @Test
+    @DisplayName("S-D0117-01: an entry for Everyone (or Users) on an existing file is left as it is and the file is opened, written and read")
+    void anExistingFileThatOthersCanUseIsOpenedAsItIs() throws IOException {
         Path folder = directory.resolve("folder");
         rule.createFolder(folder);
         Path file = folder.resolve("payload.part");
-        write(file, "secret bytes");
-        byte[] before = read(file);
-        rule.requireProtected(file);
-
-        TestStorage.openUp(file);
-
-        assertThatThrownBy(() -> rule.requireProtected(file)).isInstanceOf(UnsafeStorageException.class).hasMessageContaining("allows");
-        assertThat(read(file)).isEqualTo(before);
-    }
-
-    @Test
-    @DisplayName("S2-DB-10: an entry that only denies is not an access: a DENY for Everyone on a private file does not make it unsafe")
-    void aDenyEntryIsNotAnAccess() throws IOException {
-        Path folder = directory.resolve("deny");
-        rule.createFolder(folder);
-        Path file = folder.resolve("payload.part");
         write(file, "bytes");
-        AclFileAttributeView view = view(file);
-        List<AclEntry> acl = new java.util.ArrayList<>(view.getAcl());
-        acl.add(0, AclEntry.newBuilder().setType(AclEntryType.DENY).setPrincipal(TestStorage.outsider(file)).setPermissions(java.nio.file.attribute.AclEntryPermission.WRITE_DATA)
-            .build());
-        view.setAcl(acl);
+        TestStorage.openUp(file);
+        List<AclEntry> before = view(file).getAcl();
 
-        rule.requireProtected(file);
+        try (FileChannel channel = rule.open(file, Set.of(StandardOpenOption.WRITE, StandardOpenOption.APPEND))) {
+            channel.write(ByteBuffer.wrap("+more".getBytes(StandardCharsets.UTF_8)));
+        }
+
+        assertThat(view(file).getAcl()).isEqualTo(before);
+        assertThat(Files.readString(file)).isEqualTo("bytes+more");
     }
 }

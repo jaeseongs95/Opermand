@@ -43,15 +43,4 @@ class LoggingProfileEventsTest {
             assertThat(event.getFormattedMessage()).isEqualTo("[policy] is accepted for compatibility and is not enforced");
         });
     }
-
-    @Test
-    @DisplayName("VR-329: a profile file that others may read is one WARN line with the reason")
-    void theAccessWarningIsOneLine() {
-        new LoggingProfileEvents().accessWarning("Config path c.toml can be read by Users (access control list)");
-
-        assertThat(appender.list).singleElement().satisfies(event -> {
-            assertThat(event.getLevel()).isEqualTo(Level.WARN);
-            assertThat(event.getFormattedMessage()).contains("can be read by Users");
-        });
-    }
 }

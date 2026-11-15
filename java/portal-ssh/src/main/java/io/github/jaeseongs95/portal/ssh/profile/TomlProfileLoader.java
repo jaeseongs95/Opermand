@@ -26,14 +26,14 @@ import tools.jackson.dataformat.toml.TomlMapper;
 
 /**
  * Reads the profile file of the SSH adapter, the TOML file that 2.x named by {@code BRIDGE_CONFIG_PATH} (vendor config/loader.js, config/schema.js). The order is the one
- * of 2.x (PF-01): read the file, check who may use it, parse the TOML, validate the schema, merge the defaults.
+ * of 2.x (PF-01) without the check of who may use the file: read the file, parse the TOML, validate the schema, merge the defaults.
  *
  * <ul>
  * <li><b>The path</b> is used as it is given: {@code ~} and variables are not expanded (PF-02). A missing file is a {@link ConfigNotFoundException}; one that exists and
  * cannot be read is a {@link ProfileConfigException} of the code {@code UNREADABLE} (PF-03).
- * <li><b>Who may use the file</b> is decided by {@link FileAccessGuard} for the file and its folder with {@link Protection#NO_OTHER_ACCESS}: no permission for the
- * group or others on a volume with permission bits (PF-04), and no other account that may change it on a volume with an access control list (PF-05). A readable-only
- * entry of an ACL is reported to {@link ProfileEvents#accessWarning}.
+ * <li><b>Who may use the file</b> is not checked: 2.x refused a file or folder that the group or others could use (PF-04) or that another account could change through
+ * an access control list (PF-05), and 3.0 does not (decision D-0117: the owner of the installation trusts the machine; what the product creates is created private to its
+ * owner, see {@link PrivateFiles}).
  * <li><b>The parser</b> is Jackson's TOML module (no parser of our own). A syntax error is {@code Failed to parse TOML config at <path>: ...} (PF-06). Unknown keys,
  * a text where a number or a boolean is written and a float where an integer is written are refused, never converted (PF-08, PF-11).
  * <li><b>The schema</b> is the Jakarta Validation constraints of the records {@code TomlDocument}, {@code TomlDefaults} and {@code TomlProfile}; the failure is
@@ -49,13 +49,11 @@ public final class TomlProfileLoader {
 
     private static final String VALIDATION_HEADER = "Config validation error:";
 
-    private final FileAccessGuard guard;
     private final Validator validator;
     private final ProfileEvents events;
     private final TomlMapper mapper;
 
-    public TomlProfileLoader(FileAccessGuard guard, Validator validator, ProfileEvents events) {
-        this.guard = Objects.requireNonNull(guard, "guard");
+    public TomlProfileLoader(Validator validator, ProfileEvents events) {
         this.validator = Objects.requireNonNull(validator, "validator");
         this.events = Objects.requireNonNull(events, "events");
         // A mapper of its own (an exception of the rule "one JsonMapper bean" of Principles 2.2 category 2): that bean reads JSON, and Jackson's TOML module has no Boot bean.
@@ -70,12 +68,11 @@ public final class TomlProfileLoader {
      * Loads the profiles of the file.
      *
      * @throws ConfigNotFoundException when there is no file at the path
-     * @throws ProfileConfigException when the file cannot be read, is open to other accounts, is not TOML, breaks the schema or has names with a shared credential prefix
+     * @throws ProfileConfigException when the file cannot be used (it is not a regular file, it is empty, or reading failed), is not TOML, breaks the schema or has names with a shared credential prefix
      */
     public ProfileCatalog load(Path path) {
         Objects.requireNonNull(path, "path");
         String text = read(path);
-        checkAccess(path);
         TomlDocument document = parse(path, text);
         validate(document);
         ProfileCatalog catalog = normalize(document);
@@ -85,28 +82,29 @@ public final class TomlProfileLoader {
         return catalog;
     }
 
+    /**
+     * The text of the file. What is at the path must be a regular file (a link is followed first), and it is checked before any byte is read: a folder, a FIFO, a device or a
+     * socket is refused, so that reading a FIFO or {@code /dev/zero} never starts. A file with no bytes is refused too: the profile file holds what the owner wrote, and an empty
+     * one is a mistake to name, not a configuration (decision D-0117).
+     */
     private String read(Path path) {
+        if (Files.exists(path) && !Files.isRegularFile(path)) {
+            throw new ProfileConfigException(ProfileConfigException.Code.UNREADABLE, "Config file " + path + " is not a regular file");
+        }
+        String text = readText(path);
+        if (text.isEmpty()) {
+            throw new ProfileConfigException(ProfileConfigException.Code.UNREADABLE, "Config file " + path + " is empty");
+        }
+        return text;
+    }
+
+    private String readText(Path path) {
         try {
             return Files.readString(path, StandardCharsets.UTF_8);
         } catch (NoSuchFileException e) {
             throw new ConfigNotFoundException(path.toString(), e);
         } catch (IOException e) {
             throw new ProfileConfigException(ProfileConfigException.Code.UNREADABLE, "Config file " + path + " could not be read: " + e.getClass().getSimpleName(), e);
-        }
-    }
-
-    private void checkAccess(Path path) {
-        AccessVerdict verdict;
-        try {
-            verdict = guard.inspect(path, Protection.NO_OTHER_ACCESS);
-        } catch (IOException e) {
-            throw new ProfileConfigException(ProfileConfigException.Code.UNREADABLE, "Config file " + path + " could not be checked: " + e.getClass().getSimpleName(), e);
-        }
-        switch (verdict) {
-            case AccessVerdict.Refused refused -> throw new ProfileConfigException(ProfileConfigException.Code.ACCESS_REFUSED, refused.reason());
-            case AccessVerdict.Exposed exposed -> events.accessWarning(exposed.reason());
-            case AccessVerdict.Private ignored -> {
-            }
         }
     }
 

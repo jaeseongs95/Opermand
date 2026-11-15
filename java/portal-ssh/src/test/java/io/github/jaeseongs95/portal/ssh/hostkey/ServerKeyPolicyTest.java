@@ -6,7 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.attribute.PosixFilePermissions;
+import java.io.UncheckedIOException;
 import java.security.KeyPair;
 import java.util.List;
 
@@ -24,9 +24,8 @@ import io.github.jaeseongs95.portal.domain.target.AuthMethod;
 import io.github.jaeseongs95.portal.domain.target.ConnectionProfile;
 import io.github.jaeseongs95.portal.domain.target.Setting;
 import io.github.jaeseongs95.portal.domain.target.TtyMode;
-import io.github.jaeseongs95.portal.ssh.profile.AccessVerdict;
 import io.github.jaeseongs95.portal.ssh.profile.ProfileConfigException;
-import io.github.jaeseongs95.portal.ssh.profile.Protection;
+import io.github.jaeseongs95.portal.ssh.profile.PrivateFiles;
 import io.github.jaeseongs95.portal.ssh.profile.TestFiles;
 import io.github.jaeseongs95.portal.ssh.testkit.EmbeddedSshServer;
 import io.github.jaeseongs95.portal.ssh.testkit.SshTestClient;
@@ -49,7 +48,7 @@ class ServerKeyPolicyTest {
 
     @BeforeEach
     void aPrivateFolderForTheRecord() throws IOException {
-        knownHosts = TestFiles.privateFolder(Files.createDirectory(root.resolve("state"))).resolve("known_hosts");
+        knownHosts = Files.createDirectory(root.resolve("state")).resolve("known_hosts");
         events = new RecordingHostKeyEvents();
     }
 
@@ -60,7 +59,7 @@ class ServerKeyPolicyTest {
     }
 
     private ServerKeyPolicy policy(HostKeyMode mode) {
-        return new ServerKeyPolicy(settings(mode), TestFiles.guard(), events);
+        return new ServerKeyPolicy(settings(mode), TestFiles.privateFiles(), events);
     }
 
     private EmbeddedSshServer server(KeyPair hostKey) throws IOException {
@@ -301,7 +300,7 @@ class ServerKeyPolicyTest {
         assertThat(SshSettings.defaults(knownHosts).hostKeyMode()).isEqualTo(HostKeyMode.TOFU);
         KeyPair hostKey = EmbeddedSshServer.newKeyPair();
         try (EmbeddedSshServer server = server(hostKey)) {
-            connect(new ServerKeyPolicy(SshSettings.defaults(knownHosts), TestFiles.guard(), events), server, profile(server, Setting.unset()));
+            connect(new ServerKeyPolicy(SshSettings.defaults(knownHosts), TestFiles.privateFiles(), events), server, profile(server, Setting.unset()));
 
             assertThat(Files.readAllLines(knownHosts)).singleElement().asString().contains(PublicKeyEntry.toString(hostKey.getPublic()));
         }
@@ -350,31 +349,64 @@ class ServerKeyPolicyTest {
     }
 
     @Test
-    @DisplayName("D3-10: the file and its folder are made when they are missing, and only the owner can use them")
+    @DisplayName("D3-10, S-D0117-06: the file and its missing folders are made when they are missing, and only the owner can use them")
     void theFileIsCreatedPrivate() throws IOException {
-        Path missingFolder = root.resolve("created-by-the-policy");
+        Path missingFolder = root.resolve("outer").resolve("created-by-the-policy");
         Path file = missingFolder.resolve("known_hosts");
+        TestFiles.openUp(root);
+        TestFiles.assertTheOpenEntryIsInherited(root); // the condition is real: a plain file below this folder has the entry for others
 
-        new ServerKeyPolicy(new SshSettings(SshSettings.DEFAULT_CONNECT_TIMEOUT, SshSettings.DEFAULT_HEARTBEAT_INTERVAL, SshSettings.DEFAULT_HEARTBEAT_NO_REPLY_MAX,
-            SshSettings.DEFAULT_IDLE_PROBE_AFTER, SshSettings.DEFAULT_EXEC_REPLY_TIMEOUT, SshSettings.DEFAULT_CHANNEL_PERMITS, SshSettings.DEFAULT_CONSECUTIVE_OPEN_REJECTIONS,
-            HostKeyMode.TOFU, file), TestFiles.guard(), events);
+        new ServerKeyPolicy(settingsWithFile(HostKeyMode.TOFU, file), TestFiles.privateFiles(), events);
 
         assertThat(file).exists();
-        assertThat(TestFiles.guard().inspect(file, Protection.NO_OTHER_ACCESS)).as("the file and its folder, even for reading").isInstanceOf(AccessVerdict.Private.class);
-        if (TestFiles.hasPermissionBits(file)) {
-            assertThat(Files.getPosixFilePermissions(file)).isEqualTo(PosixFilePermissions.fromString("rw-------"));
-            assertThat(Files.getPosixFilePermissions(missingFolder)).isEqualTo(PosixFilePermissions.fromString("rwx------"));
+        TestFiles.assertOwnerOnly(file);
+        TestFiles.assertOwnerOnly(missingFolder);
+        TestFiles.assertOwnerOnly(missingFolder.getParent());
+        // Neither made for them nor inherited: an implementation that keeps the inherited list and only adds the owner's entries has the entry for others here and fails.
+        TestFiles.assertNoEntryForOthers(file);
+        TestFiles.assertNoEntryForOthers(missingFolder);
+        TestFiles.assertNoEntryForOthers(missingFolder.getParent());
+    }
+
+    @Test
+    @DisplayName("S-D0117-01: a file of known hosts that other accounts may change is used as it is: the policy is built, a first key is recorded and nobody is refused for the rights")
+    void aFileOthersMayChangeIsUsed() throws IOException {
+        Files.writeString(knownHosts, "");
+        TestFiles.openUp(knownHosts);
+        TestFiles.openUp(knownHosts.getParent());
+        KeyPair hostKey = EmbeddedSshServer.newKeyPair();
+
+        try (EmbeddedSshServer server = server(hostKey)) {
+            connect(policy(HostKeyMode.TOFU), server, profile(server, Setting.unset()));
+
+            assertThat(Files.readAllLines(knownHosts)).singleElement().satisfies(line -> assertThat(line).contains(PublicKeyEntry.toString(hostKey.getPublic())));
+            assertThat(events.refusals()).isEmpty();
         }
     }
 
     @Test
-    @DisplayName("D3-10: a file of known hosts that other accounts may change is refused when the policy is built")
-    void aFileOthersMayChangeIsRefused() throws IOException {
-        Files.writeString(knownHosts, "");
-        TestFiles.openToWrite(knownHosts);
+    @DisplayName("S-D0117-04: a folder in place of the file of known hosts is refused when the policy is built (KNOWN_HOSTS_UNSAFE) and stays a folder")
+    void aFolderInPlaceOfTheFileIsRefused() throws IOException {
+        Files.createDirectory(knownHosts);
 
         assertThatThrownBy(() -> policy(HostKeyMode.TOFU)).isInstanceOfSatisfying(ProfileConfigException.class, e -> assertThat(e.code()).isEqualTo(ProfileConfigException.Code.KNOWN_HOSTS_UNSAFE))
-            .hasMessageContaining("not safe to trust");
+            .hasMessageEndingWith("is not a regular file");
+        assertThat(knownHosts).isDirectory();
+    }
+
+    @Test
+    @DisplayName("S-D0117-07: a file store on which nothing can be made private refuses to build the policy, and the file and its folder are not created")
+    void aFileStoreWithoutARuleRefusesTheStart() {
+        Path file = root.resolve("no-rule").resolve("known_hosts");
+
+        assertThatThrownBy(() -> new ServerKeyPolicy(settingsWithFile(HostKeyMode.TOFU, file), new PrivateFiles(List.of()), events)).isInstanceOf(UncheckedIOException.class);
+        assertThat(file.getParent()).doesNotExist();
+    }
+
+    private SshSettings settingsWithFile(HostKeyMode mode, Path file) {
+        return new SshSettings(SshSettings.DEFAULT_CONNECT_TIMEOUT, SshSettings.DEFAULT_HEARTBEAT_INTERVAL, SshSettings.DEFAULT_HEARTBEAT_NO_REPLY_MAX,
+            SshSettings.DEFAULT_IDLE_PROBE_AFTER, SshSettings.DEFAULT_EXEC_REPLY_TIMEOUT, SshSettings.DEFAULT_CHANNEL_PERMITS, SshSettings.DEFAULT_CONSECUTIVE_OPEN_REJECTIONS,
+            mode, file);
     }
 
     @Test

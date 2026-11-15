@@ -17,7 +17,6 @@ import io.github.jaeseongs95.portal.app.remote.FilePathPolicy;
 import io.github.jaeseongs95.portal.app.remote.PathPolicyDecision;
 import io.github.jaeseongs95.portal.domain.id.Digester;
 import io.github.jaeseongs95.portal.ssh.profile.ProfileCatalog;
-import io.github.jaeseongs95.portal.ssh.profile.TestFiles;
 import io.github.jaeseongs95.portal.ssh.testkit.EmbeddedSshServer;
 import io.github.jaeseongs95.portal.ssh.testkit.ScriptedCommand;
 import io.github.jaeseongs95.portal.store.artifact.ArtifactLimits;
@@ -56,13 +55,12 @@ class FullAssemblyApplication {
     }
 
     /**
-     * The two profiles of the embedded server, in a profile file that only its owner may use (the loader refuses a file that others can read): the read-only one and the
-     * read-write one, both pinned to the host key of the server, both logging in with the password.
+     * The two profiles of the embedded server, in a profile file (the loader does not look at who may use it): the read-only one and the read-write one, both pinned to the host key of the server, both logging in with the password.
      */
     @Bean
     ConnectionFiles connectionFiles(EmbeddedSshServer server) throws IOException {
-        Path folder = TestFiles.privateFolder(Files.createTempDirectory("portal-full-config"));
-        Path profiles = TestFiles.privateFile(Files.writeString(folder.resolve("profiles.toml"), profileFile(server), StandardCharsets.UTF_8));
+        Path folder = Files.createTempDirectory("portal-full-config");
+        Path profiles = Files.writeString(folder.resolve("profiles.toml"), profileFile(server), StandardCharsets.UTF_8);
         return new ConnectionFiles(profiles, folder.resolve("known_hosts"));
     }
 

@@ -6,9 +6,6 @@ package io.github.jaeseongs95.portal.ssh.profile;
  */
 public interface ProfileEvents {
 
-    /** The profile file or its folder can be read by other accounts, and nothing worse (an access control list with a read-only entry). */
-    void accessWarning(String reason);
-
     /** The file has a {@code [policy]} table: it is accepted so that a file written for 2.x still loads, and nothing enforces it. */
     void policyNotEnforced();
 }

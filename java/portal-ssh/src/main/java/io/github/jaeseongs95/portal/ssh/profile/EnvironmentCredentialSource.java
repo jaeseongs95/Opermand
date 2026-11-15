@@ -39,10 +39,11 @@ import io.github.jaeseongs95.portal.domain.target.Setting;
  * profile says {@code cert = true}, the certificate ({@code <prefix>_CERT} or {@code <key file without .pub>-cert.pub} next to the key); {@code keychain} is
  * {@link CredentialLookup.Unsupported}. {@code agent}, which is also the method of a profile that names none, collects its sources like 2.x did (EV-10): the key
  * (read as for {@code key}), else the password, else the agent when {@code SSH_AUTH_SOCK} is set, else a {@link CredentialLookup.Missing} that lists every place
- * searched. A profile whose method is {@code password}, {@code key} or {@code keychain} gets only what that method uses. A key file that is missing, empty or
+ * searched. A profile whose method is {@code password}, {@code key} or {@code keychain} gets only what that method uses. A key file that is missing, empty, not a regular file (a folder) or
  * unreadable is a {@link CredentialLookup.Missing} that names the place where the key was named ({@code keyRef of the profile}, {@code <prefix>_KEY} or
  * {@code SSH_MCP_KEY}) and never the value, which may be a key text (2.x skipped a missing file silently); the lookup of an {@code agent} profile does not go on to the
- * password then. An unreadable file is logged with the name of that place and the kind of the error. A leading {@code ~} name of a key path is the home folder ({@code HOME}, else
+ * password then. An unreadable file is logged with the name of that place and the kind of the error. Who may use a key file, who owns it and whether the path is a link
+ * are not asked (decision D-0117); a link is followed. A leading {@code ~} name of a key path is the home folder ({@code HOME}, else
  * {@code user.home}); a name that starts with {@code ~} and a user name is not expanded. Nothing is made of {@code SSH_MCP_SUDO_PASSWORD}: 2.x never read it (EV-03).
  *
  * <p>The secrets are {@link SecretValue}s from the moment they are read, and nothing here logs, prints or puts them in a message: a {@link CredentialMiss} names the
@@ -71,7 +72,7 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
     }
 
     /** What reading a file gave. */
-    private sealed interface FileRead permits FileRead.Text, FileRead.Absent, FileRead.Unreadable {
+    private sealed interface FileRead permits FileRead.Text, FileRead.Absent, FileRead.NotRegular, FileRead.Unreadable {
 
         /** The text of the file. */
         record Text(String text) implements FileRead {
@@ -79,6 +80,10 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
 
         /** There is no such file (2.x skipped it silently, {@code ENOENT}). */
         record Absent() implements FileRead {
+        }
+
+        /** Something is at the path and it is not a regular file (a folder): it is not read. Who may use the path or who owns it is never asked (decision D-0117). */
+        record NotRegular() implements FileRead {
         }
 
         /** The file is there and cannot be read (2.x threw). */
@@ -163,6 +168,7 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
             case FileRead.Text key when key.text().isEmpty() -> missing(CredentialPart.PRIVATE_KEY, place + " is empty");
             case FileRead.Text key -> withPassphraseAndCertificate(SecretValue.of(key.text()), alias, prefix, keyFile, named.source());
             case FileRead.Absent absent -> missing(CredentialPart.PRIVATE_KEY, place + " does not exist");
+            case FileRead.NotRegular notRegular -> missing(CredentialPart.PRIVATE_KEY, place + " is not a regular file");
             case FileRead.Unreadable unreadable -> missing(CredentialPart.PRIVATE_KEY, place + " cannot be read");
         };
     }
@@ -183,8 +189,10 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
             return missing(CredentialPart.CERTIFICATE, certSource + " cannot be read");
         }
         return switch (read(certFile, certSource)) {
+            case FileRead.Text certificate when certificate.text().isEmpty() -> missing(CredentialPart.CERTIFICATE, certSource + " is empty");
             case FileRead.Text certificate -> new CredentialLookup.Resolved(new SshCredential.PrivateKey(pem, passphrase, Setting.given(certificate.text())));
             case FileRead.Absent absent -> new CredentialLookup.Resolved(new SshCredential.PrivateKey(pem, passphrase, Setting.unset()));
+            case FileRead.NotRegular notRegular -> missing(CredentialPart.CERTIFICATE, certSource + " is not a regular file");
             case FileRead.Unreadable unreadable -> missing(CredentialPart.CERTIFICATE, certSource + " cannot be read");
         };
     }
@@ -229,6 +237,9 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
     private FileRead read(Path file, String source) {
         if (!Files.exists(file)) {
             return new FileRead.Absent();
+        }
+        if (!Files.isRegularFile(file)) {
+            return new FileRead.NotRegular();
         }
         try {
             return new FileRead.Text(Files.readString(file, StandardCharsets.UTF_8));

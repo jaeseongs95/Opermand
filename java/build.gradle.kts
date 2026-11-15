@@ -32,6 +32,20 @@ val testCpus: String? = statedTestSize("cpus", Regex("[1-9][0-9]*"), "a positive
 val testHeap: String? = statedTestSize("heap", Regex("[1-9][0-9]*[kKmMgG]?"), "a positive whole number with an optional k, m or g, such as 512m (the heap of a test JVM)")
 val testForks: String? = statedTestSize("forks", Regex("[1-9][0-9]*"), "a positive whole number that fits an int (the test JVMs Gradle runs at the same time)", isCount = true)
 
+// The file-system abilities a run requires of its machine (case S-D0117-09): -Pportal.test.require=posix,links says that the run must be able to make permission bits (posix) and
+// symbolic links (links), and -Pportal.test.require=acl that it must have access control lists. A test that needs such an ability and does not find it is skipped on a machine
+// without the property (a Windows user token cannot make a symbolic link, an NTFS volume has no permission bits); with the property the same test fails, so a CI step that states what its
+// runner offers can never pass by skipping. The build only checks the names and hands the list to the test JVM as the system property portal.test.require, which the test code reads.
+val testRequire: String? = providers.gradleProperty("portal.test.require").orNull?.also { value ->
+    val allowed = setOf("posix", "links", "acl")
+    // The names are compared as they are given, not trimmed: the test code compares the same text, so a name with a blank around it (or an empty name) is refused here, as a size
+    // property with a blank is (D-0111 rules).
+    val names = value.split(',')
+    if (names.any { it !in allowed }) {
+        throw GradleException("-Pportal.test.require must be a comma separated list of ${allowed.sorted()} without blanks, but is '$value'")
+    }
+}
+
 /** The variables the host agents set in their session (a test must not see them): the agent hosts' own, the governance suite's, and this product's BRIDGE_* / PORTAL_* settings. */
 val hostSessionVariable = Regex("(AGENT_GOVERNANCE|AGS_|CLAUDE|CODEX|GEMINI|ANTHROPIC|OPENAI|BRIDGE_|PORTAL_).*", RegexOption.IGNORE_CASE)
 
@@ -123,6 +137,8 @@ subprojects {
         testCpus?.let { systemProperty("portal.test.stated.cpus", it) }
         testHeap?.let { systemProperty("portal.test.stated.heap", it) }
         testForks?.let { systemProperty("portal.test.stated.forks", it) }
+        // The abilities the run requires (see testRequire above); left out when not stated, and the tests that need an ability then skip without it.
+        testRequire?.let { systemProperty("portal.test.require", it) }
         testLogging {
             events("failed")
             exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL

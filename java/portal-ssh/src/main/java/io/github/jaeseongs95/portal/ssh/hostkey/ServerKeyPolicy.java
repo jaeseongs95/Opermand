@@ -2,6 +2,7 @@ package io.github.jaeseongs95.portal.ssh.hostkey;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Objects;
 
@@ -13,10 +14,8 @@ import org.springframework.stereotype.Component;
 import io.github.jaeseongs95.portal.app.remote.SshSettings;
 import io.github.jaeseongs95.portal.domain.target.ConnectionProfile;
 import io.github.jaeseongs95.portal.domain.target.Setting;
-import io.github.jaeseongs95.portal.ssh.profile.AccessVerdict;
-import io.github.jaeseongs95.portal.ssh.profile.FileAccessGuard;
+import io.github.jaeseongs95.portal.ssh.profile.PrivateFiles;
 import io.github.jaeseongs95.portal.ssh.profile.ProfileConfigException;
-import io.github.jaeseongs95.portal.ssh.profile.Protection;
 
 /**
  * The host key policy of the SSH adapter (stage 3 design 3.6, decision D3-10): it gives the session code the MINA {@link ServerKeyVerifier} to use for a profile.
@@ -28,7 +27,8 @@ import io.github.jaeseongs95.portal.ssh.profile.Protection;
  * {@code strict} accepts only a host that is already recorded; {@code insecure} accepts every key and is kept for compatibility.
  * <li><b>The record is a {@code known_hosts} file</b> (OpenSSH's format, MINA's {@code DefaultKnownHostsServerKeyVerifier}), so a key that was trusted stays trusted after a
  * restart. 2.x kept the keys in memory and trusted again at every start. The file is created, with its folder, when it is missing, and only its owner can use it; an existing
- * file that other accounts may change is refused when the policy is built. A key that was refused changes nothing in the file.
+ * file is used as it is, whoever else may change it, and a path that is not a regular file is refused when the policy is built. A key that was refused changes nothing in
+ * the file.
  * <li><b>Reports.</b> A refused key is reported to {@link HostKeyEvents} with its code and fingerprints; the {@code insecure} mode is reported once, when this bean is built.
  * </ul>
  *
@@ -40,9 +40,9 @@ public final class ServerKeyPolicy {
     private final HostKeyEvents events;
     private final RecordedKeyVerifier recorded;
 
-    public ServerKeyPolicy(SshSettings settings, FileAccessGuard guard, HostKeyEvents events) {
+    public ServerKeyPolicy(SshSettings settings, PrivateFiles privateFiles, HostKeyEvents events) {
         Objects.requireNonNull(settings, "settings");
-        Objects.requireNonNull(guard, "guard");
+        Objects.requireNonNull(privateFiles, "privateFiles");
         this.events = Objects.requireNonNull(events, "events");
         // The verifiers below are made with new, not as beans (Principles 3.1): they hold the settings of this one installation (the mode and the file) and the MINA classes
         // cannot carry an annotation; the policy is the one bean that owns them.
@@ -51,8 +51,8 @@ public final class ServerKeyPolicy {
                 events.insecureModeActive();
                 yield new RecordedKeyVerifier(settings.hostKeyMode(), AcceptAllServerKeyVerifier.INSTANCE, events);
             }
-            case TOFU -> new RecordedKeyVerifier(settings.hostKeyMode(), new ObservingKnownHosts(AcceptAllServerKeyVerifier.INSTANCE, preparedFile(settings.knownHosts(), guard)), events);
-            case STRICT -> new RecordedKeyVerifier(settings.hostKeyMode(), new ObservingKnownHosts(RejectAllServerKeyVerifier.INSTANCE, preparedFile(settings.knownHosts(), guard)), events);
+            case TOFU -> new RecordedKeyVerifier(settings.hostKeyMode(), new ObservingKnownHosts(AcceptAllServerKeyVerifier.INSTANCE, preparedFile(settings.knownHosts(), privateFiles)), events);
+            case STRICT -> new RecordedKeyVerifier(settings.hostKeyMode(), new ObservingKnownHosts(RejectAllServerKeyVerifier.INSTANCE, preparedFile(settings.knownHosts(), privateFiles)), events);
         };
     }
 
@@ -68,12 +68,15 @@ public final class ServerKeyPolicy {
         };
     }
 
-    /** Makes sure the file and its folder exist, private to the owner, and that nobody else may change what exists. */
-    private Path preparedFile(Path file, FileAccessGuard guard) {
+    /**
+     * Makes sure the file and its folder exist, created private to the owner when they are missing, and that the path is a regular file. A file that exists is used as it is,
+     * whoever else may change it (decision D-0117).
+     */
+    private Path preparedFile(Path file, PrivateFiles privateFiles) {
         try {
-            guard.createPrivateFile(file);
-            if (guard.inspect(file, Protection.NO_OTHER_WRITE) instanceof AccessVerdict.Refused refused) {
-                throw new ProfileConfigException(ProfileConfigException.Code.KNOWN_HOSTS_UNSAFE, "The file of known hosts is not safe to trust: " + refused.reason());
+            privateFiles.createPrivateFile(file);
+            if (!Files.isRegularFile(file)) {
+                throw new ProfileConfigException(ProfileConfigException.Code.KNOWN_HOSTS_UNSAFE, "The file of known hosts " + file + " is not a regular file");
             }
             return file;
         } catch (IOException e) {

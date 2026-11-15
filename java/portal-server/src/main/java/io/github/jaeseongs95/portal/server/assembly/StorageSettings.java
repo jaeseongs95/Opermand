@@ -9,7 +9,7 @@ import io.github.jaeseongs95.portal.store.artifact.ArtifactLimits;
 /**
  * What the file stores need to know from the installation: the folders of the artifact bytes and of the command output bytes, the audit file, the limits of the artifact
  * store and how long an artifact that nobody used stays. No folder has a default here: where the bytes live is the installation's choice (the product is installed on the host
- * of an arbitrary user), and the stores refuse a folder that others can use.
+ * of an arbitrary user), and the stores create what they create private to its owner and use an existing folder as it is.
  *
  * <p>Stage 3 receives the value through the constructor of the assembly (a test builds one); stage 4 replaces it by a {@code @ConfigurationProperties} record of the
  * {@code bridge.*} prefix that has the same components (decision D3-12), and nothing that uses it changes.

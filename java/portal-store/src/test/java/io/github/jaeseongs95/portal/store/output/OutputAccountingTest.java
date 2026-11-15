@@ -246,17 +246,16 @@ class OutputAccountingTest {
     }
 
     @Test
-    @DisplayName("RC-A-493: a payload with a second hard link is not measured as safe, so the reservation stays charged (where the file store reports link counts)")
+    @DisplayName("RC-A-493 (S-D0117-03: 3.0 does not look at link counts): a payload with a second hard link is measured like any other payload, so the charge is its bytes")
     void aSecondHardLinkKeepsTheReservation(@TempDir Path folder) throws IOException {
         OutputWorld w = factory.create(folder, LIMITS);
         OutputId id = w.reserve(fixture.unbound(), 1024, T0);
         w.append(id, StreamKind.STDOUT, "x");
         Files.createLink(folder.resolve("unsafe-extra-link"), w.file(id, PayloadKind.STREAM));
-        boolean linkCountVisible = Files.getFileStore(folder).supportsFileAttributeView("unix");
 
         w.manifests.markUnavailable(id, T0.plusMillis(50));
 
-        assertChargeAcrossRestart(folder, w, id, linkCountVisible ? 1024L : 6L);
+        assertChargeAcrossRestart(folder, w, id, 6L);
     }
 
     @Test
