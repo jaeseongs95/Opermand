@@ -186,6 +186,8 @@ class JdbcOperationJournalTest {
         assertThat(inserted).isInstanceOf(JournalInsert.Inserted.class);
         assertThat(journal.findByRequestKey(next.requestKey())).isPresent();
         assertThat(operations.count()).isEqualTo(full + 1);
+        // No row was deleted to make room: every filler row is still there.
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM operation WHERE request_key LIKE 'filler-%'", Long.class)).isEqualTo(filler);
     }
 
     @Test
