@@ -8,31 +8,32 @@ import java.nio.file.Path;
 import java.util.Set;
 
 /**
- * The rule that keeps a folder or a file private to its owner on one kind of file store. A file store offers one of two ways to say who may touch a file, and the
- * rule is chosen by what the file store <em>offers</em> ({@link FileStore#supportsFileAttributeView(String)}), never by the name of the operating system
+ * The rule that creates a folder or a file so that only its owner can use it, on one kind of file store. A file store offers one of two ways to say who may touch a file,
+ * and the rule is chosen by what the file store <em>offers</em> ({@link FileStore#supportsFileAttributeView(String)}), never by the name of the operating system
  * (Principles 1.1): {@link PosixPrivateStorage} for a store with the {@code posix} view (permission bits), {@link AclPrivateStorage} for a store with the {@code acl}
- * view (an NTFS volume). A store with neither is refused by {@link PrivateStorages}; an unsupported store is never accepted as "not checked".
+ * view (an NTFS volume). A store with neither is refused by {@link PrivateStorages}; a path is never created with wide rights because the store cannot narrow them.
+ *
+ * <p>The rule is about <em>creating</em>. Reading or using what already exists does not look at who may use it, who owns it or whether it is reached by a link: the
+ * owner of the installation trusts the machine (decision D-0117, the one trust boundary of this product). What is refused is a path that is not a regular file or a
+ * folder, which {@link PrivateStorages} checks.
  *
  * <p>The three stores that write sensitive bytes (artifacts, command outputs, the audit file) use the same rule through {@link PrivateStorages}; none of them holds a
  * copy of it.
  */
 public interface PrivateStorage {
 
-    /** True when this rule can protect and check a path on the file store. */
+    /** True when this rule can make a path private on the file store. */
     boolean supports(FileStore store);
 
-    /** Creates the folder, with its missing parents, so that only its owner can use it. A folder that exists is left as it is (use {@link #requireProtected}). */
+    /**
+     * Creates the folder, with its missing parents, so that only its owner can use it. A folder that exists is left as it is. When a folder cannot be made private
+     * the ones this call created are removed again and {@link UnsafeStorageException} is thrown: nothing is left behind with wide rights.
+     */
     void createFolder(Path folder) throws IOException;
 
     /**
-     * Opens a file like {@link FileChannel#open(Path, Set, java.nio.file.attribute.FileAttribute[])}; a file that this call creates is private to its owner. The
-     * caller passes {@code LinkOption.NOFOLLOW_LINKS} among the options when it must not follow a link.
+     * Opens a file like {@link FileChannel#open(Path, Set, java.nio.file.attribute.FileAttribute[])}; a file that this call creates is private to its owner (when it
+     * cannot be made private it is removed again and {@link UnsafeStorageException} is thrown). A file that exists is opened as it is, a link is followed.
      */
     FileChannel open(Path file, Set<? extends OpenOption> options) throws IOException;
-
-    /**
-     * Throws {@link UnsafeStorageException} when somebody besides the owner (and the system itself, where the file store has such a principal) may use the folder or
-     * the file; a regular file on a store that counts links must also have a single name.
-     */
-    void requireProtected(Path path) throws IOException;
 }

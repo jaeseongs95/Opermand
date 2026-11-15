@@ -39,7 +39,7 @@ class FileOutputPayloadStoreTest {
 
     private FileOutputPayloadStore store(Path folder, long maxOutputBytes) {
         OutputLimits limits = new OutputLimits(Duration.ofHours(1), maxOutputBytes, maxOutputBytes * 8, 1000, 0L);
-        return new FileOutputPayloadStore(new OutputFiles(new StorageRoots(TestStorage.privateFolder(folder), folder), TestStorage.rules()), new Sha256Digester(), limits);
+        return new FileOutputPayloadStore(new OutputFiles(new StorageRoots(folder, folder), TestStorage.rules()), new Sha256Digester(), limits);
     }
 
     private OutputId id(String hexDigit) {

@@ -7,7 +7,6 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.List;
 import java.util.Set;
 
@@ -16,10 +15,11 @@ import org.springframework.stereotype.Component;
 /**
  * Picks the {@link PrivateStorage} rule that the file store of a path supports and applies it; the strategy beans are injected as a {@code List}, so a rule for another
  * kind of file store is a new bean and no change here. The rules are tried in their {@code @Order} (permission bits first). A file store that no rule supports is
- * refused with {@link UnsafeStorageException}: the protection of the bytes is never "not checked".
+ * refused with {@link UnsafeStorageException}: a path is never created with wide rights because the store cannot narrow them.
  *
- * <p>This class also holds what is the same for every rule and for every store that uses it: a link or a file that is not a regular file is unsafe whatever the file store
- * says, and only an existing path is checked.
+ * <p>This class also holds what is the same for every rule and for every store that uses it, and it is the whole of what is checked when a path is used: it must be a
+ * regular file, or a folder. A link is followed, and who may use the path or who owns it is not asked (decision D-0117: the owner trusts the machine; what is protected is
+ * what the product creates).
  */
 @Component
 public class PrivateStorages {
@@ -40,22 +40,18 @@ public class PrivateStorages {
         return ruleFor(file).open(file, options);
     }
 
-    /** The folder must be a real folder (not a link) and private to its owner. */
-    public void requireSafeFolder(Path folder) throws IOException {
-        BasicFileAttributes attributes = Files.readAttributes(folder, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-        if (attributes.isSymbolicLink() || !attributes.isDirectory()) {
+    /** The path must be a folder (or a link to one). Its rights and its owner are not looked at. */
+    public void requireFolder(Path folder) {
+        if (!Files.isDirectory(folder)) {
             throw new UnsafeStorageException(folder.toString(), "not a folder");
         }
-        ruleFor(folder).requireProtected(folder);
     }
 
-    /** The file must be a regular file (not a link) and private to its owner. */
-    public void requireSafeFile(Path file) throws IOException {
-        BasicFileAttributes attributes = Files.readAttributes(file, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-        if (attributes.isSymbolicLink() || !attributes.isRegularFile()) {
+    /** The path must be a regular file (or a link to one); a folder, a device or a link whose target is missing is refused. Its rights and its owner are not looked at. */
+    public void requireRegularFile(Path file) {
+        if (!Files.isRegularFile(file)) {
             throw new UnsafeStorageException(file.toString(), "not a regular file");
         }
-        ruleFor(file).requireProtected(file);
     }
 
     /** The rule of the file store that holds the path, or of the nearest folder above it that exists. */
@@ -66,7 +62,8 @@ public class PrivateStorages {
                 return rule;
             }
         }
-        throw new UnsafeStorageException(path.toString(), "the file store " + store + " supports neither permission bits (posix) nor an access control list (acl)");
+        throw new UnsafeStorageException(path.toString(), "the file store " + store + " supports neither permission bits (posix) nor an access control list (acl), so a path "
+            + "cannot be made private to its owner");
     }
 
     private Path nearestExisting(Path path) {

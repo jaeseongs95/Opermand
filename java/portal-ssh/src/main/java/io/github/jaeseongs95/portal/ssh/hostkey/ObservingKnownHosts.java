@@ -14,7 +14,9 @@ import org.apache.sshd.common.AttributeRepository;
  * MINA's known-hosts verifier, which keeps the record in an OpenSSH {@code known_hosts} file (decision D3-10), with one addition: when it refuses a key it leaves the reason
  * on the session, so the policy can report why (MINA answers only {@code false}). The behavior is MINA's own and is the one the stage 1 spike tested ({@code s07},
  * {@code s08}): a host that is not in the file is put to {@code unknownHosts} and recorded when that accepts; a host whose recorded key differs is refused and the file
- * stays as it was. With {@code strict} set, MINA also distrusts a file that other accounts may change.
+ * stays as it was. MINA's {@code strict} flag is off: with it MINA calls {@code validateStrictConfigFilePermissions} before every read and distrusts a file or a folder
+ * that other accounts may use or that another account owns, which is a read-time check of who may use the file; 3.0 has none (decision D-0117). The file is created private to
+ * its owner by {@code ServerKeyPolicy}.
  */
 final class ObservingKnownHosts extends DefaultKnownHostsServerKeyVerifier {
 
@@ -28,7 +30,7 @@ final class ObservingKnownHosts extends DefaultKnownHostsServerKeyVerifier {
      * @param file the {@code known_hosts} file
      */
     ObservingKnownHosts(ServerKeyVerifier unknownHosts, Path file) {
-        super(unknownHosts, true, file);
+        super(unknownHosts, false, file);
     }
 
     @Override

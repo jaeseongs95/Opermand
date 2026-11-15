@@ -773,6 +773,7 @@ awk류 명령 단어는 ``export const AWK_NAMES = new Set(['awk', 'gawk', 'mawk
   - Windows: ``return join(process.env.APPDATA || join(home, 'AppData', 'Roaming'), 'ssh-mcp', 'config.toml');`` (`config/loader.js:17`)
   - 그 밖: ``const xdgConfig = process.env.XDG_CONFIG_HOME || join(home, '.config');`` (`config/loader.js:19`) 다음 ``return join(xdgConfig, 'ssh-mcp', 'config.toml');`` (`config/loader.js:20`)
 - **PF-03 읽기 실패**: ``throw new ConfigNotFoundError(configPath);`` (`config/loader.js:93`, 파일 없음 `ENOENT`일 때). 그 밖의 읽기 오류(디렉터리·권한)는 `OperatorError("Config file <path> could not be read: <원인>")`에 원인 `.code`를 보존해 던진다(`config/loader.js:102`).
+- **[3.0 갱신, D-0117] PF-04·PF-05 권한 검사는 이행하지 않는다.** 개인판은 읽을 때 넓은 권한·소유자·링크로 거절하지 않는다. 3.0은 만드는 폴더·파일만 소유자 전용으로 만든다. VR-325~VR-329는 S-D0117-01·06으로 대체한다. 아래는 2.x 사실의 기록이다.
 - **PF-04 권한 검사 (POSIX)**(`config/loader.js:49-81`): 파일이 없으면(`stat`이 `ENOENT`) 조용히 통과(`:65-66`). 파일 모드의 ``if (fileMode & 0o077) {`` (`config/loader.js:67`)이면 거절(그룹·기타에 어떤 권한이라도 있으면). 메시지는 ``Config file ${filePath} is group/world accessible (mode ${fileMode.toString(8)}). `` (`config/loader.js:68`) + ``Required: 0600. Run: chmod 600 ${filePath}`` (`config/loader.js:69`). 파일 검사를 먼저 하고 디렉터리 검사는 그 뒤다(``if (dirMode !== null && dirMode & 0o077) {`` `config/loader.js:72`): ``Config directory ${dir} is group/world accessible (mode ${dirMode.toString(8)}). `` (`config/loader.js:73`) + ``Required: 0700. Run: chmod 700 ${dir}\n`` (`config/loader.js:74`) + 컨테이너 안내 두 줄(`:78-79`).
 - **PF-05 권한 검사 (Windows)**: `assertPrivateOnWindows`(`config/windows-acl.js:472-497`)가 파일과 그 디렉터리를 각각 검사한다. 외부 프로그램 `icacls.exe`를 `C:\Windows\System32`의 절대 경로로 호출해 DACL(SDDL)을 읽어 판정한다(``const CANONICAL_SYSTEM32 = 'C:\\Windows\\System32';`` `config/windows-acl.js:12`, 호출 ``export async function inspectAcl(path, signal) {`` `config/windows-acl.js:210`). 기본 자세는 `waived`(`:453-463`)가 정한다: 다른 계정이 **쓸 수 있는** 권한(변경)이면 거절하고, **읽기만** 허용하면 경고만 한다. ACL을 알 수 없으면 거절하되 `icacls` 없음(`tool-missing`)과 시간 초과(`timed-out`)는 경고만 한다. NULL DACL은 읽기 전용으로 치지 않는다. 옵션 `allowUnchecked`·`enforce`는 2.x가 넘기지 않는다. 이 검사의 판정표(SDDL 해석 `config/sddl.js`, 위험 계정 목록)는 이 조사에서 읽지 않았다(미확인).
   - ``function waived(finding, opts) {`` (`config/windows-acl.js:453`)
@@ -882,11 +883,11 @@ awk류 명령 단어는 ``export const AWK_NAMES = new Set(['awk', 'gawk', 'mawk
 | VR-322 | PF-02 | 경로 인자 없음, Windows, `APPDATA=C:\A` | `C:\A\ssh-mcp\config.toml` | config/loader.js:17 |
 | VR-323 | PF-03 | 존재하지 않는 경로 | `ConfigNotFoundError`(코드 `ENOENT`, 메시지에 경로) | config/loader.js:93 |
 | VR-324 | PF-03 | 경로가 디렉터리 | 읽기 오류 `Config file <path> could not be read: …`, 원인 코드 보존(`EISDIR`) | config/loader.js:102 |
-| VR-325 | PF-04 | 파일 0644 | 거절, 메시지가 `is group/world accessible (mode 644)`·`Required: 0600`를 포함 | config/loader.js:68 |
-| VR-326 | PF-04 | 파일 0600, 디렉터리 0755 | 거절, `Config directory …  (mode 755)`·`Required: 0700` | config/loader.js:73 |
+| VR-325 | PF-04 | 파일 0644 | **[3.0: 거절하지 않고 로드한다. S-D0117-01로 대체]** 거절, 메시지가 `is group/world accessible (mode 644)`·`Required: 0600`를 포함 | config/loader.js:68 |
+| VR-326 | PF-04 | 파일 0600, 디렉터리 0755 | **[3.0: 거절하지 않는다. S-D0117-01로 대체]** 거절, `Config directory …  (mode 755)`·`Required: 0700` | config/loader.js:73 |
 | VR-327 | PF-04 | 파일 0600, 디렉터리 0700 | 통과 | config/loader.js:67 |
-| VR-328 | PF-05 | (Windows) 다른 계정에 쓰기 권한이 있는 ACL | 거절 | config/windows-acl.js:462 |
-| VR-329 | PF-05 | (Windows) 다른 계정에 읽기만 허용 | 로드 성공 + 경고 | config/windows-acl.js:462 |
+| VR-328 | PF-05 | (Windows) 다른 계정에 쓰기 권한이 있는 ACL | **[3.0: 거절하지 않는다. S-D0117-01로 대체]** 거절 | config/windows-acl.js:462 |
+| VR-329 | PF-05 | (Windows) 다른 계정에 읽기만 허용 | **[3.0: 경고도 없이 로드한다. S-D0117-01로 대체]** 로드 성공 + 경고 | config/windows-acl.js:462 |
 | VR-330 | PF-06 | 문법 오류 TOML | `Failed to parse TOML config at <path>: …` | config/loader.js:110 |
 | VR-331 | PF-07 | `[defaults]`에 알 수 없는 키 `foo = 1` | `Config validation error:`로 시작하는 실패(경로 `defaults`, 문구 미확인) | config/loader.js:120 |
 | VR-332 | PF-08 | 루트에 알 수 없는 표 `[extra]` | 실패(경로 `(root)`) | config/schema.js:217 |

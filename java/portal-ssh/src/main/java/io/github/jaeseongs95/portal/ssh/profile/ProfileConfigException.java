@@ -4,8 +4,8 @@ import java.io.Serial;
 import java.util.Objects;
 
 /**
- * The profile configuration cannot be used: it is not readable, it is open to other accounts, it is not TOML, it breaks the schema, two profile names would share one
- * credential prefix, the secret environment file has an entry that does not fit, or the file of known hosts is not safe to trust. It is raised while the configuration is
+ * The profile configuration cannot be used: it is not readable, it is not TOML, it breaks the schema, two profile names would share one credential prefix, the secret
+ * environment file has an entry that does not fit, or the file of known hosts is not a regular file. Who may use a file or who owns it is not a reason (decision D-0117). It is raised while the configuration is
  * loaded, so the product does not start with a configuration it would misread (2.x {@code OperatorError}). The {@link #code()} names the category; the text names the file
  * and the keys, never a value of the file. The hierarchy is sealed: {@link ConfigNotFoundException} is the one kind that has a member of its own.
  */
@@ -15,10 +15,8 @@ public sealed class ProfileConfigException extends RuntimeException permits Conf
     public enum Code {
         /** There is no file at the path. */
         NOT_FOUND,
-        /** The file is there and cannot be read or checked. */
+        /** The file is there and cannot be read (a folder in place of the file, or an I/O failure). */
         UNREADABLE,
-        /** The file or its folder is open to other accounts. */
-        ACCESS_REFUSED,
         /** The text is not TOML. */
         NOT_TOML,
         /** The file breaks the schema: an unknown key, a missing key, a wrong type or a value out of range. */
@@ -27,7 +25,7 @@ public sealed class ProfileConfigException extends RuntimeException permits Conf
         CREDENTIAL_PREFIX_CLASH,
         /** A line of the secret environment file does not fit. */
         SECRET_FILE_ENTRY,
-        /** The file of known hosts or its folder may be changed by other accounts. */
+        /** The path of the file of known hosts is not a regular file (a folder is there). */
         KNOWN_HOSTS_UNSAFE
     }
 

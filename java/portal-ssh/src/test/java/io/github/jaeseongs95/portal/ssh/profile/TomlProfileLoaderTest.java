@@ -38,7 +38,7 @@ class TomlProfileLoaderTest {
     Path directory;
 
     private final RecordingProfileEvents events = new RecordingProfileEvents();
-    private final TomlProfileLoader loader = new TomlProfileLoader(new FileAccessGuard(List.of(FixedAccessRule.open())), VALIDATOR, events);
+    private final TomlProfileLoader loader = new TomlProfileLoader(VALIDATOR, events);
 
     private Path write(String toml) throws IOException {
         return Files.writeString(directory.resolve("config.toml"), toml);
@@ -95,7 +95,6 @@ class TomlProfileLoaderTest {
         assertThat(catalog.entries().get(2).connection().auth()).isEqualTo(AuthMethod.KEYCHAIN);
         assertThat(catalog.defaults().transferRoot()).isEqualTo(Setting.given("/srv/transfer"));
         assertThat(catalog.defaults().approval()).isEqualTo(ProfileApproval.ASK_ALL);
-        assertThat(events.accessWarnings()).isEmpty();
         assertThat(events.policyReports()).as("the file has a [policy] table").isEqualTo(1);
     }
 
@@ -117,23 +116,27 @@ class TomlProfileLoaderTest {
     }
 
     @Test
-    @DisplayName("VR-319: the access check comes before the parsing: a file that others may read and that is not TOML is reported for its mode")
-    void theAccessCheckComesBeforeTheParsing() throws IOException {
-        TomlProfileLoader strict = new TomlProfileLoader(new FileAccessGuard(List.of(new FixedAccessRule(new AccessVerdict.Refused("Config file is group/world accessible (mode 644)")))),
-            VALIDATOR, events);
-        Path path = write("this is = = not toml [[[");
+    @DisplayName("S-D0117-01 (replaces VR-319, VR-325 to VR-329): a file and a folder that other accounts may read and change load, nothing is refused and nothing is reported for the rights")
+    void aFileThatOthersMayUseLoads() throws IOException {
+        Path path = write(document(null, ""));
+        TestFiles.openUp(path);
+        TestFiles.openUp(directory);
 
-        assertThatThrownBy(() -> strict.load(path)).isInstanceOf(ProfileConfigException.class).hasMessageContaining("mode 644").hasMessageNotContaining("Failed to parse");
+        ProfileCatalog catalog = loader.load(path);
+
+        assertThat(catalog.entries()).extracting(entry -> entry.alias().value()).containsExactly("a");
+        assertThat(events.policyReports()).isZero();
     }
 
     @Test
-    @DisplayName("VR-329: a file that others may only read loads, and the warning is reported to the events")
-    void aReadableFileLoadsWithAWarning() throws IOException {
-        TomlProfileLoader warning = new TomlProfileLoader(new FileAccessGuard(List.of(new FixedAccessRule(new AccessVerdict.Exposed("can be read by Users")))), VALIDATOR, events);
+    @DisplayName("S-D0117-04: a folder in place of the profile file is UNREADABLE and a file that is not TOML is reported for its text, never for its rights")
+    void aFolderInPlaceOfTheFileIsUnreadable() throws IOException {
+        Path folder = Files.createDirectory(directory.resolve("profiles.toml"));
+        Path notToml = write("this is = = not toml [[[");
 
-        warning.load(write(document(null, "")));
-
-        assertThat(events.accessWarnings()).containsExactly("can be read by Users");
+        assertThatThrownBy(() -> loader.load(folder)).isInstanceOfSatisfying(ProfileConfigException.class, e -> assertThat(e.code()).isEqualTo(ProfileConfigException.Code.UNREADABLE));
+        assertThatThrownBy(() -> loader.load(notToml)).isInstanceOfSatisfying(ProfileConfigException.class, e -> assertThat(e.code()).isEqualTo(ProfileConfigException.Code.NOT_TOML))
+            .hasMessageContaining("Failed to parse");
     }
 
     @Test

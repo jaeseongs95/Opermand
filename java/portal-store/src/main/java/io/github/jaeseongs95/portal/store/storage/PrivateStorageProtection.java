@@ -13,9 +13,10 @@ import io.github.jaeseongs95.portal.app.storage.StorageProtection;
 import io.github.jaeseongs95.portal.store.StorageRoots;
 
 /**
- * {@link StorageProtection} over {@link PrivateStorages}: the artifact folder and the output folder must be real folders that only their owner can use. A folder that does
- * not exist yet is created private to its owner (the stores do the same on first use); a folder that is a link, is not a folder, is open to others or lies on a file store that
- * offers neither permission bits nor an access control list is the answer {@link ProtectionCheck.Unprotected}, with the cause. Nothing is thrown: a guard that fails is an answer.
+ * {@link StorageProtection} over {@link PrivateStorages}: the artifact folder and the output folder must be folders the stores can use. A folder that does not exist yet is
+ * created private to its owner (the stores do the same on first use); a folder that exists is used as it is, whoever else may use it and however it is reached (a link is
+ * followed). The answer is {@link ProtectionCheck.Unprotected}, with the cause, when the path is not a folder or when the file store cannot make a new folder private to its
+ * owner (it offers neither permission bits nor an access control list): the folder is then not created with wide rights. Nothing is thrown: a guard that fails is an answer.
  */
 @Component
 public class PrivateStorageProtection implements StorageProtection {
@@ -32,7 +33,7 @@ public class PrivateStorageProtection implements StorageProtection {
     public ProtectionCheck check() {
         for (StorageArea area : StorageArea.values()) {
             try {
-                requireProtected(folderOf(area));
+                requireUsable(folderOf(area));
             } catch (IOException | RuntimeException e) {
                 return new ProtectionCheck.Unprotected(area, e);
             }
@@ -47,10 +48,10 @@ public class PrivateStorageProtection implements StorageProtection {
         };
     }
 
-    private void requireProtected(Path folder) throws IOException {
+    private void requireUsable(Path folder) throws IOException {
         if (!Files.exists(folder, LinkOption.NOFOLLOW_LINKS)) {
             storages.createFolder(folder);
         }
-        storages.requireSafeFolder(folder);
+        storages.requireFolder(folder);
     }
 }

@@ -31,9 +31,9 @@ import io.github.jaeseongs95.portal.domain.target.AuthMethod;
 import io.github.jaeseongs95.portal.domain.target.ConnectionProfile;
 import io.github.jaeseongs95.portal.domain.target.Setting;
 import io.github.jaeseongs95.portal.domain.target.TtyMode;
-import io.github.jaeseongs95.portal.ssh.profile.AclFileAccessRule;
-import io.github.jaeseongs95.portal.ssh.profile.FileAccessGuard;
-import io.github.jaeseongs95.portal.ssh.profile.PosixFileAccessRule;
+import io.github.jaeseongs95.portal.ssh.profile.AclPrivateFileRule;
+import io.github.jaeseongs95.portal.ssh.profile.PrivateFiles;
+import io.github.jaeseongs95.portal.ssh.profile.PosixPrivateFileRule;
 
 /**
  * Host key checks against the real OpenSSH server that the CI job prepares (stage 3 design 7.2, decision D3-10; the connection is described by the Gradle properties
@@ -97,7 +97,7 @@ class RealHostKeyTest {
     }
 
     private ServerKeyPolicy policyOverACopyOfTheRecord(HostKeyMode mode, boolean copyTheRecord) throws IOException {
-        FileAccessGuard guard = new FileAccessGuard(List.of(new PosixFileAccessRule(), new AclFileAccessRule()));
+        PrivateFiles guard = new PrivateFiles(List.of(new PosixPrivateFileRule(), new AclPrivateFileRule()));
         Path copy = root.resolve("private-state").resolve("known_hosts");
         guard.createPrivateFile(copy);
         if (copyTheRecord) {

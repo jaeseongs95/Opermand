@@ -39,7 +39,7 @@ class EnvironmentCredentialSourceTest {
     @TempDir
     Path directory;
 
-    private final TomlProfileLoader loader = new TomlProfileLoader(new FileAccessGuard(List.of(FixedAccessRule.open())), VALIDATOR, new RecordingProfileEvents());
+    private final TomlProfileLoader loader = new TomlProfileLoader(VALIDATOR, new RecordingProfileEvents());
 
     private StandardEnvironment environment(Map<String, String> values) {
         StandardEnvironment environment = new StandardEnvironment();
@@ -226,13 +226,43 @@ class EnvironmentCredentialSourceTest {
     }
 
     @Test
-    @DisplayName("VR-389 (2.x와 다름: 2.x threw the read error; the port answers with a result, not an exception, and the cause is logged): a key path that is a folder is not skipped: the lookup is a miss that says the file cannot be read")
+    @DisplayName("VR-389, S-D0117-05 (2.x와 다름: 2.x threw the read error; the port answers with a result, not an exception): a key path that is a folder is not skipped and not read: the lookup is a miss that says it is not a regular file")
     void aKeyPathThatIsAFolderIsNotSkipped() throws IOException {
         Path folder = Files.createDirectory(directory.resolve("a-folder"));
 
         CredentialLookup lookup = resolve("aws-local", "auth = \"key\"\nkeyRef = " + literal(folder), Map.of("SSH_MCP_PASSWORD", "p"));
 
-        assertThat(missesOf(lookup)).singleElement().satisfies(miss -> assertThat(miss.place()).contains(folder.toString()).contains("cannot be read"));
+        assertThat(missesOf(lookup)).singleElement().satisfies(miss -> assertThat(miss.place()).contains(folder.toString()).contains("is not a regular file"));
+    }
+
+    @Test
+    @DisplayName("S-D0117-05: an empty key file is a miss that says it is empty")
+    void anEmptyKeyFileIsAMiss() throws IOException {
+        Path empty = file("keys/empty", "");
+
+        CredentialLookup lookup = resolve("aws-local", "auth = \"key\"\nkeyRef = " + literal(empty), Map.of());
+
+        assertThat(missesOf(lookup)).singleElement().satisfies(miss -> assertThat(miss.place()).contains(empty.toString()).contains("is empty"));
+    }
+
+    @Test
+    @DisplayName("S-D0117-01: a key file that other accounts may read and change is used")
+    void aKeyFileThatOthersMayUseIsUsed() throws IOException {
+        Path key = file("keys/wide", "key wide\n");
+        TestFiles.openUp(key);
+        TestFiles.openUp(key.getParent());
+
+        assertThat(revealed(keyOf(resolve("aws-local", "auth = \"key\"\nkeyRef = " + literal(key), Map.of())).pem())).isEqualTo("key wide\n");
+    }
+
+    @Test
+    @DisplayName("S-D0117-02: a key file that another account owns is used (a system file stands in for the key: only whether it is read is asserted)")
+    void aKeyFileOfAnotherOwnerIsUsed() throws IOException {
+        Path foreign = TestFiles.foreignOwnedFile();
+
+        SshCredential.PrivateKey credential = keyOf(resolve("aws-local", "auth = \"key\"\nkeyRef = " + literal(foreign), Map.of()));
+
+        assertThat(revealed(credential.pem())).isEqualTo(new String(Files.readAllBytes(foreign), java.nio.charset.StandardCharsets.UTF_8));
     }
 
     @Test

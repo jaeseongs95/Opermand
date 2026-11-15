@@ -27,7 +27,7 @@ class ProfileRegistryTest {
     private ProfileRegistry registry() throws IOException {
         Path file = Files.writeString(directory.resolve("config.toml"), "[[profiles]]\nname = \"web\"\nhost = \"web.example.test\"\nuser = \"deploy\"\n"
             + "[[profiles]]\nname = \"web\"\nhost = \"duplicate.example.test\"\nuser = \"deploy\"\n");
-        return new ProfileRegistry(new TomlProfileLoader(new FileAccessGuard(List.of(FixedAccessRule.open())), VALIDATOR, new RecordingProfileEvents()).load(file));
+        return new ProfileRegistry(new TomlProfileLoader(VALIDATOR, new RecordingProfileEvents()).load(file));
     }
 
     @Test

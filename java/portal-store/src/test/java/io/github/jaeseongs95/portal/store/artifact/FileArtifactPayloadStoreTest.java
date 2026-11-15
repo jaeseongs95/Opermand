@@ -144,7 +144,7 @@ class FileArtifactPayloadStoreTest {
     }
 
     @Test
-    @DisplayName("RC-A-178: a plain file where the root folder should be is refused and its content is kept")
+    @DisplayName("S-D0117-04, RC-A-178: a plain file where the root folder should be is refused and its content is kept")
     void aPlainFileAsRootIsRefused(@TempDir Path dir) throws IOException {
         Path root = dir.resolve("artifacts");
         Files.writeString(root, "keep", StandardCharsets.UTF_8);
@@ -157,44 +157,46 @@ class FileArtifactPayloadStoreTest {
     }
 
     @Test
-    @DisplayName("RC-A-179: a symbolic link as the root folder is refused and stays a link (runs where the file store allows symbolic links)")
-    void aSymbolicLinkAsRootIsRefused(@TempDir Path dir) throws IOException {
+    @DisplayName("S-D0117-03, RC-A-179: a symbolic link as the root folder is followed and stays a link (runs where the file store allows symbolic links)")
+    void aSymbolicLinkAsRootIsFollowed(@TempDir Path dir) throws IOException {
         Path real = Files.createDirectory(dir.resolve("real"));
         Path root = dir.resolve("artifacts");
-        Assumptions.assumeTrue(canLink(dir, root, real), "the file store of the test folder does not allow symbolic links; runs on the Linux CI (Linux CI에서 실행)");
+        Assumptions.assumeTrue(canLink(dir, root, real), "the file store of the test folder does not allow symbolic links; runs on the Linux CI or the Windows CI (CI에서 실행)");
         FileArtifactPayloadStore store = storeIn(dir);
+        ArtifactId id = ids.next();
 
-        assertRefused(store::stored, ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
-        assertRefused(() -> store.append(ids.next(), 0, new byte[] {1}), ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
+        assertThat(store.append(id, 0, new byte[] {1, 2}).storedBytes()).isEqualTo(2);
 
         assertThat(Files.isSymbolicLink(root)).isTrue();
-        try (Stream<Path> entries = Files.list(real)) {
-            assertThat(entries.toList()).isEmpty();
-        }
+        assertThat(Files.readAllBytes(real.resolve(id.value() + ".part"))).isEqualTo(new byte[] {1, 2});
+        assertThat(store.stored()).containsExactly(id);
     }
 
     @Test
-    @DisplayName("RC-A-166: a symbolic link in place of a payload is refused by every operation and its target is not touched (runs where the file store allows symbolic links)")
-    void aSymbolicLinkPayloadIsRefused(@TempDir Path dir) throws IOException {
+    @DisplayName("S-D0117-03, RC-A-166: a symbolic link in place of a payload is followed by every operation, the target is the payload, and deleting removes the link only (runs where the file store allows symbolic links)")
+    void aSymbolicLinkPayloadIsFollowed(@TempDir Path dir) throws IOException {
         FileArtifactPayloadStore store = storeIn(dir);
         store.stored();
         Path target = Files.write(dir.resolve("target.bin"), new byte[] {9, 9, 9}, StandardOpenOption.CREATE_NEW);
         ArtifactId id = ids.next();
-        Assumptions.assumeTrue(canLink(dir, dir.resolve("artifacts").resolve(id.value() + ".part"), target), "the file store of the test folder does not allow symbolic links; runs on the Linux CI (Linux CI에서 실행)");
+        Path link = dir.resolve("artifacts").resolve(id.value() + ".part");
+        Assumptions.assumeTrue(canLink(dir, link, target), "the file store of the test folder does not allow symbolic links; runs on the Linux CI or the Windows CI (CI에서 실행)");
 
-        assertRefused(store::stored, ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
-        assertRefused(() -> store.open(id), ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
-        assertRefused(() -> store.length(id), ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
-        assertRefused(() -> store.append(id, 3, new byte[] {1}), ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
-        assertRefused(() -> store.truncate(id, 0), ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
+        assertThat(store.stored()).containsExactly(id);
+        assertThat(store.length(id)).isEqualTo(3);
+        assertThat(read(store, id)).isEqualTo(new byte[] {9, 9, 9});
+        assertThat(store.append(id, 3, new byte[] {1}).storedBytes()).isEqualTo(4);
+        store.truncate(id, 2);
+        assertThat(Files.readAllBytes(target)).isEqualTo(new byte[] {9, 9});
 
-        assertThat(Files.readAllBytes(target)).isEqualTo(new byte[] {9, 9, 9});
+        store.delete(id);
+        assertThat(Files.exists(link, LinkOption.NOFOLLOW_LINKS)).isFalse();
+        assertThat(Files.readAllBytes(target)).isEqualTo(new byte[] {9, 9});
     }
 
     @Test
-    @DisplayName("RC-A-171: a payload with a second hard link is refused and neither followed nor changed; deleting it removes the name only (runs where the file store reports link counts)")
-    void aHardLinkedPayloadIsRefused(@TempDir Path dir) throws IOException {
-        Assumptions.assumeTrue(Files.getFileStore(dir).supportsFileAttributeView(UNIX_VIEW), "the file store of the test folder does not report hard-link counts; runs on the Linux CI (Linux CI에서 실행)");
+    @DisplayName("S-D0117-03, RC-A-171: a payload with a second hard link is used as it is; deleting it removes the name only")
+    void aHardLinkedPayloadIsUsed(@TempDir Path dir) throws IOException {
         FileArtifactPayloadStore store = storeIn(dir);
         store.stored();
         byte[] evidence = fixtures.bytes(48, 'c');
@@ -202,14 +204,62 @@ class FileArtifactPayloadStoreTest {
         ArtifactId id = new ArtifactId("c".repeat(48));
         Files.createLink(dir.resolve("artifacts").resolve(id.value() + ".part"), original);
 
-        assertRefused(store::stored, ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
-        assertRefused(() -> store.open(id), ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
-        assertRefused(() -> store.append(id, 48, new byte[] {1}), ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
-        assertThat(Files.readAllBytes(original)).isEqualTo(evidence);
+        assertThat(store.stored()).containsExactly(id);
+        assertThat(read(store, id)).isEqualTo(evidence);
+        assertThat(store.append(id, 48, new byte[] {1}).storedBytes()).isEqualTo(49);
+        assertThat(Files.size(original)).as("both names are one file").isEqualTo(49);
 
         store.delete(id);
-        assertThat(Files.readAllBytes(original)).isEqualTo(evidence);
+        assertThat(Files.size(original)).isEqualTo(49);
         assertThat(store.stored()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S-D0117-04: a folder in place of a payload and a symbolic link whose target is missing are refused by every operation with ARTIFACT_STORAGE_UNSAFE and are left as they are")
+    void whatIsNotARegularFileIsRefused(@TempDir Path dir) throws IOException {
+        FileArtifactPayloadStore store = storeIn(dir);
+        store.stored();
+        Path artifacts = dir.resolve("artifacts");
+        ArtifactId folderId = ids.next();
+        Files.createDirectory(artifacts.resolve(folderId.value() + ".part"));
+
+        assertRefused(store::stored, ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
+        assertRefused(() -> store.open(folderId), ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
+        assertRefused(() -> store.length(folderId), ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
+        assertRefused(() -> store.append(folderId, 0, new byte[] {1}), ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
+        assertRefused(() -> store.truncate(folderId, 0), ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
+        assertThat(artifacts.resolve(folderId.value() + ".part")).isDirectory();
+    }
+
+    @Test
+    @DisplayName("S-D0117-04: a symbolic link whose target is missing is not a regular file: it is refused with ARTIFACT_STORAGE_UNSAFE and stays a link (runs where the file store allows symbolic links)")
+    void aDanglingLinkIsRefused(@TempDir Path dir) throws IOException {
+        FileArtifactPayloadStore store = storeIn(dir);
+        store.stored();
+        ArtifactId id = ids.next();
+        Path dangling = dir.resolve("artifacts").resolve(id.value() + ".part");
+        Assumptions.assumeTrue(canLink(dir, dangling, dir.resolve("no-such-target.bin")),
+            "the file store of the test folder does not allow symbolic links; runs on the Linux CI or the Windows CI (CI에서 실행)");
+
+        assertRefused(store::stored, ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
+        assertRefused(() -> store.length(id), ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
+        assertThat(Files.isSymbolicLink(dangling)).isTrue();
+    }
+
+    @Test
+    @DisplayName("S-D0117-01: a payload and a root folder that others can use are used as they are, and no right is changed")
+    void widePayloadsAreUsed(@TempDir Path dir) throws IOException {
+        FileArtifactPayloadStore store = storeIn(dir);
+        ArtifactId id = ids.next();
+        store.append(id, 0, new byte[] {1});
+        Path root = dir.resolve("artifacts");
+        Path file = root.resolve(id.value() + ".part");
+        TestStorage.openUp(root);
+        TestStorage.openUp(file);
+
+        assertThat(store.append(id, 1, new byte[] {2}).storedBytes()).isEqualTo(2);
+        assertThat(read(store, id)).isEqualTo(new byte[] {1, 2});
+        assertThat(store.stored()).containsExactly(id);
     }
 
     @Test

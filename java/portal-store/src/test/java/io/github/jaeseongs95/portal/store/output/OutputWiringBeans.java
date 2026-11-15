@@ -28,7 +28,7 @@ class OutputWiringBeans {
 
     @Bean
     StorageRoots storageRoots() throws IOException {
-        Path folder = TestStorage.privateFolder(Files.createTempDirectory("portal-output-wiring"));
+        Path folder = Files.createTempDirectory("portal-output-wiring");
         return new StorageRoots(folder, folder);
     }
 

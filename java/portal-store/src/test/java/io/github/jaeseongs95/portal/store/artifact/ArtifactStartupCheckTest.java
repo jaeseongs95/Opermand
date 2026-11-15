@@ -295,15 +295,17 @@ class ArtifactStartupCheckTest {
     }
 
     @Test
-    @DisplayName("RC-A-166: a symbolic link in place of a payload refuses the start and the link's target is not touched (runs where the file store allows symbolic links)")
-    void aSymbolicLinkPayloadRefusesTheStart() throws IOException {
+    @DisplayName("S-D0117-03, RC-A-166: a symbolic link in place of a payload without metadata does not refuse the start: the link is moved to quarantine and the link's target is not touched (runs where the file store allows symbolic links)")
+    void aSymbolicLinkPayloadDoesNotRefuseTheStart() throws IOException {
         payloads.stored();
         Path target = Files.write(roots.artifacts().getParent().resolve("symlink-target.bin"), new byte[] {9, 9});
         ArtifactId id = new ArtifactId("e".repeat(48));
-        Assumptions.assumeTrue(canLink(roots.artifacts().resolve(id.value() + ".part"), target), "the file store of the test folder does not allow symbolic links; runs on the Linux CI (Linux CI에서 실행)");
+        Assumptions.assumeTrue(canLink(roots.artifacts().resolve(id.value() + ".part"), target), "the file store of the test folder does not allow symbolic links; runs on the Linux CI or the Windows CI (CI에서 실행)");
 
-        assertRefused(startup::reconcile, ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
+        ArtifactReconciliation report = startup.reconcile();
 
+        assertThat(report.quarantined()).containsExactly(id);
+        assertThat(payloads.stored()).isEmpty();
         assertThat(Files.readAllBytes(target)).isEqualTo(new byte[] {9, 9});
         Files.delete(target);
     }

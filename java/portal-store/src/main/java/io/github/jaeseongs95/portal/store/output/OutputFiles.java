@@ -27,12 +27,12 @@ import io.github.jaeseongs95.portal.store.storage.PrivateStorages;
 import io.github.jaeseongs95.portal.store.storage.UnsafeStorageException;
 
 /**
- * The files of the output folder (design 8.5): where the three payload files of an output are, how they are created and opened, and the safety rules of 2.x
- * {@code safe()} ({@code command-output.mjs:30}) in {@code java.nio.file} form. The folder and the files are private to their owner on every kind of file store: how that is
- * made and checked belongs to {@link PrivateStorages}, which picks the rule by what the file store offers (permission bits, or an access control list on an NTFS
- * volume) and refuses a file store with neither; a symbolic link or a file that is not a regular file is refused everywhere. This class holds no copy of the rule. An
- * unsafe or failing file system is a {@link RequestRefusedException} with {@link ExecutionErrorCode#OUTPUT_CAPTURE_FAILED} (the output has no code of its own for an
- * unsafe store yet) and the cause attached.
+ * The files of the output folder (design 8.5): where the three payload files of an output are, and how they are created and opened. The folder and the files that this class
+ * creates are private to their owner on every kind of file store: how that is made belongs to {@link PrivateStorages}, which picks the rule by what the file store offers
+ * (permission bits, or an access control list on an NTFS volume) and refuses a file store with neither. What exists is used as it is (decision D-0117): who else may use it,
+ * who owns it and whether it is reached by a link are not asked; a file that is not a regular file and a folder that is not a folder are refused. This class holds no copy
+ * of the rule. A refusing or failing file system is a {@link RequestRefusedException} with {@link ExecutionErrorCode#OUTPUT_CAPTURE_FAILED} (the output has no code of its
+ * own for an unusable store yet) and the cause attached.
  */
 @Component
 public class OutputFiles {
@@ -64,13 +64,13 @@ public class OutputFiles {
         this.storages = Objects.requireNonNull(storages, "storages");
     }
 
-    /** The output folder, created private to its owner when it does not exist yet; a link, a plain file or a folder that others can use is refused. */
+    /** The output folder, created private to its owner when it does not exist yet; a path that is not a folder is refused. A folder that exists is used as it is. */
     public Path directory() {
         try {
             if (!Files.exists(root, LinkOption.NOFOLLOW_LINKS)) {
                 storages.createFolder(root);
             }
-            storages.requireSafeFolder(root);
+            storages.requireFolder(root);
             return root;
         } catch (UnsafeStorageException e) {
             throw unsafe(root, e);
@@ -97,32 +97,30 @@ public class OutputFiles {
         }
     }
 
-    /** Refuses a file that is not safe to read or write: a symbolic link, a file that is not a regular file, or a file that somebody besides the owner can use. */
-    public void requireSafe(Path file) {
+    /** Refuses a file that is not a regular file (a folder, a device, a link whose target is missing). A link to a regular file is followed; who may use the file is not asked. */
+    public void requireRegular(Path file) {
         try {
-            storages.requireSafeFile(file);
+            storages.requireRegularFile(file);
         } catch (UnsafeStorageException e) {
             throw unsafe(file, e);
-        } catch (IOException e) {
-            throw failure(e);
         }
     }
 
-    /** Opens the file for appending (created owner only when it is new); an existing file must be safe. */
+    /** Opens the file for appending (created owner only when it is new); an existing file must be a regular file. */
     public FileChannel openAppend(Path file) {
-        return open(file, Set.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND, LinkOption.NOFOLLOW_LINKS));
+        return open(file, Set.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND));
     }
 
     /** Opens the file for writing from the start, dropping what an earlier crash left in it. */
     public FileChannel openFresh(Path file) {
-        return open(file, Set.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING, LinkOption.NOFOLLOW_LINKS));
+        return open(file, Set.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING));
     }
 
-    /** Opens a safe file for reading. */
+    /** Opens a regular file for reading. */
     public FileChannel openRead(Path file) {
-        requireSafe(file);
+        requireRegular(file);
         try {
-            return FileChannel.open(file, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS);
+            return FileChannel.open(file, StandardOpenOption.READ);
         } catch (IOException e) {
             throw failure(e);
         }
@@ -130,7 +128,7 @@ public class OutputFiles {
 
     /** The size of a safe file. */
     public long sizeOf(Path file) {
-        requireSafe(file);
+        requireRegular(file);
         try {
             return Files.size(file);
         } catch (IOException e) {
@@ -210,7 +208,7 @@ public class OutputFiles {
     private FileChannel open(Path file, Set<? extends OpenOption> options) {
         try {
             if (exists(file)) {
-                requireSafe(file);
+                requireRegular(file);
             }
             directory();
             return storages.open(file, options);
@@ -227,7 +225,7 @@ public class OutputFiles {
     }
 
     private RequestRefusedException unsafe(Path file, UnsafeStorageException cause) {
-        LOG.warn("The storage {} is not safe to use: {}", file.getFileName(), cause.getMessage());
+        LOG.warn("The storage {} cannot be used: {}", file.getFileName(), cause.getMessage());
         return new RequestRefusedException(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED, cause);
     }
 

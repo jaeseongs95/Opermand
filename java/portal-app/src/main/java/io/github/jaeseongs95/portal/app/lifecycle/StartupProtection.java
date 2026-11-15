@@ -29,10 +29,10 @@ public class StartupProtection implements SmartInitializingSingleton {
         verify();
     }
 
-    /** Throws {@link IllegalStateException} naming the folder and carrying the cause when a folder is not protected. */
+    /** Throws {@link IllegalStateException} naming the folder and carrying the cause when a folder cannot be used (it is not a folder, or the file store cannot make it private to its owner). */
     public void verify() {
         if (protection.check() instanceof ProtectionCheck.Unprotected unprotected) {
-            throw new IllegalStateException("The " + unprotected.area() + " folder is not protected; the application does not start and deletes nothing", unprotected.cause());
+            throw new IllegalStateException("The " + unprotected.area() + " folder cannot be used; the application does not start and deletes nothing", unprotected.cause());
         }
     }
 }

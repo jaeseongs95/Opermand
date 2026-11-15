@@ -1,33 +1,47 @@
 package io.github.jaeseongs95.portal.store;
 
+import static org.assertj.core.api.Assertions.assertThat;
+
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.FileStore;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.AclEntry;
-import java.nio.file.attribute.AclEntryFlag;
 import java.nio.file.attribute.AclEntryPermission;
 import java.nio.file.attribute.AclEntryType;
 import java.nio.file.attribute.AclFileAttributeView;
+import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.nio.file.attribute.UserPrincipal;
 import java.nio.file.attribute.UserPrincipalLookupService;
 import java.nio.file.attribute.UserPrincipalNotFoundException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Stream;
 
 import io.github.jaeseongs95.portal.store.storage.AclPrivateStorage;
 import io.github.jaeseongs95.portal.store.storage.PosixPrivateStorage;
 import io.github.jaeseongs95.portal.store.storage.PrivateStorages;
 
 /**
- * What the file tests of the store need to stand in for the product's wiring: the {@link PrivateStorages} with both rules, and a way to make a folder that JUnit created
- * (and that inherits the rights of the system's temporary folder, which others may use) private to its owner the way the product makes its own folders. The product refuses a
- * root folder that others can use; a test that hands such a folder to a store makes it private first.
+ * What the file tests of the store need to stand in for the product's wiring: the {@link PrivateStorages} with both rules, a way to open a folder or a file to other
+ * accounts (the product does not refuse what exists, decision D-0117, so the tests make wide paths on purpose), and the check that a path that the product created is
+ * private to its owner. That check is a test tool: the product does not look at who may use an existing path.
  */
 public final class TestStorage {
+
+    private static final Set<PosixFilePermission> GROUP_AND_OTHERS = Set.of(PosixFilePermission.GROUP_READ, PosixFilePermission.GROUP_WRITE, PosixFilePermission.GROUP_EXECUTE,
+        PosixFilePermission.OTHERS_READ, PosixFilePermission.OTHERS_WRITE, PosixFilePermission.OTHERS_EXECUTE);
+    private static final Set<AclEntryPermission> DATA_ACCESS = EnumSet.of(AclEntryPermission.READ_DATA, AclEntryPermission.WRITE_DATA, AclEntryPermission.APPEND_DATA,
+        AclEntryPermission.WRITE_ACL, AclEntryPermission.WRITE_OWNER);
 
     private TestStorage() {
     }
@@ -43,48 +57,112 @@ public final class TestStorage {
      */
     public static UserPrincipal outsider(Path anyPath) throws IOException {
         UserPrincipalLookupService lookup = anyPath.getFileSystem().getUserPrincipalLookupService();
+        IllegalStateException none = new IllegalStateException("The machine knows none of the well-known groups Everyone, Users, Authenticated Users");
         for (String name : List.of("Everyone", "BUILTIN\\Users", "Users", "Authenticated Users")) {
             try {
                 return lookup.lookupPrincipalByName(name);
             } catch (UserPrincipalNotFoundException e) {
-                // The next well-known name; the loop ends with a failure when none is known.
-                continue;
+                none.addSuppressed(e); // the next well-known name; when none is known the failure carries every miss
             }
         }
-        throw new IllegalStateException("The machine knows none of the well-known groups Everyone, Users, Authenticated Users");
+        throw none;
     }
 
-    /** Lets everybody read the folder or the file: group and others bits on a posix store, an ALLOW entry for {@link #outsider} on an acl store. */
+    /** Lets everybody read and write the folder or the file: group and others bits on a posix store, an ALLOW entry for {@link #outsider} on an acl store. */
     public static void openUp(Path path) throws IOException {
         FileStore store = Files.getFileStore(path);
         if (store.supportsFileAttributeView("posix")) {
-            Files.setPosixFilePermissions(path, PosixFilePermissions.fromString(Files.isDirectory(path) ? "rwxr-xr-x" : "rw-r--r--"));
+            Files.setPosixFilePermissions(path, PosixFilePermissions.fromString(Files.isDirectory(path) ? "rwxrwxrwx" : "rw-rw-rw-"));
         } else if (store.supportsFileAttributeView("acl")) {
             AclFileAttributeView view = Files.getFileAttributeView(path, AclFileAttributeView.class);
             List<AclEntry> acl = new ArrayList<>(view.getAcl());
-            acl.add(0, AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(outsider(path)).setPermissions(AclEntryPermission.READ_DATA,
-                AclEntryPermission.READ_ATTRIBUTES, AclEntryPermission.READ_ACL, AclEntryPermission.SYNCHRONIZE).build());
+            acl.add(0, AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(outsider(path))
+                .setPermissions(AclEntryPermission.READ_DATA, AclEntryPermission.WRITE_DATA, AclEntryPermission.APPEND_DATA, AclEntryPermission.READ_ATTRIBUTES,
+                    AclEntryPermission.READ_ACL, AclEntryPermission.SYNCHRONIZE)
+                .build());
             view.setAcl(acl);
         } else {
             throw new IllegalStateException("The file store has neither the posix nor the acl view");
         }
     }
 
-    /** Makes the existing folder private to its owner; what is created in it later inherits that. Returns the folder. */
-    public static Path privateFolder(Path folder) {
-        try {
-            FileStore store = Files.getFileStore(folder);
-            if (store.supportsFileAttributeView("posix")) {
-                Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("rwx------"));
-            } else if (store.supportsFileAttributeView("acl")) {
-                AclFileAttributeView view = Files.getFileAttributeView(folder, AclFileAttributeView.class);
-                AclEntry owner = AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(view.getOwner()).setPermissions(EnumSet.allOf(AclEntryPermission.class))
-                    .setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT).build();
-                view.setAcl(List.of(owner));
+    /**
+     * Fails the test when somebody besides the owner (and, on an acl store, the system account and the Administrators group) may use the path: group or others bits on a
+     * posix store, an ALLOW entry that gives data access or the right to change the list or the owner to another principal on an acl store. Principals are compared as
+     * objects, not by name, which differs between the languages of Windows.
+     */
+    public static void assertOwnerOnly(Path path) throws IOException {
+        FileStore store = Files.getFileStore(path);
+        if (store.supportsFileAttributeView("posix")) {
+            assertThat(Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS)).as("the permissions of %s", path).doesNotContainAnyElementsOf(GROUP_AND_OTHERS);
+            return;
+        }
+        AclFileAttributeView view = Files.getFileAttributeView(path, AclFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+        assertThat(view).as("the acl view of %s", path).isNotNull();
+        Set<UserPrincipal> allowed = new HashSet<>();
+        allowed.add(view.getOwner());
+        for (String name : List.of("NT AUTHORITY\\SYSTEM", "SYSTEM", "BUILTIN\\Administrators", "Administrators")) {
+            try {
+                allowed.add(path.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName(name));
+            } catch (UserPrincipalNotFoundException e) {
+                continue; // the account is known under another name on this machine; the other names are tried
             }
-            return folder;
+        }
+        for (AclEntry entry : view.getAcl()) {
+            if (entry.type() == AclEntryType.ALLOW && entry.permissions().stream().anyMatch(DATA_ACCESS::contains)) {
+                assertThat(allowed).as("the entry %s of %s", entry, path).contains(entry.principal());
+            }
+        }
+    }
+
+    /**
+     * A readable, non-empty regular file that the account of the test does not own, found near the top of the roots of the file system of the machine (a system file: owned
+     * by root on Linux, by the system on Windows). Fails the test when none is found, so the test never passes by not running.
+     */
+    public static Path foreignOwnedFile() throws IOException {
+        Path probe = Files.createTempFile("portal-owner-probe", ".tmp");
+        UserPrincipal me;
+        try {
+            me = Files.getOwner(probe);
+        } finally {
+            Files.delete(probe);
+        }
+        for (Path root : FileSystems.getDefault().getRootDirectories()) {
+            Optional<Path> found = foreignFileNear(root, me);
+            if (found.isPresent()) {
+                return found.get();
+            }
+        }
+        throw new IllegalStateException("No readable non-empty file owned by another account was found near the top of any root of the file system");
+    }
+
+    private static Optional<Path> foreignFileNear(Path root, UserPrincipal me) {
+        Deque<Path> folders = new ArrayDeque<>(List.of(root));
+        for (int visited = 0; !folders.isEmpty() && visited < 400; visited++) {
+            Path folder = folders.poll();
+            List<Path> entries;
+            try (Stream<Path> listed = Files.list(folder)) {
+                entries = listed.toList();
+            } catch (IOException e) {
+                continue; // a folder that the account may not list is not where the file is; the next folder is tried
+            }
+            for (Path entry : entries) {
+                if (isForeignReadableFile(entry, me)) {
+                    return Optional.of(entry);
+                }
+                if (folder.getNameCount() < 2 && Files.isDirectory(entry, LinkOption.NOFOLLOW_LINKS)) {
+                    folders.add(entry);
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static boolean isForeignReadableFile(Path entry, UserPrincipal me) {
+        try {
+            return Files.isRegularFile(entry, LinkOption.NOFOLLOW_LINKS) && Files.isReadable(entry) && Files.size(entry) > 0 && !me.equals(Files.getOwner(entry));
         } catch (IOException e) {
-            throw new UncheckedIOException(e);
+            return false; // an entry whose size or owner cannot be read is not a candidate
         }
     }
 }

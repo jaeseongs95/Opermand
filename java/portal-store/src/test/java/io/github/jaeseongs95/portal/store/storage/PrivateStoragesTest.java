@@ -1,6 +1,7 @@
 package io.github.jaeseongs95.portal.store.storage;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
@@ -9,7 +10,6 @@ import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
@@ -17,14 +17,15 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-/** The choice of the rule by what the file store offers, and what is the same for every rule. A rule that is a stand-in records what it is asked. */
+import io.github.jaeseongs95.portal.store.TestStorage;
+
+/** The choice of the rule by what the file store offers, and what is the same for every rule: a path must be a regular file or a folder, nothing else is asked. */
 class PrivateStoragesTest {
 
-    /** A rule that supports what it is told to and records the paths it is asked to check. */
+    /** A rule that supports what it is told to; it creates with the plain calls of the JDK. */
     private static final class Rule implements PrivateStorage {
 
         private final boolean supported;
-        private final List<Path> checked = new ArrayList<>();
 
         Rule(boolean supported) {
             this.supported = supported;
@@ -44,11 +45,6 @@ class PrivateStoragesTest {
         public FileChannel open(Path file, Set<? extends OpenOption> options) throws IOException {
             return FileChannel.open(file, options);
         }
-
-        @Override
-        public void requireProtected(Path path) {
-            checked.add(path);
-        }
     }
 
     @Test
@@ -64,30 +60,55 @@ class PrivateStoragesTest {
     }
 
     @Test
-    @DisplayName("S2-DB-10: a file store that no rule supports is refused, never accepted as not checked (neither permission bits nor an access control list)")
+    @DisplayName("S-D0117-07, S2-DB-10: a file store that no rule supports is refused, never accepted as not checked, and nothing is created with the rights of the parent")
     void aFileStoreWithoutARuleIsRefused(@TempDir Path directory) {
         PrivateStorages storages = new PrivateStorages(List.of(new Rule(false)));
+        Path folder = directory.resolve("new");
+        Path file = directory.resolve("new.part");
 
         assertThatThrownBy(() -> storages.ruleFor(directory)).isInstanceOf(UnsafeStorageException.class).hasMessageContaining("neither");
-        assertThatThrownBy(() -> storages.createFolder(directory.resolve("new"))).isInstanceOf(UnsafeStorageException.class);
-        assertThatThrownBy(() -> storages.requireSafeFolder(directory)).isInstanceOf(UnsafeStorageException.class);
+        assertThatThrownBy(() -> storages.createFolder(folder)).isInstanceOf(UnsafeStorageException.class);
+        assertThatThrownBy(() -> storages.open(file, Set.of(java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE)))
+            .isInstanceOf(UnsafeStorageException.class);
         assertThatThrownBy(() -> new PrivateStorages(List.of()).ruleFor(directory)).as("no rule at all is the same refusal, not an empty list of checks")
             .isInstanceOf(UnsafeStorageException.class);
+        assertThat(folder).doesNotExist();
+        assertThat(file).doesNotExist();
     }
 
     @Test
-    @DisplayName("S2-DB-10: what is not a regular file is refused before any rule is asked; a folder is a folder, a file is not")
-    void kindsAreCheckedBeforeTheRule(@TempDir Path directory) throws IOException {
-        Rule rule = new Rule(true);
-        PrivateStorages storages = new PrivateStorages(List.of(rule));
+    @DisplayName("S-D0117-04: what is not a regular file is refused as a file and what is not a folder as a folder; a missing path is neither; the reason says nothing of rights or owners")
+    void kindsAreChecked(@TempDir Path directory) throws IOException {
+        PrivateStorages storages = TestStorage.rules();
         Path file = Files.createFile(directory.resolve("plain"));
 
-        assertThatThrownBy(() -> storages.requireSafeFile(directory)).isInstanceOf(UnsafeStorageException.class).hasMessageContaining("not a regular file");
-        assertThatThrownBy(() -> storages.requireSafeFolder(file)).isInstanceOf(UnsafeStorageException.class).hasMessageContaining("not a folder");
-        assertThat(rule.checked).isEmpty();
+        assertThatThrownBy(() -> storages.requireRegularFile(directory)).isInstanceOf(UnsafeStorageException.class).hasMessageEndingWith(": not a regular file");
+        assertThatThrownBy(() -> storages.requireFolder(file)).isInstanceOf(UnsafeStorageException.class).hasMessageEndingWith(": not a folder");
+        assertThatThrownBy(() -> storages.requireRegularFile(directory.resolve("missing"))).isInstanceOf(UnsafeStorageException.class);
+        assertThatThrownBy(() -> storages.requireFolder(directory.resolve("missing"))).isInstanceOf(UnsafeStorageException.class);
 
-        storages.requireSafeFile(file);
-        storages.requireSafeFolder(directory);
-        assertThat(rule.checked).containsExactly(file, directory);
+        assertThatCode(() -> storages.requireRegularFile(file)).doesNotThrowAnyException();
+        assertThatCode(() -> storages.requireFolder(directory)).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("S-D0117-01: a file and a folder that others can use are accepted, and so is an empty file (an empty payload is a normal state)")
+    void wideAndEmptyPathsAreAccepted(@TempDir Path directory) throws IOException {
+        PrivateStorages storages = TestStorage.rules();
+        Path folder = Files.createDirectory(directory.resolve("wide"));
+        Path file = Files.createFile(folder.resolve("empty.part"));
+        TestStorage.openUp(folder);
+        TestStorage.openUp(file);
+
+        assertThatCode(() -> storages.requireFolder(folder)).doesNotThrowAnyException();
+        assertThatCode(() -> storages.requireRegularFile(file)).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("S-D0117-02: a file that another account owns is accepted")
+    void aForeignOwnedFileIsAccepted() throws IOException {
+        Path foreign = TestStorage.foreignOwnedFile();
+
+        assertThatCode(() -> TestStorage.rules().requireRegularFile(foreign)).doesNotThrowAnyException();
     }
 }

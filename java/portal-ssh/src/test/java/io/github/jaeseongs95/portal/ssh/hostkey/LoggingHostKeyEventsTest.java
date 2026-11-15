@@ -59,9 +59,9 @@ class LoggingHostKeyEventsTest {
     @Test
     @DisplayName("D3-10: building the policy in insecure mode logs one WARN that says every host key is accepted")
     void insecureModeIsAWarningAtStart() throws IOException {
-        Path knownHosts = TestFiles.privateFolder(Files.createDirectory(root.resolve("state"))).resolve("known_hosts");
+        Path knownHosts = Files.createDirectory(root.resolve("state")).resolve("known_hosts");
 
-        new ServerKeyPolicy(settings(HostKeyMode.INSECURE, knownHosts), TestFiles.guard(), new LoggingHostKeyEvents());
+        new ServerKeyPolicy(settings(HostKeyMode.INSECURE, knownHosts), TestFiles.privateFiles(), new LoggingHostKeyEvents());
 
         assertThat(appender.list).singleElement().satisfies(event -> {
             assertThat(event.getLevel()).isEqualTo(Level.WARN);
@@ -72,10 +72,10 @@ class LoggingHostKeyEventsTest {
     @Test
     @DisplayName("D3-10: the tofu and strict modes log nothing when the policy is built")
     void theOtherModesAreSilentAtStart() throws IOException {
-        Path knownHosts = TestFiles.privateFolder(Files.createDirectory(root.resolve("state"))).resolve("known_hosts");
+        Path knownHosts = Files.createDirectory(root.resolve("state")).resolve("known_hosts");
 
-        new ServerKeyPolicy(settings(HostKeyMode.TOFU, knownHosts), TestFiles.guard(), new LoggingHostKeyEvents());
-        new ServerKeyPolicy(settings(HostKeyMode.STRICT, knownHosts), TestFiles.guard(), new LoggingHostKeyEvents());
+        new ServerKeyPolicy(settings(HostKeyMode.TOFU, knownHosts), TestFiles.privateFiles(), new LoggingHostKeyEvents());
+        new ServerKeyPolicy(settings(HostKeyMode.STRICT, knownHosts), TestFiles.privateFiles(), new LoggingHostKeyEvents());
 
         assertThat(appender.list).isEmpty();
     }
