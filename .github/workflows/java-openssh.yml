@@ -93,6 +93,11 @@ jobs:
             -Pportal.test.openssh.known-hosts="$PORTAL_OPENSSH_KNOWN_HOSTS" \
             -Pportal.test.openssh.platform=windows \
             -Pportal.test.openssh.windows-python="$PORTAL_OPENSSH_WINDOWS_PYTHON"
+      # Diagnostic when a test failed: the server log (LogLevel VERBOSE, no command text) of the sshd the preparation script started.
+      - name: Show the log of the prepared sshd
+        if: failure()
+        shell: cmd
+        run: powershell -NoProfile -NonInteractive -Command "Get-Content -LiteralPath ($env:ProgramData + '\portal-openssh-ci\sshd.log') -Tail 150"
       - name: Stop the OpenSSH server and remove the account
         if: always()
         shell: cmd
