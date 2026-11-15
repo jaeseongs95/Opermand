@@ -99,9 +99,11 @@ final class TestPlatform implements TargetPlatform {
             }
         };
     }
+
+    /** As a Linux target does: a denied name is one the grammar finds in the line or one of its words. The intake now asks the platform for the deny list (defect D-0119). */
     @Override
     public boolean deniesName(TargetRule rule, CommandText command) {
-        return false;
+        return rule.denies(commandLineGrammar().analyze(command), command);
     }
 
     @Override
