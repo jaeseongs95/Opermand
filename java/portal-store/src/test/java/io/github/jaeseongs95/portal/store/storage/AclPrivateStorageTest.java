@@ -97,6 +97,7 @@ class AclPrivateStorageTest {
     void newParentsAreOwnerOnlyBelowAnOpenFolder() throws IOException {
         Path open = Files.createDirectory(directory.resolve("open"));
         TestStorage.openUp(open);
+        TestStorage.assertTheOpenEntryIsInherited(open); // the condition is real: a plain file below this folder has the entry for others
         Path folder = open.resolve("outer").resolve("inner");
 
         rule.createFolder(folder);
@@ -104,6 +105,9 @@ class AclPrivateStorageTest {
         TestStorage.assertOwnerOnly(folder);
         TestStorage.assertOwnerOnly(folder.getParent());
         assertThat(allowedPrincipals(folder.getParent())).doesNotContain(TestStorage.outsider(folder));
+        // Neither made for them nor inherited: an implementation that keeps the inherited list and only adds the owner's entries has the entry for others here and fails.
+        TestStorage.assertNoEntryForOthers(folder);
+        TestStorage.assertNoEntryForOthers(folder.getParent());
     }
 
     @Test
@@ -123,12 +127,14 @@ class AclPrivateStorageTest {
     void aNewFileIsOwnerOnlyEvenWhereTheFolderIsOpen() throws IOException {
         Path open = Files.createDirectory(directory.resolve("open"));
         TestStorage.openUp(open);
+        TestStorage.assertTheOpenEntryIsInherited(open); // the condition is real: a plain file below this folder has the entry for others
         Path file = open.resolve("payload.part");
 
         write(file, "payload");
 
         assertThat(allowedPrincipals(file)).isNotEmpty().isSubsetOf(ownerAndSystem(file));
         TestStorage.assertOwnerOnly(file);
+        TestStorage.assertNoEntryForOthers(file); // an implementation that keeps the inherited list and only adds the owner's entries has the entry for others here and fails
         assertThat(Files.readAllBytes(file)).isEqualTo("payload".getBytes(StandardCharsets.UTF_8));
     }
 

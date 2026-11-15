@@ -353,6 +353,8 @@ class ServerKeyPolicyTest {
     void theFileIsCreatedPrivate() throws IOException {
         Path missingFolder = root.resolve("outer").resolve("created-by-the-policy");
         Path file = missingFolder.resolve("known_hosts");
+        TestFiles.openUp(root);
+        TestFiles.assertTheOpenEntryIsInherited(root); // the condition is real: a plain file below this folder has the entry for others
 
         new ServerKeyPolicy(settingsWithFile(HostKeyMode.TOFU, file), TestFiles.privateFiles(), events);
 
@@ -360,6 +362,10 @@ class ServerKeyPolicyTest {
         TestFiles.assertOwnerOnly(file);
         TestFiles.assertOwnerOnly(missingFolder);
         TestFiles.assertOwnerOnly(missingFolder.getParent());
+        // Neither made for them nor inherited: an implementation that keeps the inherited list and only adds the owner's entries has the entry for others here and fails.
+        TestFiles.assertNoEntryForOthers(file);
+        TestFiles.assertNoEntryForOthers(missingFolder);
+        TestFiles.assertNoEntryForOthers(missingFolder.getParent());
     }
 
     @Test

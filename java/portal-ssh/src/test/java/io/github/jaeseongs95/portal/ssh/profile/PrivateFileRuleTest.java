@@ -35,6 +35,7 @@ class PrivateFileRuleTest {
     void newPathsAreOwnerOnly() throws IOException {
         Path open = Files.createDirectory(directory.resolve("open"));
         TestFiles.openUp(open);
+        TestFiles.assertTheOpenEntryIsInherited(open); // the condition is real: a plain file below this folder has the entry for others
         Path file = open.resolve("outer").resolve("inner").resolve("known_hosts");
 
         TestFiles.privateFiles().createPrivateFile(file);
@@ -43,6 +44,10 @@ class PrivateFileRuleTest {
         TestFiles.assertOwnerOnly(file);
         TestFiles.assertOwnerOnly(file.getParent());
         TestFiles.assertOwnerOnly(file.getParent().getParent());
+        // Neither made for them nor inherited: an implementation that keeps the inherited list and only adds the owner's entries has the entry for others here and fails.
+        TestFiles.assertNoEntryForOthers(file);
+        TestFiles.assertNoEntryForOthers(file.getParent());
+        TestFiles.assertNoEntryForOthers(file.getParent().getParent());
     }
 
     @Test

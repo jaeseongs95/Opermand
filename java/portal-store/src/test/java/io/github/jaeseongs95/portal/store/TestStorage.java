@@ -89,7 +89,11 @@ public final class TestStorage {
         throw none;
     }
 
-    /** Lets everybody read and write the folder or the file: group and others bits on a posix store, an ALLOW entry for {@link #outsider} on an acl store. */
+    /**
+     * Lets everybody read and write the folder or the file: group and others bits on a posix store, an ALLOW entry for {@link #outsider} on an acl store. On a folder of an acl
+     * store the entry is inheritable (FILE_INHERIT, DIRECTORY_INHERIT), so what is made in the folder by a plain call inherits it, which is how a volume that hands Users or
+     * Authenticated Users modify rights to every folder behaves (case S-D0117-06); {@link #assertTheOpenEntryIsInherited} checks that this condition is real.
+     */
     public static void openUp(Path path) throws IOException {
         FileStore store = Files.getFileStore(path);
         if (store.supportsFileAttributeView("posix")) {
@@ -97,13 +101,48 @@ public final class TestStorage {
         } else if (store.supportsFileAttributeView("acl")) {
             AclFileAttributeView view = Files.getFileAttributeView(path, AclFileAttributeView.class);
             List<AclEntry> acl = new ArrayList<>(view.getAcl());
-            acl.add(0, AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(outsider(path))
+            AclEntry.Builder entry = AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(outsider(path))
                 .setPermissions(AclEntryPermission.READ_DATA, AclEntryPermission.WRITE_DATA, AclEntryPermission.APPEND_DATA, AclEntryPermission.READ_ATTRIBUTES,
-                    AclEntryPermission.READ_ACL, AclEntryPermission.SYNCHRONIZE)
-                .build());
+                    AclEntryPermission.READ_ACL, AclEntryPermission.SYNCHRONIZE);
+            if (Files.isDirectory(path)) {
+                entry.setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT);
+            }
+            acl.add(0, entry.build());
             view.setAcl(acl);
         } else {
             throw new IllegalStateException("The file store has neither the posix nor the acl view");
+        }
+    }
+
+    /**
+     * The precondition of case S-D0117-06 on an acl store: a file made in the opened-up folder by a plain call inherits the entry of {@link #outsider}. Without it a test that
+     * asserts "the created path has no entry for others" would pass for an implementation that only adds owner entries to the inherited list. A posix store has nothing to inherit.
+     */
+    public static void assertTheOpenEntryIsInherited(Path openFolder) throws IOException {
+        if (!Files.getFileStore(openFolder).supportsFileAttributeView("acl")) {
+            return;
+        }
+        UserPrincipal outsider = outsider(openFolder);
+        Path plain = Files.createFile(openFolder.resolve("made-by-a-plain-call-" + System.nanoTime()));
+        try {
+            assertThat(Files.getFileAttributeView(plain, AclFileAttributeView.class).getAcl()).as("the plain file in %s inherits the entry for others", openFolder)
+                .anyMatch(entry -> entry.principal().equals(outsider));
+        } finally {
+            Files.delete(plain);
+        }
+    }
+
+    /**
+     * Fails the test when the access control list of the path has an entry for {@link #outsider} (the group that the opened-up parent granted), whether the entry was made for
+     * the path or inherited from its parent: an implementation that keeps the inherited list and only adds the owner's entries fails here. A posix store is checked by its bits.
+     */
+    public static void assertNoEntryForOthers(Path path) throws IOException {
+        if (Files.getFileStore(path).supportsFileAttributeView("acl")) {
+            UserPrincipal outsider = outsider(path);
+            assertThat(Files.getFileAttributeView(path, AclFileAttributeView.class, LinkOption.NOFOLLOW_LINKS).getAcl()).as("the list of %s", path)
+                .noneMatch(entry -> entry.principal().equals(outsider));
+        } else {
+            assertOwnerOnly(path);
         }
     }
 
