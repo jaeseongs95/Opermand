@@ -239,8 +239,8 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
     /** Not {@code @Transactional}: the bytes in quarantine are read from the disk first (Principles 4.4), then the rows are summed; the two figures stay apart (defect D-0012). */
     @Override
     public ArtifactBudget budget() {
-        long quarantined = retained.retainedBytes();
-        return new ArtifactBudget(limits.budgetBytes(), artifacts.chargedBytes(), quarantined);
+        RetainedPayloads.Held quarantined = retained.held();
+        return new ArtifactBudget(limits.budgetBytes(), artifacts.chargedBytes(), quarantined.files(), quarantined.bytes());
     }
 
     @Override

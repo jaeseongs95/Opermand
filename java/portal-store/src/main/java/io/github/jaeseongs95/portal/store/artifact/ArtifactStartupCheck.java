@@ -16,6 +16,7 @@ import io.github.jaeseongs95.portal.app.artifact.ArtifactPayloadStore;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRecord;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRegistry;
 import io.github.jaeseongs95.portal.app.artifact.ChunkDigest;
+import io.github.jaeseongs95.portal.app.artifact.QuarantineNotice;
 import io.github.jaeseongs95.portal.app.artifact.ReleaseReason;
 import io.github.jaeseongs95.portal.app.storage.PayloadRead;
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
@@ -42,11 +43,13 @@ public class ArtifactStartupCheck {
     private final ArtifactRegistry registry;
     private final ArtifactPayloadStore payloads;
     private final Digester digester;
+    private final QuarantineNotice quarantine;
 
-    public ArtifactStartupCheck(ArtifactRegistry registry, ArtifactPayloadStore payloads, Digester digester) {
+    public ArtifactStartupCheck(ArtifactRegistry registry, ArtifactPayloadStore payloads, Digester digester, QuarantineNotice quarantine) {
         this.registry = registry;
         this.payloads = payloads;
         this.digester = digester;
+        this.quarantine = quarantine;
     }
 
     public ArtifactReconciliation reconcile() {
@@ -86,6 +89,7 @@ public class ArtifactStartupCheck {
         }
         LOG.info("Artifact start-up check: {} quarantined, {} truncated, {} deletions finished, {} consumptions open", quarantined.size(), truncated.size(),
             deleted.size(), unfinishedConsumptions.size());
+        quarantine.log();
         return new ArtifactReconciliation(quarantined, truncated, deleted, unfinishedConsumptions);
     }
 

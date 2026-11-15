@@ -9,13 +9,14 @@ package io.github.jaeseongs95.portal.app.artifact;
  *
  * @param budgetBytes   what the budget allows
  * @param chargedBytes  what the rows of the artifacts charge
- * @param retainedBytes what stays in quarantine without a row; not charged
+ * @param retainedFiles how many files are in quarantine
+ * @param retainedBytes what those files hold, without a row; not charged
  */
-public record ArtifactBudget(long budgetBytes, long chargedBytes, long retainedBytes) {
+public record ArtifactBudget(long budgetBytes, long chargedBytes, long retainedFiles, long retainedBytes) {
 
     public ArtifactBudget {
-        if (budgetBytes < 0 || chargedBytes < 0 || retainedBytes < 0) {
-            throw new IllegalArgumentException("The budget, the charge and the retained bytes must not be negative");
+        if (budgetBytes < 0 || chargedBytes < 0 || retainedFiles < 0 || retainedBytes < 0) {
+            throw new IllegalArgumentException("The budget, the charge and the retained files and bytes must not be negative");
         }
     }
 

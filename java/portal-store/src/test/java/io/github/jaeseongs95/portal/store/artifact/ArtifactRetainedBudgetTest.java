@@ -23,6 +23,7 @@ import org.springframework.transaction.annotation.Transactional;
 import org.springframework.util.FileSystemUtils;
 
 import io.github.jaeseongs95.portal.app.artifact.ArtifactPayloadStore;
+import io.github.jaeseongs95.portal.app.artifact.QuarantineNotice;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRecord;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRegistry;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactReservation;
@@ -43,7 +44,7 @@ import io.github.jaeseongs95.portal.store.StoreTest;
  */
 @StoreTest
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
-@Import({JdbcArtifactRegistry.class, ArtifactMapper.class, FileArtifactPayloadStore.class, ArtifactStartupCheck.class, ArtifactTestStorage.class})
+@Import({JdbcArtifactRegistry.class, ArtifactMapper.class, FileArtifactPayloadStore.class, ArtifactStartupCheck.class, QuarantineNotice.class, ArtifactTestStorage.class})
 class ArtifactRetainedBudgetTest {
 
     private static final Logger LOG = LoggerFactory.getLogger(ArtifactRetainedBudgetTest.class);

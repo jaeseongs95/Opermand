@@ -35,12 +35,14 @@ public class ArtifactReaper {
     private final ArtifactPayloadStore payloads;
     private final ReapGate gate;
     private final Clock clock;
+    private final QuarantineNotice quarantine;
 
-    public ArtifactReaper(ArtifactRegistry registry, ArtifactPayloadStore payloads, ReapGate gate, Clock clock) {
+    public ArtifactReaper(ArtifactRegistry registry, ArtifactPayloadStore payloads, ReapGate gate, Clock clock, QuarantineNotice quarantine) {
         this.registry = registry;
         this.payloads = payloads;
         this.gate = gate;
         this.clock = clock;
+        this.quarantine = quarantine;
     }
 
     /** One run. The scheduler calls {@link #reapOnSchedule()}; a caller that wants the report (a test, the lifecycle) calls this. */
@@ -63,6 +65,7 @@ public class ArtifactReaper {
                 LOG.warn("The artifact " + artifact.id().value() + " could not be removed and stays until the next run", e);
             }
         }
+        quarantine.log();
         return new ReapReport.Reaped(removed, failed);
     }
 

@@ -198,8 +198,8 @@ class ArtifactReservationOrderTest {
         }
 
         @Override
-        public long retainedBytes() {
-            return retainedBytes;
+        public Held held() {
+            return new Held(retainedBytes > 0 ? 1L : 0L, retainedBytes);
         }
 
         @Override

@@ -40,6 +40,7 @@ import io.github.jaeseongs95.portal.app.artifact.ArtifactRetention;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactSpec;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactState;
 import io.github.jaeseongs95.portal.app.artifact.ChunkDigest;
+import io.github.jaeseongs95.portal.app.artifact.QuarantineNotice;
 import io.github.jaeseongs95.portal.app.artifact.ReleaseReason;
 import io.github.jaeseongs95.portal.app.artifact.StagingTimes;
 import io.github.jaeseongs95.portal.app.file.DownloadExecution;
@@ -87,6 +88,9 @@ class ArtifactBudgetRecoveryTest {
     private static final ExecutionControl CONTROL = new ExecutionControl(new CancelSource(), () -> { });
     private static final ArtifactId LEGACY = new ArtifactId("c".repeat(48));
 
+    /** The line the owner reads: the number of files in quarantine and their bytes (the same text as the start-up check's). */
+    private static final String QUARANTINE_LINE = "Artifact quarantine: %d file(s), %d retained byte(s) (not charged to the staging budget, only the owner clears them)";
+
     private final ArtifactRegistry registry;
     private final ArtifactPayloadStore payloads;
     private final ArtifactReaper reaper;
@@ -102,11 +106,12 @@ class ArtifactBudgetRecoveryTest {
     private final JdbcTemplate jdbc;
     private final Clock clock;
     private final ReapGate gate;
+    private final QuarantineNotice quarantine;
     private final List<ListAppender<ILoggingEvent>> appenders = new ArrayList<>();
 
     ArtifactBudgetRecoveryTest(ArtifactRegistry registry, ArtifactPayloadStore payloads, ArtifactReaper reaper, DownloadService downloads, StorageRoots roots, FakeRemote remote,
                                FakeTargets targets, TransferSupport support, TransferOutcomes outcomes, TransferLimits limits, StagingTimes times, Digester digester,
-                               JdbcTemplate jdbc, Clock clock, ReapGate gate) {
+                               JdbcTemplate jdbc, Clock clock, ReapGate gate, QuarantineNotice quarantine) {
         this.registry = registry;
         this.payloads = payloads;
         this.reaper = reaper;
@@ -122,6 +127,7 @@ class ArtifactBudgetRecoveryTest {
         this.jdbc = jdbc;
         this.clock = clock;
         this.gate = gate;
+        this.quarantine = quarantine;
     }
 
     @BeforeEach
@@ -215,7 +221,7 @@ class ArtifactBudgetRecoveryTest {
             payloads.delete(discarding);
             registry.release(discarding, ReleaseReason.REFUSED);
         };
-        ArtifactReaper racing = new ArtifactReaper(probe.registry, payloads, gate, clock);
+        ArtifactReaper racing = new ArtifactReaper(probe.registry, payloads, gate, clock, quarantine);
         List<ILoggingEvent> logged = captureReaperLog();
 
         ReapReport report = racing.reap();
@@ -233,7 +239,7 @@ class ArtifactBudgetRecoveryTest {
         ArtifactId discarding = aRowThatAFailedDiscardLeftDeleting();
         RegistryProbe probe = new RegistryProbe();
         probe.beginDeleteRefusal = new RequestRefusedException(ArtifactErrorCode.ARTIFACT_CHANGED);
-        ArtifactReaper reaperOfConflicts = new ArtifactReaper(probe.registry, payloads, gate, clock);
+        ArtifactReaper reaperOfConflicts = new ArtifactReaper(probe.registry, payloads, gate, clock, quarantine);
         List<ILoggingEvent> logged = captureReaperLog();
 
         ReapReport report = reaperOfConflicts.reap();
@@ -252,13 +258,34 @@ class ArtifactBudgetRecoveryTest {
         ArtifactId left = aRowThatAFailedDiscardLeftDeleting();
         ArtifactId old = expiredArtifact(new byte[300]);
         RegistryProbe probe = new RegistryProbe();
-        ArtifactReaper recordingReaper = new ArtifactReaper(probe.registry, payloads, gate, clock);
+        ArtifactReaper recordingReaper = new ArtifactReaper(probe.registry, payloads, gate, clock, quarantine);
 
         ReapReport report = recordingReaper.reap();
 
         assertThat(report).isEqualTo(new ReapReport.Reaped(2, 0));
         assertThat(probe.reasons).as("one release per row, with the reason of each").containsEntry(left, ReleaseReason.ABANDONED).containsEntry(old, ReleaseReason.EXPIRED).hasSize(2);
         assertThat(registry.holding()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S-D0012-07 (D-0012): every reap run that happens tells the owner, in one INFO line, how many files are in quarantine and how many bytes they hold")
+    void everyReapRunLogsTheQuarantineFigures() throws IOException {
+        byte[] held = new byte[150_000];
+        payloads.append(LEGACY, 0, held);
+        payloads.quarantine(LEGACY);
+        Logger root = (Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        root.addAppender(appender);
+        try {
+            ReapReport report = reaper.reap();
+
+            assertThat(report).isInstanceOf(ReapReport.Reaped.class);
+            assertThat(appender.list).filteredOn(event -> event.getLevel() == Level.INFO).extracting(ILoggingEvent::getFormattedMessage)
+                .as("one file of 150,000 bytes in quarantine").contains(QUARANTINE_LINE.formatted(1, 150_000));
+        } finally {
+            root.detachAppender(appender);
+        }
     }
 
     // ---- helpers ----

@@ -8,6 +8,21 @@ package io.github.jaeseongs95.portal.store.artifact;
  */
 public interface RetainedPayloads {
 
-    /** The total size of the files in quarantine; zero when there is none. */
-    long retainedBytes();
+    /** How many files are in quarantine and their total size, from one read of the folder; both are zero when there is none. */
+    Held held();
+
+    /**
+     * What stays in quarantine.
+     *
+     * @param files how many files
+     * @param bytes their total size
+     */
+    record Held(long files, long bytes) {
+
+        public Held {
+            if (files < 0 || bytes < 0) {
+                throw new IllegalArgumentException("The counts must not be negative");
+            }
+        }
+    }
 }
