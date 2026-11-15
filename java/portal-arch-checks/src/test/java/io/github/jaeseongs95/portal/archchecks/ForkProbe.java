@@ -53,7 +53,7 @@ abstract class ForkProbe {
                 }
             }
         }
-        assertThat(registered(folder)).as("test JVMs started, stated forks %d", stated).isBetween(needed, stated);
+        assertThat(registered(folder)).as("test JVMs started, stated forks %d", stated).isBetween((long) needed, (long) stated);
     }
 
     private static long registered(Path folder) throws IOException {
