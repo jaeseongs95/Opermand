@@ -93,12 +93,35 @@ jobs:
             -Pportal.test.openssh.known-hosts="$PORTAL_OPENSSH_KNOWN_HOSTS" \
             -Pportal.test.openssh.platform=windows \
             -Pportal.test.openssh.windows-python="$PORTAL_OPENSSH_WINDOWS_PYTHON"
-      # Diagnostic when a test failed: the server log (LogLevel VERBOSE, no command text) of the sshd the preparation script started.
+      # Diagnostic: the server log (LogLevel VERBOSE, no command text) of the sshd the preparation script started, and the sshd processes at that moment.
+      # It runs whatever the tests did and cannot fail the job (continue-on-error), so it never hides the result of the tests. Stop-ScheduledTask ends only the
+      # parent sshd; the connection processes that sshd started keep the log open without a read share, so the log is read with a sharing mode first, and when that is
+      # refused every sshd process is ended (Stop-Process) and the file is read afterwards. This is a diagnostic of the CI job, not product or test code.
       - name: Show the log of the prepared sshd
-        if: failure()
-        shell: cmd
-        # sshd holds the log file open exclusively, so the task that runs it is stopped first (the stop step below is best effort and runs after this one).
-        run: powershell -NoProfile -NonInteractive -Command "Stop-ScheduledTask -TaskName PortalOpenSshCi; Start-Sleep -Seconds 3; Get-Content -LiteralPath ($env:ProgramData + '\portal-openssh-ci\sshd.log') -Tail 200"
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $log = Join-Path $env:ProgramData 'portal-openssh-ci\sshd.log'
+          Write-Host '--- sshd processes (before anything is ended)'
+          Get-CimInstance Win32_Process -Filter "Name = 'sshd.exe'" | Select-Object ProcessId, ParentProcessId, CreationDate, CommandLine | Format-List | Out-String -Width 300 | Write-Host
+          function Read-SshdLog {
+            $fs = [System.IO.File]::Open($log, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]'ReadWrite,Delete')
+            try { $text = [System.IO.StreamReader]::new($fs).ReadToEnd() } finally { $fs.Dispose() }
+            $lines = $text -split "`r?`n"
+            Write-Host ('--- sshd.log, ' + $lines.Count + ' lines, the last 300')
+            $lines | Select-Object -Last 300 | ForEach-Object { Write-Host $_ }
+          }
+          try {
+            Read-SshdLog
+          } catch {
+            Write-Host ('--- the log is locked (' + $_.Exception.Message + '); ending every sshd process')
+            Stop-ScheduledTask -TaskName PortalOpenSshCi -ErrorAction Continue
+            Get-Process -Name sshd -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction Continue
+            Get-Process -Name sshd -ErrorAction SilentlyContinue | Wait-Process -Timeout 15 -ErrorAction Continue
+            Read-SshdLog
+          }
       - name: Stop the OpenSSH server and remove the account
         if: always()
         shell: cmd
