@@ -62,6 +62,10 @@ subprojects {
         jvmArgs("-XX:ActiveProcessorCount=1")
         maxHeapSize = "512m"
         maxParallelForks = providers.gradleProperty("portal.test.forks").map { it.toInt() }.getOrElse(1)
+        // What the run stated, handed to the tests that check the JVM they run in (TestJvmSizeTest, ForkProbe: cases S-D0111-01 to -04); left out when not stated.
+        listOf("cpus", "heap", "forks").forEach { size ->
+            providers.gradleProperty("portal.test.$size").orNull?.let { systemProperty("portal.test.stated.$size", it) }
+        }
         testLogging {
             events("failed")
             exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL

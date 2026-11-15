@@ -35,9 +35,14 @@ class TestIsolationTest {
         assertThat(Path.of(System.getProperty("java.io.tmpdir")).toRealPath()).startsWith(isolated);
     }
 
+    /** S-D0111-07: git stops looking for a repository at the isolated folders and does not read the system configuration. */
     @Test
-    void theTestJvmHasOneProcessorAndAStatedHeap() {
-        assertThat(Runtime.getRuntime().availableProcessors()).isEqualTo(1);
-        assertThat(Runtime.getRuntime().maxMemory()).isLessThanOrEqualTo(512L * 1024 * 1024);
+    void gitIsKeptOutOfTheCheckoutAndTheSystemConfiguration() throws IOException {
+        // System.getProperty and System.getenv are allowed in this class: a JUnit test outside Spring checks what Gradle's test JVM setup hands over; A-ENV binds the product code.
+        Path isolated = Path.of(System.getProperty("user.dir")).resolve("build/isolated").toRealPath();
+        assertThat(System.getenv("GIT_CEILING_DIRECTORIES")).isNotNull();
+        assertThat(Path.of(System.getenv("GIT_CEILING_DIRECTORIES")).toRealPath()).isEqualTo(isolated);
+        assertThat(System.getenv("GIT_CONFIG_NOSYSTEM")).isEqualTo("1");
     }
+    // The size of the test JVM (processors, heap, forks) is checked by TestJvmSizeTest and ForkProbe (S-D0111-01 to S-D0111-04); it is no longer fixed here.
 }
