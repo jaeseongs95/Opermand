@@ -276,7 +276,7 @@ CREATE TABLE operation_fence (
     CONSTRAINT fk_operation_fence_op FOREIGN KEY (operation_id) REFERENCES operation (id)
 );
 
--- The long-text columns of the tables above. ${long_text} is the type the database's driver reports for a long text (the runner replaces it; the digest of this file is that of
+-- The long-text columns of the tables above. ${long_text} is the declaration that SqlBuilder's dialect gives for a long text (the runner replaces it; the digest of this file is that of
 -- the text as written here). The tables are empty at this point, so NOT NULL needs no default.
 ALTER TABLE operation_command ADD COLUMN command_text ${long_text} NOT NULL;
 ALTER TABLE operation_command ADD COLUMN caller_context ${long_text} NOT NULL;

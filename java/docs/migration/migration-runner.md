@@ -16,7 +16,7 @@
 
 ## 구성과 형식(공통 형식 판 4 그대로)
 
-- 이력 표 `portal_meta.expand_history`·`portal_meta.contract_history`: `(version BIGINT, attempt INTEGER, script VARCHAR(255), digest CHAR(64), applied_at TIMESTAMP, outcome VARCHAR(10))`, 키 `(version, attempt)`, outcome은 SUCCEEDED·FAILED.
+- 이력 표 `portal_meta.expand_history`·`portal_meta.contract_history`: `(version BIGINT, attempt INTEGER, script VARCHAR(255), digest CHAR(64), applied_at TIMESTAMP, outcome VARCHAR(10))`, 키 `(version, attempt)`, outcome은 SUCCEEDED·FAILED. outcome에는 CHECK 제약이 없다(공통 형식 판 4: 쓰는 것은 실행기뿐이다). 이력을 읽을 때 enum으로 확인하고, SUCCEEDED·FAILED가 아닌 값이면 아무것도 적용하기 전에 `MIGRATION_FAILED`로 멈춘다(공통 형식의 오류 목록에 이 경우만을 가리키는 항목이 없어, 「읽을 수 없는 DB」에 해당하는 이 코드를 썼다. 메시지가 번호·시도·값을 말한다).
 - 시도 한 번 = 트랜잭션 하나. 첫 문장이 `(version, attempt)` 행을 FAILED로 넣고(차지), 마지막 문장이 그 행 하나만 SUCCEEDED로 바꾼다. 실패하면 트랜잭션을 되돌리고 FAILED 행을 별도 트랜잭션에서 남긴다(DDL이 이미 차지 행을 커밋한 DBMS에서는 이미 있으므로 더하지 않는다). 다음 실행은 `attempt + 1`이다. 이 attempt는 그 실행이 적용할 스크립트(pending)를 정한 같은 이력 읽기에서 정한다(그 번호의 최대 attempt + 1, 없으면 1). 적용 직전에 이력을 다시 읽어 구하지 않는다. 다시 구하면, 이력을 읽은 뒤 상대가 같은 번호를 SUCCEEDED로 커밋했을 때 이 실행이 다음 attempt 행을 넣고 스크립트를 한 번 더 적용한다.
 - 동시 실행: 같은 번호를 두 실행기가 넣으면 DB가 둘째를 첫째의 커밋까지 기다리게 하고 중복 키를 준다. 실행기에는 sleep·폴링·재시도가 없다. 중복 키를 받으면 이력을 한 번 다시 읽어, 그 번호가 SUCCEEDED이고 digest가 같으면 건너뛰고 아니면 `MIGRATION_FAILED`로 멈춘다(메시지: 상대가 실패했거나 아직 적용 중이다). 한계는 「한계와 운영자 복구」 절.
 - 번호는 1부터 빈 번호 없이 연속이다. 아니면 DB에 손대기 전에 `MIGRATION_OUT_OF_ORDER`다. 적용된 최고 번호보다 낮은 미적용 번호도 같다.
@@ -66,7 +66,7 @@
 
 SSH의 사정에 따른 차이:
 
-7. 이력 표의 outcome 검사를 `IN ('SUCCEEDED','FAILED')`가 아니라 `CASE WHEN … END = 1`로 쓴다. 내장 H2 2.4.240은 상수 두 개 이상의 IN 목록을 만든 세션에 붙여 두므로 마이그레이션 연결이 닫힌 뒤의 첫 삽입이 실패한다(`NoInListInChecksTest`가 같은 이유로 스크립트에서 IN을 금지한다). CASE는 표준이고 뜻이 같다.
+7. 이력 표에 outcome CHECK 제약을 두지 않는다(공통 형식 판 4와 같다). 원본은 CHECK를 두었고, H2 2.4.240이 상수 두 개 이상의 IN 목록을 가진 CHECK를 만든 세션에 붙여 두는 문제(마이그레이션 연결이 닫힌 뒤의 첫 삽입이 실패한다. `NoInListInChecksTest`가 같은 이유로 스크립트에서 IN을 금지한다)를 피하려고 `CASE WHEN … END = 1`로 쓴 적이 있다. 제약이 없으므로 그 문제도 없다. 값의 확인은 읽을 때 enum으로 한다(S-D0109-32).
 8. 위 대응표의 형 교체(예외, 연결, 시각, 해시, 스키마 이름)와 이식하지 않은 AGS 전용 클래스.
 9. 인코딩 확인은 AGS 원본과 같은 질의(`SqlBuilder.generateEncodingProbe`)를 쓰고, 오류 형식만 `MigrationException(DB_ENCODING_MISMATCH)`다. 내장 H2에서 `CHAR(10)` 형변환은 10자로 공백 채움되므로, 가변 문자 형(`VARCHAR(10)`)으로 형변환하는 이 질의가 H2에서도 문자 수 2를 준다.
 10. `MigrationScript.of(version, file, bytes)` 팩토리를 더했다(시험이 스크립트를 만들 때와 `load`가 쓴다).

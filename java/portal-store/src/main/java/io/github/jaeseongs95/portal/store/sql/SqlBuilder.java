@@ -15,7 +15,9 @@ import io.github.jaeseongs95.portal.store.sql.DatabaseProductException.Reason;
  * Builds SQL for the actual business database, resolving its product on first use. Ported from the SqlBuilder of AGS (Agent Governance Suite), as of commit 1ad1b8e7
  * (path {@code java/ags-api/src/main/java/io/github/jaeseongs95/ags/service/database/SqlBuilder.java};
  * same owner, AGPL-3.0-or-later), with the same structure, API, products and limit syntax: the only difference is the exception type, {@link DatabaseProductException}
- * in place of AGS {@code StoreException}; {@link #generateLongText} is added in the shape of {@code generateLimit} (the AGS original has no such method at that commit). It opens no transaction: it joins the connection of the caller's transaction or borrows one for the single product read.
+ * in place of AGS {@code StoreException}; {@link #generateLongText} and {@link #generateEncodingProbe} are added in the shape of
+ * {@code generateLimit} (a switch over every product without a default), with the text of the common SqlBuilder (the AGS original has neither method at that commit).
+ * It opens no transaction: it joins the connection of the caller's transaction or borrows one for the single product read.
  */
 @Component
 public class SqlBuilder {
@@ -86,21 +88,24 @@ public class SqlBuilder {
     }
 
     /**
-     * The declaration of a column that holds a long text (the migration scripts write it as {@code ${long_text}}): the product's own type, with the length written where leaving it out
-     * would give a smaller limit. Like {@link #generateLimit(Database, String)} it is a switch over every product without a default, so a product that is added fails the build here
-     * until its declaration is written.
+     * The declaration of a column that holds a text of no fixed size (the migration scripts' {@code ${LONG_TEXT}}), spelled as the product takes it. It is a fixed table, not a
+     * reading of the driver: a driver's {@code getTypeInfo()} CREATE_PARAMS is free text (MariaDB's driver reports the character set and collation options of LONGTEXT, not a length).
+     * Where an omitted length would make the limit small, the length is written.
      */
     public static String generateLongText(Database database) {
-        // PostgreSQL: https://www.postgresql.org/docs/current/datatype-character.html (text: unlimited length)
-        // H2: https://h2database.com/html/datatypes.html#character_large_object_type (CHARACTER LARGE OBJECT, up to 2,147,483,647 characters)
-        // Oracle: https://docs.oracle.com/en/database/oracle/oracle-database/23/sqlrf/Data-Types.html (CLOB: no length is given)
-        // Db2: https://www.ibm.com/docs/en/db2/12.1.x?topic=list-character-strings (CLOB(n), n up to 2,147,483,647; the default without n is 1M, so n is written)
-        // SQL Server: https://learn.microsoft.com/en-us/sql/t-sql/data-types/nchar-and-nvarchar-transact-sql (NVARCHAR(MAX), Unicode up to 2 GB; VARCHAR(MAX) depends on the collation's code page)
-        // MariaDB: https://mariadb.com/docs/server/reference/data-types/string-data-types/longtext
-        // MySQL: https://dev.mysql.com/doc/refman/8.4/en/blob.html (LONGTEXT)
+        // PostgreSQL text, any length up to about 1 GB: https://www.postgresql.org/docs/current/datatype-character.html
+        // H2 CHARACTER LARGE OBJECT: the datatypes page does not state the limit of an omitted length (https://h2database.com/html/datatypes.html#character_large_object_type),
+        //     so the largest length is written (2147483647 is accepted by H2 2.4.240: measured by the SSH MCP, 400,000 Korean characters round trip).
+        // Oracle CLOB takes no length, (4 GB - 1) * block size: https://docs.oracle.com/en/database/oracle/oracle-database/23/sqlrf/Data-Types.html
+        // Db2 CLOB is up to 2,147,483,647 bytes, and 1,048,576 (1M) code units when the length is omitted:
+        //     https://www.ibm.com/docs/en/db2/12.1.x?topic=list-character-strings and https://www.ibm.com/docs/en/db2/12.1.x?topic=statements-create-table
+        // SQL Server NVARCHAR(MAX), up to 2^31-1 bytes, UTF-16 whatever the collation (VARCHAR(MAX) holds Korean only with a UTF-8 collation of 2019 or later):
+        //     https://learn.microsoft.com/en-us/sql/t-sql/data-types/nchar-and-nvarchar-transact-sql
+        // MariaDB LONGTEXT, 4,294,967,295 bytes, takes no length: https://mariadb.com/docs/server/reference/data-types/string-data-types/longtext
+        // MySQL LONGTEXT, 4,294,967,295 bytes, takes no length: https://dev.mysql.com/doc/refman/8.4/en/string-type-syntax.html
         return switch (database) {
-            case H2 -> "CHARACTER LARGE OBJECT(2147483647)";
             case POSTGRESQL -> "TEXT";
+            case H2 -> "CHARACTER LARGE OBJECT(2147483647)";
             case ORACLE -> "CLOB";
             case DB2 -> "CLOB(2147483647)";
             case SQLSERVER -> "NVARCHAR(MAX)";

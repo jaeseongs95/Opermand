@@ -74,8 +74,6 @@ class MigrationRunnerTest {
         assertThat(jdbc.queryForObject("SELECT applied_at FROM " + Phase.EXPAND.table() + " WHERE version = 1", LocalDateTime.class))
             .as("the UTC fields of the injected Clock's instant").isEqualTo(LocalDateTime.ofInstant(NOW, ZoneOffset.UTC));
 
-        assertThatThrownBy(() -> jdbc.update("INSERT INTO " + Phase.EXPAND.table() + " (version, attempt, script, digest, applied_at, outcome) VALUES (3, 1, 'x', ?, ?, 'BOGUS')",
-            "0".repeat(64), LocalDateTime.ofInstant(NOW, ZoneOffset.UTC))).as("outcome is SUCCEEDED or FAILED").isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> jdbc.update("INSERT INTO " + Phase.EXPAND.table() + " (version, attempt, script, digest, applied_at, outcome) VALUES (1, 1, 'x', ?, ?, 'FAILED')",
             "0".repeat(64), LocalDateTime.ofInstant(NOW, ZoneOffset.UTC))).as("the key is (version, attempt)").isInstanceOf(DataIntegrityViolationException.class);
         assertThat(jdbc.update("INSERT INTO " + Phase.EXPAND.table() + " (version, attempt, script, digest, applied_at, outcome) VALUES (1, 2, 'x', ?, ?, 'FAILED')",
@@ -216,7 +214,7 @@ class MigrationRunnerTest {
     // ---- S-D0109-13: placeholder ----
 
     @Test
-    @DisplayName("S-D0109-13: ${long_text} becomes the long text type the driver reports; a 400,000 character text with Korean survives, and the digest is that of the file before the replacement")
+    @DisplayName("S-D0109-13: ${long_text} becomes the declaration that the SqlBuilder dialect gives for the product; a 400,000 character text with Korean survives, and the digest is that of the file before the replacement")
     void theLongTextPlaceholderIsReplaced() {
         String text = "한글 text ".repeat(40_000);
         String sql = "CREATE TABLE long_t (id INTEGER NOT NULL, body ${long_text} NOT NULL)";

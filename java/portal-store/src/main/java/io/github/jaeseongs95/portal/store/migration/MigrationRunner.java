@@ -71,7 +71,7 @@ import io.github.jaeseongs95.portal.store.sql.SqlBuilder;
 final class MigrationRunner {
     private static final Logger LOG = LoggerFactory.getLogger(MigrationRunner.class);
 
-    /** What a history row says. The column holds the constant's name and a CHECK lists the two. */
+    /** What a history row says. The column holds the constant's name; it has no CHECK (only the runner writes it) and the value is checked against this enum when it is read. */
     enum Outcome { SUCCEEDED, FAILED }
 
     /** The two kinds of migration: expand scripts run at every start, contract scripts by an explicit command. Each has its folder in the jar and its history table. */
@@ -198,11 +198,9 @@ final class MigrationRunner {
             create(connection, "CREATE SCHEMA " + Migrations.SCHEMA, () -> schemaExists(connection));
         }
         if (!tableExists(connection, phase)) {
-            // The CHECK lists the two values with CASE and not with IN: H2 2.4.240 keeps the session that created a constraint with an IN list of constants, so the first insert after the
-            // migration connection is closed would fail (see NoInListInChecksTest). CASE is standard SQL and means the same on every database.
+            // No CHECK on outcome (common format edition 4): only the runner writes the table, and readHistory checks the value against the enum.
             create(connection, "CREATE TABLE " + phase.table() + " (version BIGINT NOT NULL, attempt INTEGER NOT NULL, script VARCHAR(255) NOT NULL, digest CHAR(64) NOT NULL, "
-                    + "applied_at TIMESTAMP NOT NULL, outcome VARCHAR(10) NOT NULL, PRIMARY KEY (version, attempt), "
-                    + "CONSTRAINT " + phase.tableName() + "_outcome CHECK (CASE WHEN outcome = 'SUCCEEDED' THEN 1 WHEN outcome = 'FAILED' THEN 1 ELSE 0 END = 1))",
+                    + "applied_at TIMESTAMP NOT NULL, outcome VARCHAR(10) NOT NULL, PRIMARY KEY (version, attempt))",
                     () -> tableExists(connection, phase));
         }
     }
@@ -245,10 +243,22 @@ final class MigrationRunner {
         try (Statement statement = connection.createStatement();
                 ResultSet found = statement.executeQuery("SELECT version, attempt, script, digest, outcome FROM " + phase.table() + " ORDER BY version, attempt")) {
             while (found.next()) {
-                rows.add(new HistoryRow(found.getLong("version"), found.getInt("attempt"), found.getString("script"), found.getString("digest"), Outcome.valueOf(found.getString("outcome"))));
+                rows.add(new HistoryRow(found.getLong("version"), found.getInt("attempt"), found.getString("script"), found.getString("digest"),
+                        outcome(phase, found.getLong("version"), found.getInt("attempt"), found.getString("outcome"))));
             }
         }
         return rows;
+    }
+
+    /** The outcome of a history row, checked against the enum when it is read (the table has no CHECK). Another value means the history was not made by this runner. */
+    private static Outcome outcome(Phase phase, long version, int attempt, String value) {
+        for (Outcome outcome : Outcome.values()) {
+            if (outcome.name().equals(value)) {
+                return outcome;
+            }
+        }
+        throw new MigrationException(Reason.MIGRATION_FAILED, "The history of " + phase.location() + " has the outcome '" + value + "' for number " + version + ", attempt " + attempt
+                + ", which is neither SUCCEEDED nor FAILED.");
     }
 
     /** One number from a query with its parameters, on the runner's connection (plain JDBC: the runner keeps one connection and its transaction itself). */

@@ -71,7 +71,7 @@
 - 실 DBMS 시험은 하지 않는다. 개발원칙 7.3(「다른 DBMS 지원 확인 시험을 하지 않는다(드라이버는 사용자 몫)」)에 따른다. 다른 DBMS 연결 시험을 늘리지도, 서비스 컨테이너를 기다리지도 않는다.
 - 증명 수단은 제품에 따라 둘이다.
   - H2: 실제 연결로 증명한다(S-SQLB-03·04·05·06·08, 그리고 S-SQLB-10·11~15는 `@StoreTest` 슬라이스의 실제 H2 `DataSource`).
-  - 나머지 6개 제품(Oracle, Db2, SQL Server, MariaDB, MySQL, PostgreSQL): 연결 없이 문자열 시험으로 증명한다. 행 수 제한 구문은 S-SQLB-01, URL로 제품 선택은 S-SQLB-09, 제품 이름으로 제품 선택은 S-SQLB-21, 긴 텍스트 선언은 S-SQLB-22가 문자열을 단언한다. 구문의 근거는 `SqlBuilder`의 제품별 공식 문서 링크 주석이다.
+  - 나머지 6개 제품(Oracle, Db2, SQL Server, MariaDB, MySQL, PostgreSQL): 연결 없이 문자열 시험으로 증명한다. 행 수 제한 구문은 S-SQLB-01, URL로 제품 선택은 S-SQLB-09, 제품 이름으로 제품 선택은 S-SQLB-21, 긴 텍스트 선언은 S-SQLB-22, 시작 때 UTF-8 검사 질의는 S-SQLB-23이 문자열을 단언한다. 구문의 근거는 `SqlBuilder`의 제품별 공식 문서 링크 주석이다.
 - 범위 밖: 실제 Oracle, Db2, SQL Server, MariaDB, MySQL, PostgreSQL에서 그 구문이 받아들여지는지는 이 작업이 확인하지 않는다(드라이버와 DBMS는 사용자 몫).
 - `SqlBuilderStoreTest`의 PostgreSQL 문구와 `externalDbmsTest`는 지웠다(장부 D-0103, `migration-runner.md`의 「지운 시험」).
 
