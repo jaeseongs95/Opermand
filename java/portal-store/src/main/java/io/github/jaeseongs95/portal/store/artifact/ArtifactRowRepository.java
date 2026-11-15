@@ -38,10 +38,11 @@ interface ArtifactRowRepository extends CrudRepository<ArtifactRow, String> {
     int markDeleting(@Param("id") String id);
 
     /**
-     * What the rows charge now: a consumed row and an empty file charge one byte each (2.x {@code artifacts.mjs:18}). A row in {@code DELETING} charges nothing: its bytes are being
-     * removed and no transfer uses them, so an artifact that cannot be deleted must not eat the application budget for good (defect D-0012); the disk check sees the space it still uses.
+     * What the rows charge now: a consumed row and an empty file charge one byte each (2.x {@code artifacts.mjs:18}). A row in {@code DELETING} or {@code CONSUMING} charges nothing: its bytes
+     * are being removed and no transfer uses them, so an artifact that cannot be deleted must not eat the application budget for good (defect D-0012, S-D0012-11, S-D0012-18); the
+     * disk check sees the space it still uses.
      */
-    @Query("SELECT COALESCE(SUM(CASE WHEN state = 'DELETING' THEN 0 WHEN state = 'CONSUMED' THEN 1 WHEN size_bytes < 1 THEN 1 ELSE size_bytes END), 0) FROM artifact")
+    @Query("SELECT COALESCE(SUM(CASE WHEN state IN ('DELETING', 'CONSUMING') THEN 0 WHEN state = 'CONSUMED' THEN 1 WHEN size_bytes < 1 THEN 1 ELSE size_bytes END), 0) FROM artifact")
     long chargedBytes();
 
     Optional<ArtifactRow> findByPublicUuid(String publicUuid);

@@ -15,6 +15,7 @@ import org.springframework.context.annotation.Import;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRecord;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRegistry;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactReservation;
+import io.github.jaeseongs95.portal.app.artifact.ConsumeReason;
 import io.github.jaeseongs95.portal.app.artifact.ReleaseReason;
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
 import io.github.jaeseongs95.portal.domain.id.TargetId;
@@ -71,6 +72,20 @@ class JdbcArtifactRegistryBudgetTest {
         assertThat(registry.budget().chargedBytes()).isEqualTo(32);
         assertThat(registry.reserve(fixtures.upload(64), fixtures.at())).isInstanceOf(ArtifactReservation.Reserved.class);
         assertThat(registry.deleting()).extracting(ArtifactRecord::id).containsExactly(dying);
+    }
+
+    @Test
+    @DisplayName("S-D0012-18 (store half): a row in CONSUMING charges nothing (its bytes are being moved out or removed), the tombstone after it charges one byte")
+    void aRowInUseChargesNothing() {
+        ArtifactId file = fixtures.readyArtifact(registry, fixtures.stagedFile(64), fixtures.bytes(64, 1));
+        assertThat(registry.budget().chargedBytes()).isEqualTo(64);
+
+        registry.beginConsume(file, ConsumeReason.MOVED);
+
+        assertThat(registry.budget().chargedBytes()).isZero();
+        assertThat(registry.consuming()).extracting(ArtifactRecord::id).containsExactly(file);
+        registry.completeConsume(file, ConsumeReason.MOVED);
+        assertThat(registry.budget().chargedBytes()).isEqualTo(1);
     }
 
     @Test

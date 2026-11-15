@@ -49,8 +49,9 @@ import io.github.jaeseongs95.portal.domain.id.OwnerId;
  * <em>before</em> the transaction opens (Principles 4.4), which is why {@link #reserve} drives a {@link TransactionTemplate} and is not itself {@code @Transactional}.
  *
  * <p>Every change of a row first takes the optimistic lock with one conditional UPDATE of the version (the winner changes one row, a loser none) and then writes
- * the row in the same transaction. The budget is a sum read in the same transaction as the insert; two reservations that run at the same moment on different
- * connections can overshoot it by one file (the guarantee of "READ COMMITTED"; a hard cap would need a lock on a counter row, which no use case has asked for).
+ * the row in the same transaction. The budget is a sum read in the same transaction as the insert; when N reservations are judged at the same moment on different
+ * connections, each sees none of the others, so together they can overshoot the budget by up to N - 1 files (the guarantee of "READ COMMITTED"; a hard cap would need a lock on a
+ * counter row, which no use case has asked for). The same holds for {@link #sizeDownload}.
  * Refusals the use case must tell apart are returned as {@link ArtifactReservation} variants; every other business failure is a {@link RequestRefusedException}.
  */
 @Repository

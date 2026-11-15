@@ -52,7 +52,7 @@ public class ArtifactReaper {
         int failed = 0;
         // The rows that a removal left in DELETING come first, whatever their expiry: they hold a charge for bytes nobody uses (defect D-0012).
         List<ArtifactRecord> due = new ArrayList<>(registry.deleting());
-        // The uses that began and did not finish (a settlement that failed after the move, a crash) hold a charge for a file that is as good as gone: they are finished with their own reason.
+        // The uses that began and did not finish (a settlement that failed after the move, a crash) are files that are as good as gone and would stay for good: they are finished with their own reason.
         due.addAll(registry.consuming());
         due.addAll(registry.expired(clock.instant()));
         for (ArtifactRecord artifact : due) {

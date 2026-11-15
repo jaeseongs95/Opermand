@@ -33,7 +33,7 @@ import io.github.jaeseongs95.portal.domain.id.Digester;
  *   <li>a row in {@code DELETING} has its bytes deleted and the row released.</li>
  * </ol>
  * A row in {@code CONSUMING} is finished: nothing is in use at a start, the file was moved or removed already or is as good as gone, so its bytes are deleted and the row becomes the
- * tombstone for the reason it recorded (defect D-0012: it used to be only reported and kept its charge for good). The check does file I/O and several short registry calls and is not called inside a transaction (Principles 4.4); stage 3 calls
+ * tombstone for the reason it recorded (defect D-0012: it used to be only reported and kept its charge for good). A deletion that fails is logged and left to the reap; it never refuses the start. The check does file I/O and several short registry calls and is not called inside a transaction (Principles 4.4); stage 3 calls
  * {@link #reconcile()} once at start-up. A refusal in the middle leaves the repairs already made in place; they are idempotent, so a second run continues.
  */
 @Component
@@ -74,14 +74,14 @@ public class ArtifactStartupCheck {
         for (ArtifactRecord record : rows.values()) {
             switch (record.state()) {
                 case DELETING -> {
-                    payloads.delete(record.id());
-                    registry.release(record.id(), ReleaseReason.ABANDONED);
-                    deleted.add(record.id());
+                    if (deleteBytes(record)) {
+                        registry.release(record.id(), ReleaseReason.ABANDONED);
+                        deleted.add(record.id());
+                    }
                 }
                 case CONSUMING -> {
                     // Nothing is in use at a start, so a use that began and did not finish is finished now, for the reason it recorded (defect D-0012).
-                    if (record.consumption() instanceof ConsumeState.Consuming consuming) {
-                        payloads.delete(record.id());
+                    if (record.consumption() instanceof ConsumeState.Consuming consuming && deleteBytes(record)) {
                         registry.completeConsume(record.id(), consuming.reason());
                         finishedConsumptions.add(record.id());
                     }
@@ -94,6 +94,20 @@ public class ArtifactStartupCheck {
             deleted.size(), finishedConsumptions.size());
         quarantine.log();
         return new ArtifactReconciliation(quarantined, truncated, deleted, finishedConsumptions);
+    }
+
+    /**
+     * Deletes the bytes of a row that is being removed. A file that cannot be deleted (locked, a failing disk) must not refuse the start of the whole application: the failure is logged
+     * with its cause, the row stays as it is and the reap tries it again on every run (defect D-0012, S-D0012-19). Returns whether the bytes are gone.
+     */
+    private boolean deleteBytes(ArtifactRecord record) {
+        try {
+            payloads.delete(record.id());
+            return true;
+        } catch (RuntimeException e) {
+            LOG.warn("The bytes of the artifact " + record.id().value() + " (" + record.state() + ") could not be deleted at the start; the row stays and the reap tries again", e);
+            return false;
+        }
     }
 
     private void checkPayload(ArtifactRecord record, Set<ArtifactId> stored, List<ArtifactId> truncated) {

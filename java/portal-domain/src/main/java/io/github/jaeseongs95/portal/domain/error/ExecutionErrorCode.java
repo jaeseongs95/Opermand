@@ -10,7 +10,7 @@ public enum ExecutionErrorCode implements ErrorCode {
 
     /**
      * {@link #ARTIFACT_QUOTA} is retryable: the budget is released when another transfer ends or the reaper removes an expired one, so the same request can succeed later (common
-     * attachment design 8, defect D-0012). {@link #ARTIFACT_STORAGE_FULL} is not: the owner has to free the disk. 2.4.2 sent neither as retryable; compatibility was dropped.
+     * attachment design, revision 8, defect D-0012). {@link #ARTIFACT_STORAGE_FULL} is not: the owner has to free the disk. 2.4.2 sent neither as retryable; compatibility was dropped.
      */
     @Override
     public boolean retryableByDefault() {

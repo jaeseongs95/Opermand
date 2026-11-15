@@ -359,6 +359,27 @@ class ArtifactBudgetRecoveryTest {
     }
 
     @Test
+    @DisplayName("S-D0012-18 (D-0012 rework): a CONSUMING row whose bytes cannot be deleted charges nothing, like a DELETING one: a new transfer is accepted while every reap fails on it, and the reap finishes it as soon as the file can be deleted")
+    void aConsumptionThatCannotBeFinishedDoesNotEatTheBudget() {
+        ArtifactId stuck = expiredArtifact(new byte[9_000]);
+        registry.beginConsume(stuck, ConsumeReason.REMOVED);
+        for (int i = 0; i < 10; i++) {
+            assertThat(registry.reserve(uploadSpec(9_500), clock.instant())).isInstanceOf(ArtifactReservation.Reserved.class);
+        }
+        ArtifactReaper lockedReaper = new ArtifactReaper(registry, new UndeletablePayloads(payloads), gate, clock, quarantine);
+
+        assertThat(lockedReaper.reap()).isEqualTo(new ReapReport.Reaped(0, 1));
+
+        assertThat(registry.find(stuck).orElseThrow().state()).isEqualTo(ArtifactState.CONSUMING);
+        assertThat(registry.budget().chargedBytes()).as("the ten uploads only: the 9,000 byte file in use charges nothing").isEqualTo(95_000L);
+        assertThat(registry.reserve(uploadSpec(5_000), clock.instant())).isInstanceOf(ArtifactReservation.Reserved.class);
+
+        assertThat(reaper.reap()).as("the disk works again").isEqualTo(new ReapReport.Reaped(1, 0));
+        assertThat(registry.find(stuck).orElseThrow().state()).isEqualTo(ArtifactState.CONSUMED);
+        assertThat(registry.budget().chargedBytes()).isEqualTo(95_000L + 5_000L + 1L);
+    }
+
+    @Test
     @DisplayName("S-D0012-13 (D-0012 rework): a reap finishes a use that began and did not finish, for the reason it recorded: the bytes go, the row is a one byte tombstone; an expired row is released in the same run")
     void aReapFinishesAnOpenConsumption() {
         ArtifactId open = expiredArtifact(new byte[300]);

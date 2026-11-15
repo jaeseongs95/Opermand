@@ -1,3 +1,7 @@
+        if (budgetBytes < maxFileBytes) {
+            // Not even one file of the largest size would fit: a request that no wait could ever let in would be refused for good (and reported as retryable, ARTIFACT_QUOTA).
+            throw new IllegalArgumentException("The budget must hold at least one file: budgetBytes " + budgetBytes + " is below maxFileBytes " + maxFileBytes);
+        }
 package io.github.jaeseongs95.portal.store.artifact;
 
 import java.time.Duration;
@@ -11,7 +15,7 @@ import io.github.jaeseongs95.portal.app.artifact.ChunkDigest;
  * the disk). The product's assembly (portal-server) builds one bean from its settings ({@code BRIDGE_TRANSFER_BUDGET_BYTES}); this module has no property of its
  * own. The constants below are the defaults of the 2.x product.
  *
- * @param budgetBytes       the budget all rows may charge together
+ * @param budgetBytes       the budget all rows may charge together; at least {@code maxFileBytes}
  * @param maxFileBytes      the largest declared size of one file; the table's CHECK allows 64 MiB at most
  * @param chunkBytes        the largest chunk the registry accepts
  * @param uploadTimeToLive  how long an upload that nobody submitted stays (the use case passes it in the {@code ArtifactSpec})
@@ -37,6 +41,10 @@ public record ArtifactLimits(long budgetBytes, long maxFileBytes, int chunkBytes
         }
         if (maxFileBytes < 1 || maxFileBytes > MAX_FILE_BYTES) {
             throw new IllegalArgumentException("maxFileBytes must be 1 to " + MAX_FILE_BYTES + ": " + maxFileBytes);
+        }
+        if (budgetBytes < maxFileBytes) {
+            // Not even one file of the largest size would fit: such a request could never be let in, however long it waits, yet ARTIFACT_QUOTA is reported as retryable.
+            throw new IllegalArgumentException("The budget must hold at least one file: budgetBytes " + budgetBytes + " is below maxFileBytes " + maxFileBytes);
         }
         if (chunkBytes < 1 || chunkBytes > CHUNK_BYTES) {
             throw new IllegalArgumentException("chunkBytes must be 1 to " + CHUNK_BYTES + ": " + chunkBytes);
