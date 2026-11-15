@@ -192,7 +192,7 @@ class OpenSshSessionPoolTest {
         }
 
         // The next request: the pool must not hand out the closed session and must not fail; it makes one new connection and the command runs.
-        Run after = run("echo " + AFTER);
+        Run after = run("echo " + AFTER + " && echo " + AFTER);
         assertThat(after.outcome().verdict()).as("the request after the server closed the session: " + after.outcome()).isEqualTo(OperationState.COMPLETED);
         assertThat(after.stdout()).as("the command ran once: its marker is in the output exactly once, and the marker of the first request is not").containsOnlyOnce(AFTER).doesNotContain(BEFORE);
 
