@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import org.apache.sshd.client.session.ClientSession;
-import org.apache.sshd.common.channel.exception.SshChannelOpenException;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.common.SftpException;
 import org.slf4j.Logger;
@@ -27,11 +26,11 @@ import org.springframework.stereotype.Component;
  * needs a password, the account is not allowed) has no elevated file work: the caller refuses the request, and nothing was written.
  *
  * <p>What the opening came to keeps apart what is different (defect D-0013): a place that holds nothing (status "no such file") is the next place and then "no server";
- * a server that answers the look with another refusal is that refusal; a server that refuses to open a channel while the session lives (it reached its
- * {@code MaxSessions}, or does not offer the subsystem) is {@link Opening.ChannelRefused}, as on the plain path; a program whose channel closes before it speaks SFTP is
- * {@link Opening.NotStarted}, and one that does not answer in time or whose wait is interrupted is {@link Opening.StartUnconfirmed} (not a refusal: it is not known);
- * only a session that is gone is {@link Opening.Lost}. The failure to close the channel that looked is the channel's own and does not change
- * what the look found.
+ * a server that answers the look with another refusal is that refusal; a program whose channel closes before it speaks SFTP is {@link Opening.NotStarted};
+ * a server that refuses to open a channel while the session lives (it reached its {@code MaxSessions}, or does not offer the subsystem), a program that does not
+ * answer in time and a wait that is interrupted are all {@link Opening.ChannelFailed}: the session is fine and the request is not refused, the elevated channel is
+ * not there, as on the plain path (the caller has no other use for telling them apart, so they are one result); only a session that is gone is {@link Opening.Lost}.
+ * The failure to close the channel that looked is the channel's own and does not change what the look found.
  */
 @Component
 public class SudoSftpChannels {
@@ -43,7 +42,7 @@ public class SudoSftpChannels {
         "/usr/libexec/sftp-server");
 
     /** What opening the elevated channel came to. */
-    public sealed interface Opening permits Opening.Opened, Opening.NoServer, Opening.NotStarted, Opening.StartUnconfirmed, Opening.ChannelRefused, Opening.LookRefused,
+    public sealed interface Opening permits Opening.Opened, Opening.NoServer, Opening.NotStarted, Opening.ChannelFailed, Opening.LookRefused,
         Opening.Lost {
         /**
          * The server program runs under {@code sudo -n}; the caller closes the client.
@@ -68,14 +67,11 @@ public class SudoSftpChannels {
         }
 
         /**
-         * The program was found, the session lives, and the SFTP initialization ended without an answer or was interrupted: whether the program started is not known, so
-         * this is neither a refusal nor a start.
+         * The session lives and there is no elevated channel, without a refusal of the request: the server refused to open a channel (the one that looks for the program
+         * or the one that runs it), or the program was found and its SFTP initialization ended without an answer or was interrupted, so whether it started is not known.
+         * Neither is a refusal nor a start; the caller treats both as a channel that could not be opened.
          */
-        record StartUnconfirmed() implements Opening {
-        }
-
-        /** The session lives and the server refused to open a channel (the one that looks for the program or the one that runs it). */
-        record ChannelRefused() implements Opening {
+        record ChannelFailed() implements Opening {
         }
 
         /**
@@ -130,7 +126,7 @@ public class SudoSftpChannels {
             look = plain.open(session);
         } catch (IOException e) {
             LOG.debug("The SFTP channel that looks for the server program could not be opened", e);
-            return session.isOpen() ? new Opening.ChannelRefused() : new Opening.Lost();
+            return session.isOpen() ? new Opening.ChannelFailed() : new Opening.Lost();
         }
         Optional<String> server;
         try {
@@ -160,11 +156,12 @@ public class SudoSftpChannels {
      * request (the wait is {@code SftpModuleProperties.SFTP_CHANNEL_OPEN_TIMEOUT}, 15 seconds by default), and ends the opening in one of these ways:
      * <ul>
      *   <li>the session is gone: {@link Opening.Lost};</li>
-     *   <li>the server answered the request to open the channel with an open failure ({@code SshChannelOpenException}): {@link Opening.ChannelRefused};</li>
      *   <li>the channel closed before the version answer ({@code EOFException}, "Closing while await init message"): the program ended without speaking SFTP, which is
      *       what {@code sudo -n} does when it needs a password or the account may not use it: {@link Opening.NotStarted}, the only case that is a refusal;</li>
-     *   <li>anything else with a live session, above all the wait that ended without an answer ({@code SocketTimeoutException}) and a thread that was interrupted
-     *       ({@code InterruptedIOException} that carries an {@code InterruptedException}; its interrupt status is set again here): whether the program started is not known, {@link Opening.StartUnconfirmed}.</li>
+     *   <li>anything else with a live session: the server answered the request to open the channel with an open failure ({@code SshChannelOpenException}), the wait
+     *       ended without an answer ({@code SocketTimeoutException}), or the thread was interrupted ({@code InterruptedIOException} that carries an
+     *       {@code InterruptedException}; its interrupt status is set again here). Whether the program started is not known, and the caller does not need to tell these
+     *       apart: {@link Opening.ChannelFailed}.</li>
      * </ul>
      */
     private Opening failedStart(ClientSession session, IOException failure) {
@@ -179,13 +176,10 @@ public class SudoSftpChannels {
         if (!session.isOpen()) {
             return new Opening.Lost();
         }
-        if (cause instanceof SshChannelOpenException) {
-            return new Opening.ChannelRefused();
-        }
         if (failure instanceof EOFException) {
             return new Opening.NotStarted();
         }
-        return new Opening.StartUnconfirmed();
+        return new Opening.ChannelFailed();
     }
 
     /**

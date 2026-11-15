@@ -348,11 +348,9 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
                 case SudoSftpChannels.Opening.NoServer noServer -> new Attempt.Refused(TransferErrorCode.INVALID_REQUEST);
                 case SudoSftpChannels.Opening.NotStarted notStarted -> new Attempt.Refused(TransferErrorCode.PERMISSION_DENIED);
                 case SudoSftpChannels.Opening.LookRefused denied -> new Attempt.Refused(denied.code());
-                // Not known whether the program started (no answer in time, the wait interrupted): not a refusal; a stop that fired meanwhile is the cause (S-D0013-18 to 21).
-                case SudoSftpChannels.Opening.StartUnconfirmed unconfirmed -> new Attempt.Unreachable(watch.fired().orElse(TransferFailureCause.CHANNEL_OPEN_FAILED));
-                // The session lives and the server refused a channel: the same cause as the plain path gives (the session is kept).
-                case SudoSftpChannels.Opening.ChannelRefused refusedChannel ->
-                    new Attempt.Unreachable(watch.fired().orElse(TransferFailureCause.CHANNEL_OPEN_FAILED));
+                // The session lives and there is no elevated channel without a refusal of the request (the server refused a channel, the program did not answer in time, the
+                // wait was interrupted): the same cause as the plain path gives, the session is kept; a stop that fired meanwhile is the cause (S-D0013-13, 14, 18 to 21).
+                case SudoSftpChannels.Opening.ChannelFailed failed -> new Attempt.Unreachable(watch.fired().orElse(TransferFailureCause.CHANNEL_OPEN_FAILED));
                 case SudoSftpChannels.Opening.Lost lost -> {
                     lease.discard();
                     yield new Attempt.Unreachable(watch.fired().orElse(TransferFailureCause.TRANSPORT_LOST));
