@@ -552,10 +552,14 @@ class JdbcArtifactRegistryTest {
         assertThat(registry.beginDeleteIfPresent(new ArtifactId("9".repeat(48)))).as("an unknown id is answered, not thrown").isFalse();
         assertThat(registry.budget().chargedBytes()).as("and nothing changed").isEqualTo(charged);
 
+        long stagingVersion = registry.find(staging).orElseThrow().version();
+        long readyVersion = registry.find(ready).orElseThrow().version();
         assertThat(registry.beginDeleteIfPresent(staging)).isTrue();
         assertThat(registry.find(staging).orElseThrow().state()).isEqualTo(ArtifactState.DELETING);
+        assertThat(registry.find(staging).orElseThrow().version()).as("the UPDATE raises the version, the basis of the optimistic lock").isEqualTo(stagingVersion + 1);
         assertThat(registry.beginDeleteIfPresent(ready)).isTrue();
         assertThat(registry.find(ready).orElseThrow().state()).isEqualTo(ArtifactState.DELETING);
+        assertThat(registry.find(ready).orElseThrow().version()).as("the UPDATE raises the version, the basis of the optimistic lock").isEqualTo(readyVersion + 1);
         assertThat(registry.beginDeleteIfPresent(ready)).as("again: the row is DELETING already").isTrue();
         assertThat(registry.beginDeleteIfPresent(deleting)).isTrue();
         assertThat(registry.find(deleting).orElseThrow().version()).as("a row already DELETING is not written again").isEqualTo(deletingVersion);

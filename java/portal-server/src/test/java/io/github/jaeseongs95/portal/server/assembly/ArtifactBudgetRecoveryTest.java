@@ -372,10 +372,10 @@ class ArtifactBudgetRecoveryTest {
         final ArtifactRegistry registry = (ArtifactRegistry) Proxy.newProxyInstance(ArtifactRegistry.class.getClassLoader(), new Class<?>[] {ArtifactRegistry.class},
             (proxy, method, args) -> {
                 calls.add(method.getName());
-                if (method.getName().equals("beginDeleteIfPresent") && beginDeleteRefusal != null) {
+                if ("beginDeleteIfPresent".equals(method.getName()) && beginDeleteRefusal != null) {
                     throw beginDeleteRefusal;
                 }
-                if (method.getName().equals("release")) {
+                if ("release".equals(method.getName())) {
                     reasons.put((ArtifactId) args[0], (ReleaseReason) args[1]);
                 }
                 Object answer;
@@ -384,7 +384,7 @@ class ArtifactBudgetRecoveryTest {
                 } catch (InvocationTargetException e) {
                     throw e.getCause();
                 }
-                if (method.getName().equals("deleting")) {
+                if ("deleting".equals(method.getName())) {
                     afterDeletingIsListed.run();
                 }
                 return answer;

@@ -100,7 +100,7 @@ public interface ArtifactRegistry {
      * {@link #beginDelete} for a caller that expects the row may be gone, such as the reap, whose list can be older than the use case that removed the row meanwhile (defect
      * D-0012). It answers {@code true} when the row is {@code DELETING} now (it was {@code STAGING} or {@code READY}, or it already was {@code DELETING}) and {@code false}
      * when there is no such artifact, in which case nothing changed: an unknown id is an answer, not a refusal. Every other refusal of {@link #beginDelete} is thrown
-     * ({@code ARTIFACT_BUSY} for a file in use, {@code STAGED_FILE_CONSUMED} for a consumed one). It is one conditional update, so it opens no transaction and the loser
+     * ({@code ARTIFACT_BUSY} for a file in use, {@code STAGED_FILE_CONSUMED} for a consumed one). It is one conditional update, so it sets no transaction boundary of its own and the loser
      * of a race is told by the rows changed.
      */
     boolean beginDeleteIfPresent(ArtifactId id);
