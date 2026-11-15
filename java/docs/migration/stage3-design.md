@@ -399,7 +399,7 @@ exec 한 번의 단계(`ExecPhase`, `ssh.exec` 내부 sealed 상태)와 결과 �
 ### 5.3 시험으로 고정(D-0012) [제안]
 S3-AR-01~09(8.3절). 핵심: 「예산 거절과 디스크 거절은 다른 변형·다른 코드·다른 값」, 「1090B 예약은 예산에 여유가 있으면 항상 수락」, 「보유분이 예산을 먹어 거절될 때 값이 보유분과 라이브분을 나눠 보인다」.
 
-**정정(D-0012 재작업, 리드 판정 D).** 5.2절 6번(보유분과 라이브 예약의 합산)과 위 마지막 핵심(S3-AR-05)은 바뀌었다. 격리(보유) 바이트는 아무것도 지우지 않으므로 예산에 합산하면 새 전송을 영구히 막는다. 격리 바이트는 새 전송 예산과 따로 집계하고(`ArtifactBudget.retainedFiles`·`retainedBytes`), 소유자에게 보이며, 새 전송을 막지 않고, 자동으로 지우지 않는다. 3단계는 보이는 방법을 로그로 한정한다: 기동 점검(`ArtifactStartupCheck`)과 매 주기 정리(`ArtifactReaper`)가 끝날 때 격리 파일 수와 바이트를 INFO 한 줄로 남긴다(`QuarantineNotice`, S-D0012-06·07). 관리자 화면 표시와 소유자 정리 명령은 4단계 관리자 API 작업이다. 그래서 `ReservedSplit`은 없어졌고 `BudgetExceeded(requestedBytes, liveBytes, budgetBytes)`와 `ARTIFACT_QUOTA` 값에는 `holdingBytes`가 없다. S3-AR-05와 RC-A-169·170의 「보유분 합산」 단언은 S-D0012-03이 대체한다. `ARTIFACT_QUOTA`의 `retryable`은 Contract 2.0 공개 계약이므로 `false`로 유지한다.
+**정정(D-0012 재작업, 리드 판정 D).** 5.2절 6번(보유분과 라이브 예약의 합산)과 위 마지막 핵심(S3-AR-05)은 바뀌었다. 격리(보유) 바이트는 아무것도 지우지 않으므로 예산에 합산하면 새 전송을 영구히 막는다. 격리 바이트는 새 전송 예산과 따로 집계하고(`ArtifactBudget.retainedFiles`·`retainedBytes`), 소유자에게 보이며, 새 전송을 막지 않고, 자동으로 지우지 않는다. 3단계는 보이는 방법을 로그로 한정한다: 기동 점검(`ArtifactStartupCheck`)과 매 주기 정리(`ArtifactReaper`)가 끝날 때 격리 파일 수와 바이트를 INFO 한 줄로 남긴다(`QuarantineNotice`, S-D0012-06·07). 관리자 화면 표시와 소유자 정리 명령은 4단계 관리자 API 작업이다. 그래서 `ReservedSplit`은 없어졌고 `BudgetExceeded(requestedBytes, liveBytes, budgetBytes)`와 `ARTIFACT_QUOTA` 값에는 `holdingBytes`가 없다. S3-AR-05와 RC-A-169·170의 「보유분 합산」 단언은 S-D0012-03이 대체한다. `ARTIFACT_QUOTA`의 `retryable`은 재작업(S-D0012-17)에서 `true`로 바꿨다(예산은 다른 전송이 끝나거나 정리기가 치우면 풀린다. `ARTIFACT_STORAGE_FULL`은 `false`). 다운로드는 0바이트로 예약하고 대상이 알린 크기로 예산·디스크를 판정한다(S-D0012-14~16).
 
 ---
 

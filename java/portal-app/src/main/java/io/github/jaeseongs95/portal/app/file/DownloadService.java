@@ -47,12 +47,11 @@ import io.github.jaeseongs95.portal.domain.id.ArtifactId;
 
 /**
  * Reads a file from a target into a new artifact and says how it ended (design 4.1, defect D-0013, decisions D3-17 and D3-03). The order is the one 2.x had and design 5.2
- * fixes: the bytes are reserved first (the largest file a transfer carries, so a transfer that cannot be stored never touches the target; the reservation shrinks to the
- * announced size as soon as the adapter has looked at the file, D-0012), then the target is read into the
+ * fixes: an artifact row is reserved first with no bytes, the adapter looks at the file and announces its size, and the budget and the disk judge that size (D-0012), then the target is read into the
  * artifact, then the stored bytes are checked against what the adapter confirmed, then the artifact is {@code READY} with its real size.
  *
  * <p>Every way to end without a verified artifact gives the reserved bytes back and answers an outcome that is {@code NOT_DISPATCHED}, needs no reconciliation and is
- * {@code FAILED}: a download only reads, so the target cannot be in doubt (D3-17). A reservation that the budget or the disk refused is the same outcome with the code
+ * {@code FAILED}: a download only reads, so the target cannot be in doubt (D3-17). A size that the budget or the disk refused (before the first byte is read) is the same outcome with the code
  * {@code ARTIFACT_QUOTA} or {@code ARTIFACT_STORAGE_FULL} and the numbers behind it, at stage {@code OPERATION} and {@code NOT_STARTED} (D-0012). An exception of the adapter (the
  * guard's {@code DispatchRefusedException}) discards the artifact and goes on to the caller.
  *
@@ -121,6 +120,10 @@ public class DownloadService {
             return stored(reserved.id(), sink, fetched);
         }
         discard(reserved.id());
+        if (sink.refusal().isPresent()) {
+            // The target announced a size that the budget or the disk cannot take: the same answer as a refused reservation, now that the size is known (defect D-0012).
+            return new DownloadExecution.NotStored(outcomes.reservationRefused(ArtifactRefusal.of(sink.refusal().orElseThrow())));
+        }
         if (result instanceof DownloadResult.Failed failed && failed.cause() == TransferFailureCause.LOCAL_IO_FAILED && sink.status() instanceof SinkResult.Failed sinkFailed) {
             // The adapter stopped because the sink failed; the use case, which owns the sink, knows the cause.
             return new DownloadExecution.NotStored(outcomes.localFailure(sinkFailed.cause()));
@@ -149,14 +152,15 @@ public class DownloadService {
     }
 
     /**
-     * The reservation: the largest file a transfer carries (the size is not known before the target is looked at), bound to the target the operation was approved for; the
-     * name is the last part of the remote path. When the adapter announces the real size, before the first byte, the {@link ArtifactSink} shrinks the reservation to it
-     * (defect D-0012); until then, and for an adapter that announces nothing, the largest file stays reserved.
+     * The reservation: no bytes, because the size is not known before the target is looked at, bound to the target the operation was approved for; the name is the last part of the
+     * remote path. The adapter announces the size of the file before its first block and the {@link ArtifactSink} sets the reservation to it, so the budget and the disk judge the real
+     * size (defect D-0012: reserving the largest file first refused a 1 KB download whenever less than a whole file was left). A target whose size cannot be seen is never read: the
+     * sink takes no byte before the size (a file without a size cannot be kept inside the budget).
      */
     private ArtifactSpec reservationOf(DownloadJob job) {
         DownloadInput input = job.input();
         BindingKind binding = input.binding() instanceof FileBinding.Bound ? BindingKind.BOUND : BindingKind.UNBOUND;
-        return new ArtifactSpec(ArtifactDirection.DOWNLOAD, fileNameOf(input), limits.maxFileSize().toBytes(), new ArtifactOrigin.Transfer(),
+        return new ArtifactSpec(ArtifactDirection.DOWNLOAD, fileNameOf(input), 0L, new ArtifactOrigin.Transfer(),
             new ArtifactDestination.Assigned(input.remotePath(), job.target().target().id(), job.approvedRevision(), binding), OverwriteMode.REPLACE, input.elevation(),
             UploadProtocol.UNSPECIFIED, ArtifactRetention.RELEASABLE, times.download());
     }

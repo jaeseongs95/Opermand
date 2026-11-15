@@ -33,4 +33,15 @@ class ArtifactLimitsTest {
         assertThatThrownBy(() -> new ArtifactLimits(1, 1, 1, Duration.ZERO, 0)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new ArtifactLimits(1, 1, 1, ttl, -1)).isInstanceOf(IllegalArgumentException.class);
     }
+
+    @Test
+    @DisplayName("S-D0012-20: a budget below the largest file is refused (no file of that size could ever be let in, as OutputLimits refuses a budget below one output); equal is accepted")
+    void aBudgetBelowOneFileIsRefused() {
+        Duration ttl = ArtifactLimits.UPLOAD_TTL;
+
+        assertThatThrownBy(() -> new ArtifactLimits(9, 10, 1, ttl, 0)).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("budget");
+        assertThatThrownBy(() -> new ArtifactLimits(ArtifactLimits.MAX_FILE_BYTES - 1, ArtifactLimits.MAX_FILE_BYTES, 1, ttl, 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThat(new ArtifactLimits(10, 10, 1, ttl, 0).budgetBytes()).isEqualTo(10);
+        assertThat(ArtifactLimits.defaults().budgetBytes()).isGreaterThanOrEqualTo(ArtifactLimits.defaults().maxFileBytes());
+    }
 }

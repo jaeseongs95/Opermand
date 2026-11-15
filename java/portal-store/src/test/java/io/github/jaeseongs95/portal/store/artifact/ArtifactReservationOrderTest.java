@@ -120,6 +120,25 @@ class ArtifactReservationOrderTest {
     }
 
     @Test
+    @DisplayName("S-D0012-15 (store half): the size a target announced for a download is judged by the disk with the scripted usable space: one byte short is DiskSpaceInsufficient (not a budget refusal) and the row keeps its empty reservation; with the margin kept it is Reserved")
+    void anAnnouncedSizeIsJudgedByTheDisk() {
+        disk.usable(1_000_000_000_000L);
+        ArtifactId download = fixtures.reservedId(registry.reserve(fixtures.download(0), fixtures.at()));
+        long announced = 5_000L;
+        disk.usable(announced + MARGIN - 1);
+
+        ArtifactReservation refused = registry.sizeDownload(download, announced);
+
+        assertThat(refused).isEqualTo(new ArtifactReservation.DiskSpaceInsufficient(announced, announced + MARGIN - 1, MARGIN));
+        assertThat(registry.find(download).orElseThrow().spec().sizeBytes()).isZero();
+        assertThat(registry.budget().chargedBytes()).isEqualTo(1);
+
+        disk.usable(announced + MARGIN);
+        assertThat(registry.sizeDownload(download, announced)).isEqualTo(new ArtifactReservation.Reserved(download));
+        assertThat(registry.budget().chargedBytes()).isEqualTo(announced);
+    }
+
+    @Test
     @DisplayName("S3-AR-03: a disk that cannot be read is not a refusal: ARTIFACT_STORAGE_IO_ERROR with the cause kept, and no row is created")
     void anUnreadableDiskIsAnIoErrorAndNotARefusal() {
         disk.failToRead(new UncheckedIOException(new IOException("the volume is gone")));

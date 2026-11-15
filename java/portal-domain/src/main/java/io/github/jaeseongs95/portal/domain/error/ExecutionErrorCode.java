@@ -9,6 +9,15 @@ public enum ExecutionErrorCode implements ErrorCode {
     SSH_CONNECT_FAILED, SSH_CHANNEL_OPEN_FAILED, SSH_EXECUTION_FAILED, OUTPUT_CAPACITY, OUTPUT_CAPTURE_FAILED, OPERATION_FAILED, ARTIFACT_QUOTA, ARTIFACT_STORAGE_FULL;
 
     /**
+     * {@link #ARTIFACT_QUOTA} is retryable: the budget is released when another transfer ends or the reaper removes an expired one, so the same request can succeed later (common
+     * attachment design, revision 8, defect D-0012). {@link #ARTIFACT_STORAGE_FULL} is not: the owner has to free the disk. 2.4.2 sent neither as retryable; compatibility was dropped.
+     */
+    @Override
+    public boolean retryableByDefault() {
+        return this == ARTIFACT_QUOTA;
+    }
+
+    /**
      * The two refusals of the byte reservation are answered before anything is sent to the target (2.x transferRefusals rows carry {@code executionAttempted: false});
      * every other code of this category describes a step after the effect may have started.
      */

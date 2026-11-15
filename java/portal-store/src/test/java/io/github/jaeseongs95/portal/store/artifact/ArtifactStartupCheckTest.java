@@ -38,6 +38,7 @@ import io.github.jaeseongs95.portal.app.artifact.QuarantineNotice;
 import io.github.jaeseongs95.portal.domain.error.ArtifactErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
+import io.github.jaeseongs95.portal.domain.id.Digester;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
 import io.github.jaeseongs95.portal.store.StorageRoots;
 import io.github.jaeseongs95.portal.store.StoreTest;
@@ -72,9 +73,13 @@ class ArtifactStartupCheckTest {
     private final StagedActionRowRepository actions;
     private final ArtifactChunkRowRepository chunks;
     private final ArtifactRowRepository artifacts;
+    private final Digester digester;
+    private final QuarantineNotice quarantine;
 
     ArtifactStartupCheckTest(ArtifactRegistry registry, ArtifactPayloadStore payloads, ArtifactStartupCheck startup, StorageRoots roots,
-                             StagedActionRowRepository actions, ArtifactChunkRowRepository chunks, ArtifactRowRepository artifacts) {
+                             StagedActionRowRepository actions, ArtifactChunkRowRepository chunks, ArtifactRowRepository artifacts, Digester digester, QuarantineNotice quarantine) {
+        this.digester = digester;
+        this.quarantine = quarantine;
         this.registry = registry;
         this.payloads = payloads;
         this.startup = startup;
@@ -162,6 +167,50 @@ class ArtifactStartupCheckTest {
     }
 
     @Test
+    @DisplayName("S-D0012-19: bytes that cannot be deleted at the start do not refuse the start: a WARN with the cause is logged for each, the DELETING and the CONSUMING row stay (charging nothing), and the next start with a working disk finishes both")
+    void aDeletionThatFailsAtTheStartDoesNotRefuseIt() {
+        ArtifactId dying = fixtures.reservedId(registry.reserve(fixtures.upload(8), fixtures.at()));
+        appendBoth(dying, 0, 0, new byte[] {1, 2, 3, 4});
+        registry.beginDelete(dying);
+        ArtifactId using = readyWithFile(fixtures.stagedFile(4), new byte[] {5, 5, 5, 5});
+        registry.beginConsume(using, ConsumeReason.REMOVED);
+        ArtifactPayloadStore locked = (ArtifactPayloadStore) java.lang.reflect.Proxy.newProxyInstance(ArtifactPayloadStore.class.getClassLoader(), new Class<?>[] {ArtifactPayloadStore.class},
+            (proxy, method, args) -> {
+                if (method.getName().equals("delete")) {
+                    throw new java.io.UncheckedIOException(new IOException("the file is locked"));
+                }
+                try {
+                    return method.invoke(payloads, args);
+                } catch (java.lang.reflect.InvocationTargetException e) {
+                    throw e.getCause();
+                }
+            });
+        Logger log = LoggerFactory.getLogger(ArtifactStartupCheck.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        ((ch.qos.logback.classic.Logger) log).addAppender(appender);
+        ArtifactReconciliation report;
+        try {
+            report = new ArtifactStartupCheck(registry, locked, digester, quarantine).reconcile();
+        } finally {
+            ((ch.qos.logback.classic.Logger) log).detachAppender(appender);
+        }
+
+        assertThat(report.deleted()).isEmpty();
+        assertThat(report.finishedConsumptions()).isEmpty();
+        assertThat(registry.find(dying).orElseThrow().state()).isEqualTo(ArtifactState.DELETING);
+        assertThat(registry.find(using).orElseThrow().state()).isEqualTo(ArtifactState.CONSUMING);
+        assertThat(registry.budget().chargedBytes()).as("neither row charges the budget (S-D0012-11, S-D0012-18)").isZero();
+        assertThat(appender.list).filteredOn(event -> event.getLevel() == Level.WARN && event.getThrowableProxy() != null).hasSize(2);
+
+        ArtifactReconciliation next = startup.reconcile();
+        assertThat(next.deleted()).containsExactly(dying);
+        assertThat(next.finishedConsumptions()).containsExactly(using);
+        assertThat(registry.find(dying)).isEmpty();
+        assertThat(registry.find(using).orElseThrow().state()).isEqualTo(ArtifactState.CONSUMED);
+    }
+
+    @Test
     @DisplayName("RC-A-167: a row marked for deletion has its bytes deleted and its row released, whether the file is still there or not")
     void aCommittedDeletionIsFinished() {
         ArtifactId withFile = fixtures.reservedId(registry.reserve(fixtures.upload(8), fixtures.at()));
@@ -239,7 +288,7 @@ class ArtifactStartupCheckTest {
         assertThat(report.quarantined()).isEmpty();
         assertThat(report.truncated()).isEmpty();
         assertThat(report.deleted()).isEmpty();
-        assertThat(report.unfinishedConsumptions()).isEmpty();
+        assertThat(report.finishedConsumptions()).isEmpty();
         assertThat(registry.find(pending)).contains(pendingBefore);
         assertThat(registry.find(partial)).contains(partialBefore);
         assertThat(registry.find(finished)).contains(finishedBefore);
@@ -263,20 +312,23 @@ class ArtifactStartupCheckTest {
     }
 
     @Test
-    @DisplayName("RC-B-095 / S3-AR-09: a consumption that was begun and not completed is reported and left as it is, with its bytes and the reason it began for; one without a file is not an error")
-    void anOpenConsumptionIsReported() {
+    @DisplayName("S-D0012-12 (RC-B-095 / S3-AR-09 replaced): a consumption that was begun and not completed is finished with the reason it began for: bytes deleted, tombstone, one byte charged; a bad chunk hash of the dying file does not refuse the start")
+    void anOpenConsumptionIsFinished() throws IOException {
         ArtifactId withFile = readyWithFile(fixtures.stagedFile(4), new byte[] {4, 4, 4, 4});
         registry.beginConsume(withFile, ConsumeReason.MOVED);
+        Files.write(file(withFile), new byte[] {9, 9, 9, 9});
         ArtifactId withoutFile = fixtures.readyArtifact(registry, fixtures.stagedFile(0), new byte[0]);
         registry.beginConsume(withoutFile, ConsumeReason.REMOVED);
 
         ArtifactReconciliation report = startup.reconcile();
 
-        assertThat(report.unfinishedConsumptions()).containsExactlyInAnyOrder(withFile, withoutFile);
-        assertThat(registry.find(withFile).orElseThrow().state()).isEqualTo(ArtifactState.CONSUMING);
-        assertThat(registry.find(withFile).orElseThrow().consumption()).as("the recovery sees the reason the use began for").isEqualTo(new ConsumeState.Consuming(ConsumeReason.MOVED));
-        assertThat(registry.find(withoutFile).orElseThrow().consumption()).isEqualTo(new ConsumeState.Consuming(ConsumeReason.REMOVED));
-        assertThat(payloads.length(withFile)).isEqualTo(4);
+        assertThat(report.finishedConsumptions()).containsExactlyInAnyOrder(withFile, withoutFile);
+        assertThat(registry.find(withFile).orElseThrow().consumption()).isEqualTo(new ConsumeState.ConsumedBecause(ConsumeReason.MOVED));
+        assertThat(registry.find(withoutFile).orElseThrow().consumption()).isEqualTo(new ConsumeState.ConsumedBecause(ConsumeReason.REMOVED));
+        assertThat(registry.find(withFile).orElseThrow().state()).isEqualTo(ArtifactState.CONSUMED);
+        assertThat(payloads.stored()).as("the bytes are gone").isEmpty();
+        assertThat(registry.budget().chargedBytes()).as("a tombstone charges one byte").isEqualTo(2);
+        assertThat(startup.reconcile().finishedConsumptions()).as("a second run changes nothing").isEmpty();
         assertThat(report.quarantined()).isEmpty();
     }
 

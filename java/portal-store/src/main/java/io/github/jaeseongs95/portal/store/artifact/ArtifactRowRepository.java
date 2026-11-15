@@ -22,12 +22,12 @@ interface ArtifactRowRepository extends CrudRepository<ArtifactRow, String> {
     int bumpVersion(@Param("id") String id, @Param("expected") long expected, @Param("next") long next);
 
     /**
-     * Shrinks the reserved size of a download that has received no byte, in one statement (the version moves with it, so a concurrent step of the optimistic lock loses). It
-     * changes one row when the artifact is such a download and the size is not above what it holds, and none otherwise.
+     * Sets the reserved size of a download that has received no byte, in one statement (the version moves with it, so a concurrent step of the optimistic lock loses). It
+     * changes one row when the artifact is such a download, and none otherwise.
      */
     @Modifying
-    @Query("UPDATE artifact SET size_bytes = :size, version = version + 1 WHERE id = :id AND direction = 'DOWNLOAD' AND state = 'STAGING' AND received_bytes = 0 AND size_bytes >= :size")
-    int narrowDownload(@Param("id") String id, @Param("size") long size);
+    @Query("UPDATE artifact SET size_bytes = :size, version = version + 1 WHERE id = :id AND direction = 'DOWNLOAD' AND state = 'STAGING' AND received_bytes = 0")
+    int resizeDownload(@Param("id") String id, @Param("size") long size);
 
     /**
      * Moves a row that is {@code STAGING} or {@code READY} to {@code DELETING} in one statement (the version moves with it, so a concurrent step of the optimistic lock loses).
@@ -37,8 +37,12 @@ interface ArtifactRowRepository extends CrudRepository<ArtifactRow, String> {
     @Query("UPDATE artifact SET state = 'DELETING', version = version + 1 WHERE id = :id AND state IN ('STAGING', 'READY')")
     int markDeleting(@Param("id") String id);
 
-    /** What the rows charge now: a consumed row and an empty file charge one byte each (2.x {@code artifacts.mjs:18}). */
-    @Query("SELECT COALESCE(SUM(CASE WHEN state = 'CONSUMED' THEN 1 WHEN size_bytes < 1 THEN 1 ELSE size_bytes END), 0) FROM artifact")
+    /**
+     * What the rows charge now: a consumed row and an empty file charge one byte each (2.x {@code artifacts.mjs:18}). A row in {@code DELETING} or {@code CONSUMING} charges nothing: its bytes
+     * are being removed and no transfer uses them, so an artifact that cannot be deleted must not eat the application budget for good (defect D-0012, S-D0012-11, S-D0012-18); the
+     * disk check sees the space it still uses.
+     */
+    @Query("SELECT COALESCE(SUM(CASE WHEN state IN ('DELETING', 'CONSUMING') THEN 0 WHEN state = 'CONSUMED' THEN 1 WHEN size_bytes < 1 THEN 1 ELSE size_bytes END), 0) FROM artifact")
     long chargedBytes();
 
     Optional<ArtifactRow> findByPublicUuid(String publicUuid);
@@ -49,8 +53,9 @@ interface ArtifactRowRepository extends CrudRepository<ArtifactRow, String> {
     List<ArtifactRow> findByRetentionAndStateInAndExpiresAtLessThanEqualOrderByExpiresAtAscIdAsc(ArtifactRetention retention, Collection<ArtifactState> states,
                                                                                                   Instant now);
 
-    /** The rows whose removal began and did not finish, in the order of their ids. */
+    /** The rows in one state, in the order of their ids ({@code DELETING}: removal began and did not finish; {@code CONSUMING}: a use began and did not finish). */
     List<ArtifactRow> findByStateOrderByIdAsc(ArtifactState state);
+
 
     /** Every row except the consumed ones (their bytes are gone). */
     List<ArtifactRow> findByStateNot(ArtifactState state);

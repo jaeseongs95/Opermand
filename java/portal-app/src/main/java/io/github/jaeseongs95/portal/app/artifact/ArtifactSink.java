@@ -2,6 +2,7 @@ package io.github.jaeseongs95.portal.app.artifact;
 
 import java.util.Arrays;
 import java.util.Objects;
+import java.util.Optional;
 
 import io.github.jaeseongs95.portal.app.remote.PayloadSink;
 import io.github.jaeseongs95.portal.app.remote.SinkResult;
@@ -26,10 +27,13 @@ public final class ArtifactSink implements PayloadSink {
     private final Digester digester;
     private final RunningDigest whole = new RunningDigest();
 
+    private long announced = -1L;
+    private ArtifactReservation refusal;
     private long written;
     private int nextChunk;
     private SinkResult state = new SinkResult.Accepted();
 
+    /** A sink of a download: its size is not known yet, and {@link #append} takes no byte until {@link #expect} announced it. */
     public ArtifactSink(ArtifactId id, ArtifactPayloadStore payloads, ArtifactRegistry registry, Digester digester) {
         this.id = Objects.requireNonNull(id, "id");
         this.payloads = Objects.requireNonNull(payloads, "payloads");
@@ -38,8 +42,19 @@ public final class ArtifactSink implements PayloadSink {
     }
 
     /**
-     * The target announced the size of the file: the reservation, which held the largest file a transfer carries, shrinks to that size at once, so a download holds no more
-     * of the budget than its file needs (defect D-0012). Only a download that has received nothing can shrink; any other artifact fails the sink.
+     * A sink of an artifact whose size was declared when it was reserved (an import, a copy): the reservation holds that size already, and the registry refuses bytes beyond it,
+     * so no announcement is needed.
+     */
+    public static ArtifactSink declared(ArtifactId id, ArtifactPayloadStore payloads, ArtifactRegistry registry, Digester digester) {
+        ArtifactSink sink = new ArtifactSink(id, payloads, registry, digester);
+        sink.announced = Long.MAX_VALUE;
+        return sink;
+    }
+
+    /**
+     * The target announced the size of the file, before the first byte: the reservation, which held no bytes, is set to that size, so a download holds exactly what its file needs and
+     * a small file is not refused for the budget a large one would have needed (defect D-0012). The budget and the disk judge the announced size; when either refuses, the sink fails
+     * and {@link #refusal()} tells which. Only a download that has received nothing can be sized; the size is announced once.
      */
     @Override
     public SinkResult expect(long totalBytes) {
@@ -47,17 +62,36 @@ public final class ArtifactSink implements PayloadSink {
             return state;
         }
         try {
-            registry.narrowReservation(id, totalBytes);
+            if (announced >= 0) {
+                throw new IllegalStateException("The size of the file was announced twice");
+            }
+            ArtifactReservation answer = registry.sizeDownload(id, totalBytes);
+            if (answer instanceof ArtifactReservation.Reserved) {
+                announced = totalBytes;
+            } else {
+                refusal = answer;
+                state = new SinkResult.Failed(ArtifactRefusal.of(answer).toException());
+            }
         } catch (RuntimeException e) {
             state = new SinkResult.Failed(e);
         }
         return state;
     }
 
+    /** The refusal of the announced size by the budget, the disk or the file limit, when that is why the sink failed; the use case answers it as it answers a refused reservation. */
+    public Optional<ArtifactReservation> refusal() {
+        return Optional.ofNullable(refusal);
+    }
+
     @Override
     public SinkResult append(byte[] data) {
         Objects.requireNonNull(data, "data");
         if (state instanceof SinkResult.Failed) {
+            return state;
+        }
+        if (announced < 0 || written + data.length > announced) {
+            // Without a size the budget cannot be kept, and bytes beyond the announced size were never reserved (defect D-0012).
+            state = new SinkResult.Failed(new IllegalStateException(announced < 0 ? "The size of the file was not announced before its bytes" : "The bytes exceed the announced size"));
             return state;
         }
         try {

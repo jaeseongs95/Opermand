@@ -285,20 +285,38 @@ class TransferServicesTest {
     }
 
     @Test
-    @DisplayName("S3-AR-02 / D-0012: a download whose reservation the budget refuses is FAILED with ARTIFACT_QUOTA at the operation stage, NOT_STARTED, the numbers in the text, and the target was never asked")
-    void aRefusedReservationIsAClassifiedFailureAndTheTargetIsNotAsked() {
+    @DisplayName("S-D0012-14 (S3-AR-02 replaced): a small file is downloaded although less than a whole file (10,000) of the budget is left: the target is asked for the size first and the budget judges that size")
+    void aSmallDownloadFitsWhereTheLargestFileWouldNot() {
+        for (int i = 0; i < 9; i++) {
+            reserveUpload(bytes(9_500, i));
+        }
+        remote.served = bytes(1_000, 3);
+
+        DownloadExecution execution = downloads.download(downloadJob(), CONTROL);
+
+        assertThat(execution).isInstanceOf(DownloadExecution.Stored.class);
+        assertThat(registry.budget().chargedBytes()).isEqualTo(85_500L + 1_000L);
+    }
+
+    @Test
+    @DisplayName("S-D0012-15 (S3-AR-02 replaced): a download whose announced size the budget refuses is FAILED with ARTIFACT_QUOTA (retryable) at the operation stage, NOT_STARTED, the numbers in the text; no row and no charge is left")
+    void anAnnouncedSizeTheBudgetRefusesIsAClassifiedFailure() {
         for (int i = 0; i < 10; i++) {
             reserveUpload(bytes(9_500, i));
         }
+        remote.served = bytes(6_000, 4);
 
         DownloadExecution execution = downloads.download(downloadJob(), CONTROL);
 
         ExecutionOutcome outcome = execution.outcome();
         assertThat(execution).isInstanceOf(DownloadExecution.NotStored.class);
         assertThat(outcome.failure()).isEqualTo(new ExecutionFailure.Classified(ExecutionStage.OPERATION, ExecutionErrorCode.ARTIFACT_QUOTA, RemoteOutcome.NOT_STARTED));
-        assertThat(outcome.texts().get(0)).contains("requestedBytes=10000", "liveBytes=95000", "budgetBytes=100000");
+        assertThat(outcome.texts().get(0)).contains("requestedBytes=6000", "liveBytes=95000", "budgetBytes=100000");
         assertThat(outcome.verdict()).isEqualTo(OperationState.FAILED);
-        assertThat(remote.downloads).as("the target was not asked").isEmpty();
+        assertThat(ExecutionErrorCode.ARTIFACT_QUOTA.retryableByDefault()).as("S-D0012-17: the budget is released by other transfers and the reaper").isTrue();
+        assertThat(ExecutionErrorCode.ARTIFACT_STORAGE_FULL.retryableByDefault()).as("S-D0012-17: the owner has to free the disk").isFalse();
+        assertThat(registry.holding()).as("only the ten uploads").hasSize(10);
+        assertThat(registry.budget().chargedBytes()).isEqualTo(95_000L);
     }
 
     @Test

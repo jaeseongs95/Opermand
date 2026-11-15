@@ -30,10 +30,10 @@ import org.junit.jupiter.api.Test;
 class PortalExceptionTest {
 
     private static final Set<ErrorCode> RETRYABLE = Set.of(OperationErrorCode.OPERATION_QUEUE_FULL, OperationErrorCode.OPERATION_RECONCILIATION_CAPACITY,
-        CapacityErrorCode.REQUEST_QUEUE_FULL, RequestErrorCode.MAINTENANCE_ACTIVE, ArtifactErrorCode.ARTIFACT_MAINTENANCE, CapacityErrorCode.REQUEST_CAPACITY_EXCEEDED);
+        CapacityErrorCode.REQUEST_QUEUE_FULL, RequestErrorCode.MAINTENANCE_ACTIVE, ArtifactErrorCode.ARTIFACT_MAINTENANCE, CapacityErrorCode.REQUEST_CAPACITY_EXCEEDED, ExecutionErrorCode.ARTIFACT_QUOTA);
 
     @Test
-    @DisplayName("S2-FA-02 a code is retryable by default exactly for the full queues and the maintenance windows")
+    @DisplayName("S2-FA-02 a code is retryable by default exactly for the full queues, the maintenance windows and the byte budget (S-D0012-17)")
     void retryableByDefaultOnlyForFullQueuesAndMaintenance() {
         for (ErrorCode code : allCodes()) {
             RequestRefusedException refusal = new RequestRefusedException(code);

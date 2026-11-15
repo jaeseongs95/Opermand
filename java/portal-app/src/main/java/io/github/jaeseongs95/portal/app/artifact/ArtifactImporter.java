@@ -80,7 +80,7 @@ public class ArtifactImporter {
     }
 
     private ImportResult copy(ArtifactId id, ArtifactSpec spec, PayloadSource source, Digest expected) {
-        ArtifactSink sink = new ArtifactSink(id, payloads, registry, digester);
+        ArtifactSink sink = ArtifactSink.declared(id, payloads, registry, digester);
         PayloadRead read;
         try {
             read = source.open();

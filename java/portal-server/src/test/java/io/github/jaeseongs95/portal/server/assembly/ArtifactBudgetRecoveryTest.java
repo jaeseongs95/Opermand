@@ -39,7 +39,10 @@ import io.github.jaeseongs95.portal.app.artifact.ArtifactReservation;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRetention;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactSpec;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactState;
+import io.github.jaeseongs95.portal.app.artifact.ArtifactSink;
 import io.github.jaeseongs95.portal.app.artifact.ChunkDigest;
+import io.github.jaeseongs95.portal.app.artifact.ConsumeReason;
+import io.github.jaeseongs95.portal.app.artifact.ConsumeState;
 import io.github.jaeseongs95.portal.app.artifact.QuarantineNotice;
 import io.github.jaeseongs95.portal.app.artifact.ReleaseReason;
 import io.github.jaeseongs95.portal.app.artifact.StagingTimes;
@@ -53,6 +56,7 @@ import io.github.jaeseongs95.portal.app.remote.DownloadResult;
 import io.github.jaeseongs95.portal.app.remote.ExecutionControl;
 import io.github.jaeseongs95.portal.app.remote.FileDiagnostic;
 import io.github.jaeseongs95.portal.app.remote.TransferLimits;
+import io.github.jaeseongs95.portal.app.remote.SinkResult;
 import io.github.jaeseongs95.portal.app.storage.DiskSpace;
 import io.github.jaeseongs95.portal.app.storage.PayloadRead;
 import io.github.jaeseongs95.portal.app.storage.PayloadWrite;
@@ -194,7 +198,7 @@ class ArtifactBudgetRecoveryTest {
     }
 
     @Test
-    @DisplayName("S-D0012-02 (D-0012): a download whose discard failed leaves its row DELETING and charged; the next reap removes the row, and the budget is free again, although the row has not expired")
+    @DisplayName("S-D0012-02 (D-0012): a download whose discard failed leaves its row DELETING (charging nothing, S-D0012-11); the next reap removes the row although it has not expired")
     void aRowThatAFailedDiscardLeftDeletingIsRemovedByTheNextReap() {
         UndeletablePayloads locked = new UndeletablePayloads(payloads);
         DownloadService service = new DownloadService(registry, locked, remote, support, outcomes, limits, times, digester, clock);
@@ -205,7 +209,7 @@ class ArtifactBudgetRecoveryTest {
         assertThat(execution).isInstanceOf(DownloadExecution.NotStored.class);
         assertThat(locked.deleteCalls).as("the discard tried to delete the bytes").isEqualTo(1);
         assertThat(registry.holding()).as("the row stays").extracting(ArtifactRecord::state).containsExactly(ArtifactState.DELETING);
-        assertThat(registry.budget().chargedBytes()).as("and keeps its charge").isPositive();
+        assertThat(registry.budget().chargedBytes()).as("and charges nothing: its bytes are being removed").isZero();
 
         ReapReport report = reaper.reap();
 
@@ -333,6 +337,83 @@ class ArtifactBudgetRecoveryTest {
         } finally {
             root.detachAppender(appender);
         }
+    }
+
+    @Test
+    @DisplayName("S-D0012-11 (D-0012 rework): a row that cannot be deleted for good charges nothing, so a new transfer is accepted; every reap tries it again, counts it as failed and logs the cause")
+    void aRowThatCannotBeDeletedDoesNotEatTheBudget() {
+        ArtifactId stuck = aRowThatAFailedDiscardLeftDeleting();
+        for (int i = 0; i < 10; i++) {
+            assertThat(registry.reserve(uploadSpec(9_500), clock.instant())).isInstanceOf(ArtifactReservation.Reserved.class);
+        }
+        List<ILoggingEvent> log = captureReaperLog();
+        ArtifactReaper lockedReaper = new ArtifactReaper(registry, new UndeletablePayloads(payloads), gate, clock, quarantine);
+
+        assertThat(lockedReaper.reap()).isEqualTo(new ReapReport.Reaped(0, 1));
+        assertThat(lockedReaper.reap()).as("again on the next run").isEqualTo(new ReapReport.Reaped(0, 1));
+
+        assertThat(registry.find(stuck).orElseThrow().state()).isEqualTo(ArtifactState.DELETING);
+        assertThat(registry.budget().chargedBytes()).as("the ten uploads only").isEqualTo(95_000L);
+        assertThat(log).filteredOn(event -> event.getLevel() == Level.WARN).hasSize(2).allSatisfy(event -> assertThat(event.getThrowableProxy()).isNotNull());
+        assertThat(registry.reserve(uploadSpec(5_000), clock.instant())).as("the budget answers for the live rows, the disk check for the space").isInstanceOf(ArtifactReservation.Reserved.class);
+    }
+
+    @Test
+    @DisplayName("S-D0012-18 (D-0012 rework): a CONSUMING row whose bytes cannot be deleted charges nothing, like a DELETING one: a new transfer is accepted while every reap fails on it, and the reap finishes it as soon as the file can be deleted")
+    void aConsumptionThatCannotBeFinishedDoesNotEatTheBudget() {
+        ArtifactId stuck = expiredArtifact(new byte[9_000]);
+        registry.beginConsume(stuck, ConsumeReason.REMOVED);
+        for (int i = 0; i < 10; i++) {
+            assertThat(registry.reserve(uploadSpec(9_500), clock.instant())).isInstanceOf(ArtifactReservation.Reserved.class);
+        }
+        ArtifactReaper lockedReaper = new ArtifactReaper(registry, new UndeletablePayloads(payloads), gate, clock, quarantine);
+
+        assertThat(lockedReaper.reap()).isEqualTo(new ReapReport.Reaped(0, 1));
+
+        assertThat(registry.find(stuck).orElseThrow().state()).isEqualTo(ArtifactState.CONSUMING);
+        assertThat(registry.budget().chargedBytes()).as("the ten uploads only: the 9,000 byte file in use charges nothing").isEqualTo(95_000L);
+        assertThat(registry.reserve(uploadSpec(5_000), clock.instant())).isInstanceOf(ArtifactReservation.Reserved.class);
+
+        assertThat(reaper.reap()).as("the disk works again").isEqualTo(new ReapReport.Reaped(1, 0));
+        assertThat(registry.find(stuck).orElseThrow().state()).isEqualTo(ArtifactState.CONSUMED);
+        assertThat(registry.budget().chargedBytes()).isEqualTo(95_000L + 5_000L + 1L);
+    }
+
+    @Test
+    @DisplayName("S-D0012-13 (D-0012 rework): a reap finishes a use that began and did not finish, for the reason it recorded: the bytes go, the row is a one byte tombstone; an expired row is released in the same run")
+    void aReapFinishesAnOpenConsumption() {
+        ArtifactId open = expiredArtifact(new byte[300]);
+        ArtifactId old = expiredArtifact(new byte[200]);
+        registry.beginConsume(open, ConsumeReason.MOVED);
+
+        ReapReport report = reaper.reap();
+
+        assertThat(report).isEqualTo(new ReapReport.Reaped(2, 0));
+        assertThat(registry.find(open).orElseThrow().consumption()).isEqualTo(new ConsumeState.ConsumedBecause(ConsumeReason.MOVED));
+        assertThat(registry.find(old)).as("released").isEmpty();
+        assertThat(payloads.stored()).as("no bytes are left").doesNotContain(open, old);
+        assertThat(registry.budget().chargedBytes()).isEqualTo(1L);
+    }
+
+    @Test
+    @DisplayName("S-D0012-16 (D-0012 rework): a sink of a download takes no byte before the size was announced and none beyond it; after the announcement it takes the bytes; a refused size fails the sink and says why")
+    void aDownloadSinkNeedsTheSizeFirst() {
+        ArtifactSpec spec = new ArtifactSpec(ArtifactDirection.DOWNLOAD, new FileName("d.bin"), 0L, new ArtifactOrigin.Transfer(), new ArtifactDestination.Unassigned(), OverwriteMode.REPLACE,
+            Elevation.NONE, UploadProtocol.UNSPECIFIED, ArtifactRetention.RELEASABLE, Duration.ofMinutes(10));
+        ArtifactId first = ((ArtifactReservation.Reserved) registry.reserve(spec, clock.instant())).id();
+        ArtifactSink blind = new ArtifactSink(first, payloads, registry, digester);
+        assertThat(blind.append(new byte[] {1})).as("no size announced").isInstanceOf(SinkResult.Failed.class);
+
+        ArtifactId second = ((ArtifactReservation.Reserved) registry.reserve(spec, clock.instant())).id();
+        ArtifactSink sized = new ArtifactSink(second, payloads, registry, digester);
+        assertThat(sized.expect(3)).isInstanceOf(SinkResult.Accepted.class);
+        assertThat(sized.append(new byte[] {1, 2, 3})).isInstanceOf(SinkResult.Accepted.class);
+        assertThat(sized.append(new byte[] {4})).as("beyond the announced size").isInstanceOf(SinkResult.Failed.class);
+
+        ArtifactId third = ((ArtifactReservation.Reserved) registry.reserve(spec, clock.instant())).id();
+        ArtifactSink tooBig = new ArtifactSink(third, payloads, registry, digester);
+        assertThat(tooBig.expect(limits.maxFileSize().toBytes() + 1)).isInstanceOf(SinkResult.Failed.class);
+        assertThat(tooBig.refusal()).containsInstanceOf(ArtifactReservation.FileTooLarge.class);
     }
 
     // ---- helpers ----

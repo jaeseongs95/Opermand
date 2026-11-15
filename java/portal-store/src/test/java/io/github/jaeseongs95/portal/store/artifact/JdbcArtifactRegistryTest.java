@@ -157,24 +157,24 @@ class JdbcArtifactRegistryTest {
     }
 
     @Test
-    @DisplayName("S-D0012-01 (store half): the reservation of a download shrinks to the size the target announced, before any byte; a size above the reservation, an upload, a download that has received a byte and an unknown id are refused")
-    void aDownloadReservationShrinksToTheAnnouncedSize() {
-        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.download(64), fixtures.at()));
+    @DisplayName("S-D0012-14 (store half): a download is reserved with no bytes and sized to what the target announced, before any byte; a download that has received a byte, an upload, a negative size and an unknown id are refused")
+    void aDownloadIsSizedToTheAnnouncedSize() {
+        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.download(0), fixtures.at()));
+        assertThat(registry.budget().chargedBytes()).as("an empty reservation charges one byte").isEqualTo(1);
 
-        registry.narrowReservation(id, 10);
+        assertThat(registry.sizeDownload(id, 10)).isEqualTo(new ArtifactReservation.Reserved(id));
 
-        assertThat(registry.budget().chargedBytes()).as("the charge fell from 64 to the announced 10").isEqualTo(10);
+        assertThat(registry.budget().chargedBytes()).isEqualTo(10);
         assertThat(registry.find(id).orElseThrow().spec().sizeBytes()).isEqualTo(10L);
-        registry.narrowReservation(id, 10);
-        assertThat(registry.budget().chargedBytes()).as("the same size again changes nothing").isEqualTo(10);
-        assertRefused(() -> registry.narrowReservation(id, 11), ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
-        assertRefused(() -> registry.narrowReservation(id, -1), ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
+        assertThat(registry.sizeDownload(id, 12)).as("the size can be set again while no byte came").isEqualTo(new ArtifactReservation.Reserved(id));
+        assertThat(registry.sizeDownload(id, MAX_FILE + 1)).isEqualTo(new ArtifactReservation.FileTooLarge(MAX_FILE + 1, MAX_FILE));
+        assertRefused(() -> registry.sizeDownload(id, -1), ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
         ArtifactId upload = fixtures.reservedId(registry.reserve(fixtures.upload(4), fixtures.at()));
-        assertRefused(() -> registry.narrowReservation(upload, 1), ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
+        assertRefused(() -> registry.sizeDownload(upload, 1), ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
         registry.append(id, 0, fixtures.chunk(fixtures.bytes(4, 7)));
-        assertRefused(() -> registry.narrowReservation(id, 4), ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
-        assertRefused(() -> registry.narrowReservation(new ArtifactId("9".repeat(48)), 1), ArtifactErrorCode.ARTIFACT_NOT_FOUND);
-        assertThat(registry.budget().chargedBytes()).as("the refusals changed nothing: 10 and 4").isEqualTo(14);
+        assertRefused(() -> registry.sizeDownload(id, 4), ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
+        assertRefused(() -> registry.sizeDownload(new ArtifactId("9".repeat(48)), 1), ArtifactErrorCode.ARTIFACT_NOT_FOUND);
+        assertThat(registry.budget().chargedBytes()).as("the refusals changed nothing: 12 and 4").isEqualTo(16);
     }
 
     @Test
@@ -524,12 +524,12 @@ class JdbcArtifactRegistryTest {
     }
 
     @Test
-    @DisplayName("deletion: an artifact marked for deletion still charges its bytes until it is released, and it is not in the listing of expired artifacts")
-    void aDeletingArtifactStillCharges() {
+    @DisplayName("deletion (S-D0012-11): an artifact marked for deletion charges nothing (its bytes are being removed), and it is not in the listing of expired artifacts")
+    void aDeletingArtifactChargesNothing() {
         ArtifactId id = fixtures.readyArtifact(registry, fixtures.upload(4), fixtures.bytes(4, 1));
         registry.beginDelete(id);
 
-        assertThat(registry.budget().chargedBytes()).isEqualTo(4);
+        assertThat(registry.budget().chargedBytes()).isZero();
         assertThat(registry.expired(ArtifactFixtures.T0.plus(Duration.ofHours(5)))).isEmpty();
         assertThat(registry.holding()).extracting(ArtifactRecord::state).containsExactly(ArtifactState.DELETING);
     }
@@ -563,7 +563,7 @@ class JdbcArtifactRegistryTest {
         assertThat(registry.beginDeleteIfPresent(ready)).as("again: the row is DELETING already").isTrue();
         assertThat(registry.beginDeleteIfPresent(deleting)).isTrue();
         assertThat(registry.find(deleting).orElseThrow().version()).as("a row already DELETING is not written again").isEqualTo(deletingVersion);
-        assertThat(registry.budget().chargedBytes()).as("the charge stays until the release").isEqualTo(charged);
+        assertThat(registry.budget().chargedBytes()).as("the rows that became DELETING (8 + 4) no longer charge").isEqualTo(charged - 12);
 
         assertRefused(() -> registry.beginDeleteIfPresent(consuming), ArtifactErrorCode.ARTIFACT_BUSY);
         assertRefused(() -> registry.beginDeleteIfPresent(consumed), ArtifactErrorCode.STAGED_FILE_CONSUMED);
