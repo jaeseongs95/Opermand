@@ -1,6 +1,7 @@
 package io.github.jaeseongs95.portal.store.journal;
 
 import java.time.Clock;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -17,6 +18,7 @@ import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
 import io.github.jaeseongs95.portal.domain.id.OperationIdGenerator;
 import io.github.jaeseongs95.portal.domain.id.RequestKey;
+import io.github.jaeseongs95.portal.domain.operation.Admission;
 import io.github.jaeseongs95.portal.domain.operation.NewOperation;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
 import io.github.jaeseongs95.portal.domain.operation.OperationEvent;
@@ -54,19 +56,30 @@ public class JdbcOperationJournal implements OperationJournal {
 
     @Override
     @Transactional
-    public JournalInsert accept(NewOperation spec) {
+    public JournalInsert accept(NewOperation spec, Admission admission) {
+        return accept(spec, admission, ids.next(), clock.instant(), () -> { });
+    }
+
+    @Override
+    @Transactional
+    public JournalInsert accept(NewOperation spec, Admission admission, OperationId id, Instant at, Runnable beforeInsert) {
         Optional<OperationRow> known = operations.findByRequestKey(spec.requestKey().value());
         if (known.isPresent()) {
             return answerFor(known.orElseThrow(), spec);
         }
-        Operation created = Operation.accept(spec, ids.next(), clock.instant());
+        beforeInsert.run();
+        Operation created = Operation.admit(spec, id, at, admission);
         try {
             savepoints.run(() -> storage.insertNew(created));
             return new JournalInsert.Inserted(created);
         } catch (DuplicateKeyException e) {
-            OperationRow winner = operations.findByRequestKey(spec.requestKey().value())
-                .orElseThrow(() -> new RequestRefusedException(OperationErrorCode.OPERATION_STORE_FAILED, e));
-            return answerFor(winner, spec);
+            // Either another intake stored the same key first (this one answers with that operation), or two operations were queued in the same instant and took the same
+            // ready position: this one is told to read again and decide again, as a transition into QUEUED is (save).
+            Optional<OperationRow> winner = operations.findByRequestKey(spec.requestKey().value());
+            if (winner.isEmpty()) {
+                throw new RequestRefusedException(OperationErrorCode.OPERATION_VERSION_CONFLICT, e);
+            }
+            return answerFor(winner.orElseThrow(), spec);
         }
     }
 

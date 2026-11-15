@@ -17,9 +17,9 @@ class ContractConstantsTest {
     private final JsonMapper mapper = JsonMapper.builder().build();
 
     @Test
-    @DisplayName("S2-CO-04 OperationState writes the 13 lowercase values of public-contract.mjs:15, in that order")
+    @DisplayName("S2-CO-04 OperationState writes the 11 lowercase values of public-contract.mjs:15 without accepted and evaluating (S-D0119-13), in that order")
     void operationStateWireValues() {
-        List<String> contract = List.of("accepted", "pending", "evaluating", "queued", "starting", "running", "terminating", "completed", "failed", "cancelled", "denied",
+        List<String> contract = List.of("pending", "queued", "starting", "running", "terminating", "completed", "failed", "cancelled", "denied",
             "expired", "unknown");
         assertThat(Arrays.stream(OperationState.values()).map(OperationState::wire).toList()).containsExactlyElementsOf(contract);
         for (OperationState state : OperationState.values()) {

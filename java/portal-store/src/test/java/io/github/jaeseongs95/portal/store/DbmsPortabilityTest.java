@@ -61,13 +61,13 @@ class DbmsPortabilityTest {
     }
 
     private static OperationRow row(String id, String requestKey, Instant createdAt, Instant updatedAt) {
-        return new OperationRow(id, requestKey, "owner", "alpha", HEX, OperationKind.COMMAND, OperationState.ACCEPTED, 1L, ApprovalMode.NOT_DECIDED, "default", null, HEX, null, null,
+        return new OperationRow(id, requestKey, "owner", "alpha", HEX, OperationKind.COMMAND, OperationState.PENDING, 1L, ApprovalMode.NOT_DECIDED, "default", null, HEX, null, null,
             createdAt, updatedAt, null, null, null, null, null, null, null, RecoveryReason.NONE, AuditState.NONE);
     }
 
     private void insertOperation(String id, String requestKey) {
         jdbc.update("INSERT INTO operation (id, request_key, owner_id, target_id, target_revision, kind, state, version, approval_mode, profile, contract_digest, created_at,"
-            + " updated_at, recovery_reason, audit_failure) VALUES (?, ?, 'owner', 'alpha', ?, 'COMMAND', 'ACCEPTED', 1, 'NOT_DECIDED', 'default', ?, " + STAMP + ", " + STAMP
+            + " updated_at, recovery_reason, audit_failure) VALUES (?, ?, 'owner', 'alpha', ?, 'COMMAND', 'PENDING', 1, 'NOT_DECIDED', 'default', ?, " + STAMP + ", " + STAMP
             + ", 'NONE', 'NONE')", id, requestKey, HEX, HEX);
     }
 
@@ -79,7 +79,7 @@ class DbmsPortabilityTest {
         insertOperation(OP_A, "request-key-000001");
 
         // Written in another case than the script: an unquoted name is folded the same way in the script and in the statement.
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM Operation WHERE Request_Key = 'request-key-000001' AND OPERATION.State = 'ACCEPTED'", Long.class)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM Operation WHERE Request_Key = 'request-key-000001' AND OPERATION.State = 'PENDING'", Long.class)).isEqualTo(1L);
 
         // The stored name is the folded one (upper case in H2, lower case in PostgreSQL): a quoted name in the DBMS's own folding is the table; the folding is read from the driver.
         String[] folding = jdbc.execute((ConnectionCallback<String[]>) connection -> {

@@ -60,7 +60,7 @@ public class OutcomeAudit {
             case DENIED -> AuditAction.DENIED;
             case EXPIRED -> AuditAction.EXPIRED;
             case UNKNOWN -> AuditAction.UNKNOWN;
-            case ACCEPTED, EVALUATING, PENDING, QUEUED, STARTING, RUNNING, TERMINATING ->
+            case PENDING, QUEUED, STARTING, RUNNING, TERMINATING ->
                 throw new IllegalArgumentException("An operation in " + terminal.state() + " has no outcome to audit");
         };
     }

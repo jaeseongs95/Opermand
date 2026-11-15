@@ -24,6 +24,8 @@ final class RuleFixture {
     private Toggle modelExecution = Toggle.OFF;
     private Toggle automaticSudo = Toggle.OFF;
     private Toggle testServer = Toggle.OFF;
+    private Toggle automaticUploads = Toggle.OFF;
+    private Toggle automaticDownloads = Toggle.OFF;
     private SourceContract sourceContract = SourceContract.NONE;
     private Fallback fallback = Fallback.NONE;
     private final Map<EvaluatorProvider, Threshold> thresholds = new EnumMap<>(EvaluatorProvider.class);
@@ -67,6 +69,16 @@ final class RuleFixture {
         return this;
     }
 
+    RuleFixture uploads() {
+        automaticUploads = Toggle.ON;
+        return this;
+    }
+
+    RuleFixture downloads() {
+        automaticDownloads = Toggle.ON;
+        return this;
+    }
+
     RuleFixture pythonSource() {
         sourceContract = SourceContract.PYTHON_SOURCE_V1;
         return this;
@@ -92,7 +104,7 @@ final class RuleFixture {
     }
 
     TargetRule build() {
-        return new TargetRule(TARGET, REVISION, PROFILE, os, names(commands), names(denied), externalDisclosure, modelExecution, Toggle.OFF, Toggle.OFF, automaticSudo,
+        return new TargetRule(TARGET, REVISION, PROFILE, os, names(commands), names(denied), externalDisclosure, modelExecution, automaticUploads, automaticDownloads, automaticSudo,
             testServer, sourceContract, fallback, new Thresholds(thresholds));
     }
 

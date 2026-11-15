@@ -29,11 +29,16 @@ public class OperationWrites {
     /** Stores {@code next} when the stored version is {@code expectedVersion}, then announces it. Returns the stored operation. */
     public Operation store(Operation next, long expectedVersion) {
         Operation stored = journal.save(next, expectedVersion);
+        announce(stored);
+        return stored;
+    }
+
+    /** Announces an operation that was stored: the event, the listeners of a terminal one and the timer of a waiting one. A new operation is announced after its audit lines. */
+    public void announce(Operation stored) {
         events.changed(stored);
         if (stored.state().isTerminal()) {
             terminal.ended(stored);
         }
         timers.arm(stored);
-        return stored;
     }
 }

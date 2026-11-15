@@ -19,12 +19,12 @@ class MaintenancePolicyTest {
     private final MaintenancePolicy policy = new MaintenancePolicy();
 
     @Test
-    @DisplayName("RC-B-065 the bridge is reserved only when it is quiet: no request is pending, evaluating, queued or running, and no reservation exists")
+    @DisplayName("RC-B-065 the bridge is reserved only when it is quiet: no request is pending, queued or running, and no reservation exists")
     void reservationNeedsAQuietBridge() {
         assertThat(policy.canReserve(new MaintenanceState.Open(), StateCounts.none())).isEqualTo(new MaintenancePolicy.ReservationDecision.Allowed());
         assertThat(policy.canReserve(new MaintenanceState.Open(), new StateCounts(Map.of(OperationState.COMPLETED, 40, OperationState.UNKNOWN, 3))))
             .as("history does not block maintenance").isEqualTo(new MaintenancePolicy.ReservationDecision.Allowed());
-        for (OperationState busy : new OperationState[] {OperationState.ACCEPTED, OperationState.PENDING, OperationState.EVALUATING, OperationState.QUEUED, OperationState.STARTING,
+        for (OperationState busy : new OperationState[] {OperationState.PENDING, OperationState.QUEUED, OperationState.STARTING,
             OperationState.RUNNING, OperationState.TERMINATING}) {
             assertThat(policy.canReserve(new MaintenanceState.Open(), new StateCounts(Map.of(busy, 1)))).as("with one %s", busy)
                 .isEqualTo(new MaintenancePolicy.ReservationDecision.Refused(MaintenancePolicy.ReservationRefusal.REQUESTS_OPEN));

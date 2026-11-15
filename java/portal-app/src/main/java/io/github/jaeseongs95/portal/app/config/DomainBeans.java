@@ -7,6 +7,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import io.github.jaeseongs95.portal.domain.approval.MaintenancePolicy;
+import io.github.jaeseongs95.portal.domain.command.RuleApprovalPolicy;
 import io.github.jaeseongs95.portal.domain.classify.CommandClassifier;
 import io.github.jaeseongs95.portal.domain.classify.VendorCommandClassifier;
 import io.github.jaeseongs95.portal.domain.id.ArtifactIdGenerator;
@@ -84,6 +85,12 @@ public class DomainBeans {
     @Bean
     public OperationScheduler operationScheduler() {
         return new OperationScheduler();
+    }
+
+    /** The rule judgement at intake, a pure function of the rule and the request. A plain class of portal-domain, so a bean here. */
+    @Bean
+    public RuleApprovalPolicy ruleApprovalPolicy() {
+        return new RuleApprovalPolicy();
     }
 
     /** The maintenance rules, pure judgements. A plain class of portal-domain, so a bean here. */

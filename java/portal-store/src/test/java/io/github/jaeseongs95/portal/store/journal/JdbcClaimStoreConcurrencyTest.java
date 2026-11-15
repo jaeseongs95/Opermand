@@ -50,7 +50,7 @@ class JdbcClaimStoreConcurrencyTest {
 
     @AfterEach
     void removeTheRows() {
-        for (String table : List.of("operation_slot", "operation_fence", "operation_event", "operation_command", "operation")) {
+        for (String table : List.of("operation_slot", "operation_fence", "operation_event", "operation_decision", "operation_command", "operation")) {
             jdbc.update("DELETE FROM " + table);
         }
     }
@@ -126,5 +126,41 @@ class JdbcClaimStoreConcurrencyTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    @Test
+    @DisplayName("S-D0119-11 D3 two queued inserts at the same moment meet at the ready position: each is stored with a place of its own or told OPERATION_VERSION_CONFLICT, never OPERATION_STORE_FAILED")
+    void twoQueuedInsertsAtTheSameMomentNeverFailAsAStoreFailure() throws Exception {
+        io.github.jaeseongs95.portal.domain.operation.Admission queued = io.github.jaeseongs95.portal.domain.operation.Admission.of(
+            io.github.jaeseongs95.portal.domain.operation.DecisionReason.COMMAND_SET, io.github.jaeseongs95.portal.domain.operation.OperationKind.COMMAND, 0L);
+        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            for (int round = 0; round < 25; round++) {
+                java.util.concurrent.CyclicBarrier together = new java.util.concurrent.CyclicBarrier(2);
+                List<java.util.concurrent.Future<Object>> answers = new java.util.ArrayList<>();
+                for (int writer = 0; writer < 2; writer++) {
+                    io.github.jaeseongs95.portal.domain.operation.NewOperation spec = fx.command("race-" + round + "-" + writer, "alpha", "touch " + round + writer, new io.github.jaeseongs95.portal.domain.operation.ConflictKey.None());
+                    answers.add(pool.submit(() -> {
+                        together.await();
+                        try {
+                            return journal.accept(spec, queued);
+                        } catch (io.github.jaeseongs95.portal.domain.error.RequestRefusedException e) {
+                            return e;
+                        }
+                    }));
+                }
+                for (java.util.concurrent.Future<Object> answer : answers) {
+                    Object result = answer.get();
+                    if (result instanceof io.github.jaeseongs95.portal.domain.error.RequestRefusedException refused) {
+                        assertThat(refused.code()).isEqualTo(io.github.jaeseongs95.portal.domain.error.OperationErrorCode.OPERATION_VERSION_CONFLICT);
+                    } else {
+                        assertThat(result).isInstanceOf(io.github.jaeseongs95.portal.app.journal.JournalInsert.Inserted.class);
+                    }
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+        assertThat(jdbc.queryForObject("SELECT COUNT(ready_sequence) - COUNT(DISTINCT ready_sequence) FROM operation", Long.class)).as("no two operations share a place").isZero();
     }
 }
