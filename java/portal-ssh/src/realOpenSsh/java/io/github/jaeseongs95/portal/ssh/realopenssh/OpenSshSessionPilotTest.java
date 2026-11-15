@@ -7,8 +7,10 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
 import org.apache.sshd.client.channel.ChannelExec;
+import org.apache.sshd.client.channel.ClientChannelEvent;
 import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.common.SshConstants;
 import org.apache.sshd.common.channel.exception.SshChannelOpenException;
@@ -28,6 +30,8 @@ class OpenSshSessionPilotTest {
     private static final Duration LIMIT = OpenSshClient.LIMIT;
     /** More than the 10 sessions an OpenSSH server allows by default (sshd_config MaxSessions). */
     private static final int ATTEMPTS = 12;
+    /** How long the commands of the MaxSessions case run: longer than it takes to open ATTEMPTS channels, short enough that none is left running when the test ends. */
+    private static final int COMMAND_SECONDS = 15;
 
     private final OpenSshTarget target = OpenSshTarget.fromSystemProperties();
 
@@ -51,8 +55,8 @@ class OpenSshSessionPilotTest {
     @DisplayName("S3-RO-05 a real server refuses the channel that is over MaxSessions with an open failure, and the session stays usable")
     void channelsOverMaxSessionsAreRefused() throws Exception {
         String longRunning = switch (target.platform()) {
-            case LINUX -> "sleep 120";
-            case WINDOWS -> "ping -n 120 127.0.0.1";
+            case LINUX -> "sleep " + COMMAND_SECONDS;
+            case WINDOWS -> "ping -n " + COMMAND_SECONDS + " 127.0.0.1";
         };
         try (OpenSshClient connection = OpenSshClient.open(target)) {
             ClientSession session = connection.session();
@@ -73,6 +77,12 @@ class OpenSshSessionPilotTest {
                 }
                 assertThat(refusals).as("a server with the default MaxSessions refuses at least one of " + ATTEMPTS + " channels").isGreaterThan(0);
                 assertThat(session.isOpen()).as("a refused channel does not kill the session").isTrue();
+                // The commands end by themselves after COMMAND_SECONDS. The test waits for that, observing the CLOSED event of every channel with a time limit, and does not cut the
+                // connection while they run: Win32-OpenSSH does not turn a closed channel into the end of its command, the ten commands stayed running for two minutes, and every
+                // later test on the same server then saw a connection that the server had closed stay open (S-D0038-01 did not see the server end its idle connection).
+                for (ChannelExec channel : channels) {
+                    assertThat(channel.waitFor(EnumSet.of(ClientChannelEvent.CLOSED), LIMIT)).as("the command of a channel ends by itself and the channel closes").contains(ClientChannelEvent.CLOSED);
+                }
             } finally {
                 for (ChannelExec channel : channels) {
                     channel.close(true);

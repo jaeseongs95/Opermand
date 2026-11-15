@@ -34,6 +34,8 @@ import org.junit.jupiter.api.Timeout;
 class OpenSshExecPilotTest {
 
     private static final Duration LIMIT = OpenSshClient.LIMIT;
+    /** How long the running command of the signal case lasts if the server ignores the signal: short enough that none is left running when the test ends. */
+    private static final int COMMAND_SECONDS = 15;
 
     private final OpenSshTarget target = OpenSshTarget.fromSystemProperties();
 
@@ -118,8 +120,8 @@ class OpenSshExecPilotTest {
     @DisplayName("S3-RO-03 P3-3 a signal request (INT) to a running command: Linux ends it with exit-signal INT; on Windows the channel can be closed whatever the server did")
     void aSignalRequestToARunningCommand() throws Exception {
         String longRunning = switch (target.platform()) {
-            case LINUX -> "sleep 60";
-            case WINDOWS -> "ping -n 60 127.0.0.1";
+            case LINUX -> "sleep " + COMMAND_SECONDS;
+            case WINDOWS -> "ping -n " + COMMAND_SECONDS + " 127.0.0.1";
         };
         try (OpenSshClient connection = OpenSshClient.open(target)) {
             ClientSession session = connection.session();
@@ -135,9 +137,11 @@ class OpenSshExecPilotTest {
                         assertThat(channel.getExitSignal()).isEqualTo("INT");
                     }
                     case WINDOWS -> {
-                        // Whether Win32-OpenSSH acts on the signal is what this case finds out on its first run; what holds either way is that the stop procedure can end the channel.
-                        channel.waitFor(EnumSet.of(ClientChannelEvent.CLOSED), Duration.ofSeconds(5));
-                        channel.close(false).await(LIMIT);
+                        // Whether Win32-OpenSSH acts on the signal is what this case finds out; what holds either way is that the command ends (by the signal, or by itself after
+                        // COMMAND_SECONDS) and the channel closes. The test waits for that with a time limit and does not close the channel while the command runs: Win32-OpenSSH
+                        // does not turn a closed channel into the end of its command, and a command left running keeps a closed connection open on the server for the tests that follow.
+                        Set<ClientChannelEvent> events = channel.waitFor(EnumSet.of(ClientChannelEvent.CLOSED), LIMIT);
+                        assertThat(events).contains(ClientChannelEvent.CLOSED);
                         assertThat(channel.isOpen()).isFalse();
                     }
                 }
