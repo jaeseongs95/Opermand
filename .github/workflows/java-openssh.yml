@@ -79,6 +79,27 @@ jobs:
       - name: Prepare the OpenSSH server (capability, account, sshd as SYSTEM)
         shell: cmd
         run: call java\ci\openssh-windows.cmd
+      # Diagnostic of the prepared server, independent of the Java tests: how long does the sshd of this runner keep a connection to the idle port that has no open channel
+      # (ssh -N opens none), as seen by the OpenSSH client of the same machine? Probe 1 sends nothing after authentication; probe 2 sends a keep-alive each second.
+      # It cannot fail the job.
+      - name: Probe the UnusedConnectionTimeout of the idle port with the OpenSSH client
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ssh = Join-Path $env:SystemRoot 'System32\OpenSSH\ssh.exe'
+          foreach ($alive in @(0, 1)) {
+            $err = Join-Path $env:RUNNER_TEMP ('probe-' + $alive + '.err')
+            $argList = @('-v', '-N', '-p', $env:PORTAL_OPENSSH_IDLE_PORT, '-i', $env:PORTAL_OPENSSH_KEY_FILE, '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes',
+              '-o', 'StrictHostKeyChecking=yes', '-o', ('UserKnownHostsFile=' + $env:PORTAL_OPENSSH_KNOWN_HOSTS), '-o', ('ServerAliveInterval=' + $alive),
+              ($env:PORTAL_OPENSSH_USER + '@127.0.0.1'))
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $p = Start-Process -FilePath $ssh -ArgumentList $argList -PassThru -NoNewWindow -RedirectStandardError $err
+            $exited = $p.WaitForExit(20000)
+            $ms = $sw.ElapsedMilliseconds
+            if (-not $exited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+            Write-Host ('probe ServerAliveInterval=' + $alive + ': exited=' + $exited + ' after ' + $ms + ' ms' + $(if ($exited) { ', exit code ' + $p.ExitCode } else { ' (ended by the probe after 20 s)' }))
+            Get-Content -LiteralPath $err -Tail 6 | ForEach-Object { Write-Host ('  ' + $_) }
+          }
       # Git Bash is on every Windows runner; the Gradle wrapper script of the repository is the POSIX one.
       - name: realOpenSshTest on Windows
         shell: bash
