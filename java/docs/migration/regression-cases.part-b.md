@@ -843,7 +843,7 @@
 
 | 사례 ID | 대상 기능 | 입력·조건 | 기대 결과 | 판정 방법 | 3.0 모듈 | 원 시험 | 연결 결함 |
 |---|---|---|---|---|---|---|---|
-| S-D0050-01 | 작업 이력 행 수 한도 없음(2026-11-15 사용자 결정 「아니 씨발 제약 없애라는 소리잖아.」, 「java도 한도 당장 없애라고」. 2.x `maxRows 10000`·`maxBytes 64MiB`의 거절을 3.0에 두지 않는다. 한도 문제를 이력 삭제로 풀지 않는다) | 대상 `JdbcOperationJournal`. 레거시가 아닌 `operation` 행이 2.x 한도(10,000) 이상(시험은 10,000건)인 저널에 새 `accept` | `JournalInsert.Inserted`를 반환하고 `OPERATION_CAPACITY`는 없음. 새 요청 키로 조회하면 저장된 작업이 있고 `operation` 행 수는 정확히 1 늘며 기존 행 삭제 0 | 반환 종류, `findByRequestKey`, 행 수 전후 차이(+1), 기존 행 수 불변 | portal-store | (2.x 시험 없음. RC-B-207의 journal 용량 거절을 대체) | SSH_PORTAL-D-0050 |
+| S-D0050-01 | 작업 이력 행 수 한도 없음(2026-11-15 사용자 결정(SSH_PORTAL-D-0050): 작업 이력에 고정 한도를 두지 않고, 한도 문제를 이력 삭제로 풀지 않는다). 2.x `maxRows 10000`·`maxBytes 64MiB`의 거절을 3.0에 두지 않는다) | 대상 `JdbcOperationJournal`. 레거시가 아닌 `operation` 행이 2.x 한도(10,000) 이상(시험은 10,000건)인 저널에 새 `accept` | `JournalInsert.Inserted`를 반환하고 `OPERATION_CAPACITY`는 없음. 새 요청 키로 조회하면 저장된 작업이 있고 `operation` 행 수는 정확히 1 늘며 기존 행 삭제 0 | 반환 종류, `findByRequestKey`, 행 수 전후 차이(+1), 기존 행 수 불변 | portal-store | (2.x 시험 없음. RC-B-207의 journal 용량 거절을 대체) | SSH_PORTAL-D-0050 |
 
 ## 3. 삭제 표
 
