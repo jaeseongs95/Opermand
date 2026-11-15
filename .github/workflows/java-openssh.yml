@@ -159,10 +159,10 @@ jobs:
             -Pportal.test.openssh.known-hosts="$PORTAL_OPENSSH_KNOWN_HOSTS" \
             -Pportal.test.openssh.platform=windows \
             -Pportal.test.openssh.windows-python="$PORTAL_OPENSSH_WINDOWS_PYTHON"
-      # Diagnostic: the class alone passes, the full run fails, and a probe with leftovers alive does not reproduce it. Each group below runs the session pool class after one
-      # group of the classes that run before it in the full run (cli, host key and platform tests; the exec pilot; the session pilot), in this order, so that the first group that
-      # fails names the classes that change what the pool test sees. It cannot fail the job.
-      - name: realOpenSshTest of the session pool class after one group of the earlier classes (diagnostic)
+      # Diagnostic: the class alone passes, and it fails after the session pilot class (OpenSshSessionPilotTest; the cli, host key, platform and exec pilot classes before it
+      # do not matter). That class leaves ten "ping -n 120" commands running on the server when its client cuts the connection. Group 1 repeats the failing order; group 2 ends
+      # every ping command between the two classes, so that a pass there shows that the commands left running are what the pool test is sensitive to. It cannot fail the job.
+      - name: realOpenSshTest of the session pool class after the session pilot class, with and without the leftover ping commands (diagnostic)
         continue-on-error: true
         shell: bash
         working-directory: java
@@ -187,9 +187,34 @@ jobs:
               echo "=== group $label: FAILED"
             fi
           }
-          run_group 'cli+hostkey+platform' "$pkg.cli.RealAgentCliTest" "$pkg.hostkey.RealHostKeyTest" "$pkg.platform.RealPlatformTest"
-          run_group 'exec pilot' "$pkg.realopenssh.OpenSshExecPilotTest"
-          run_group 'session pilot' "$pkg.realopenssh.OpenSshSessionPilotTest"
+          run_group 'session pilot class, then the pool class (group 1: leftovers alive)' "$pkg.realopenssh.OpenSshSessionPilotTest"
+          # Group 2: the pilot class alone (its own result is not the question), every leftover ping ended, then the pool class alone.
+          echo "=== group 2: the session pilot class"
+          ./gradlew --no-daemon --console=plain :portal-ssh:realOpenSshTest --tests "$pkg.realopenssh.OpenSshSessionPilotTest" \
+            -Pportal.test.openssh.host=127.0.0.1 \
+            -Pportal.test.openssh.port="$PORTAL_OPENSSH_PORT" \
+            -Pportal.test.openssh.idle-port="$PORTAL_OPENSSH_IDLE_PORT" \
+            -Pportal.test.openssh.user="$PORTAL_OPENSSH_USER" \
+            -Pportal.test.openssh.key-file="$PORTAL_OPENSSH_KEY_FILE" \
+            -Pportal.test.openssh.known-hosts="$PORTAL_OPENSSH_KNOWN_HOSTS" \
+            -Pportal.test.openssh.platform=windows \
+            -Pportal.test.openssh.windows-python="$PORTAL_OPENSSH_WINDOWS_PYTHON" || true
+          echo "=== group 2: ping processes alive before they are ended: $(tasklist //FI 'IMAGENAME eq PING.EXE' //NH | grep -c -i ping)"
+          taskkill //F //IM PING.EXE //T || true
+          echo "=== group 2: ping processes alive after: $(tasklist //FI 'IMAGENAME eq PING.EXE' //NH | grep -c -i ping)"
+          if ./gradlew --no-daemon --console=plain :portal-ssh:realOpenSshTest --tests "$pkg.realopenssh.OpenSshSessionPoolTest" \
+            -Pportal.test.openssh.host=127.0.0.1 \
+            -Pportal.test.openssh.port="$PORTAL_OPENSSH_PORT" \
+            -Pportal.test.openssh.idle-port="$PORTAL_OPENSSH_IDLE_PORT" \
+            -Pportal.test.openssh.user="$PORTAL_OPENSSH_USER" \
+            -Pportal.test.openssh.key-file="$PORTAL_OPENSSH_KEY_FILE" \
+            -Pportal.test.openssh.known-hosts="$PORTAL_OPENSSH_KNOWN_HOSTS" \
+            -Pportal.test.openssh.platform=windows \
+            -Pportal.test.openssh.windows-python="$PORTAL_OPENSSH_WINDOWS_PYTHON"; then
+            echo "=== group 2: the pool class PASSED after the pings were ended"
+          else
+            echo "=== group 2: the pool class FAILED after the pings were ended"
+          fi
       # Git Bash is on every Windows runner; the Gradle wrapper script of the repository is the POSIX one.
       - name: realOpenSshTest on Windows
         shell: bash
