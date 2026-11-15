@@ -78,7 +78,7 @@
 - 바꾸기 전: 영향받는 기존 시험(`JdbcAgentCliRequestStoreTest`, `JdbcHistoryQueryTest`, `JdbcOperationQueueViewTest`)을 돌려 `baseline.log`로 남긴다.
 - 새 시험을 먼저 만들고 구현 전에 돌려 `red.log`(컴파일 실패 red면 그렇다고 적는다)를 남긴다. 구현 뒤 `green.log`, 마지막에 `:portal-store:buildDependents --warning-mode all`을 `bd.log`로 남긴다.
 
-## 9. 실행 결과(2026-11-15, 로그는 `D:\codex\build\ssh-portal-v300-sqlbuilder-logs\`)
+## 9. 실행 결과(2026-11-15, 로그는 작업 사본 밖의 로그 폴더에 보관)
 
 | 로그 | 내용 | 결과 |
 |---|---|---|
