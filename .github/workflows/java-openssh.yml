@@ -97,8 +97,8 @@ jobs:
       - name: Show the log of the prepared sshd
         if: failure()
         shell: cmd
-        # sshd keeps the file open, so it is read with a share mode that allows that (Get-Content would fail with a sharing violation).
-        run: powershell -NoProfile -NonInteractive -Command "$s = [IO.File]::Open($env:ProgramData + '\portal-openssh-ci\sshd.log', 'Open', 'Read', 'ReadWrite'); $r = New-Object IO.StreamReader($s); $r.ReadToEnd(); $r.Dispose()"
+        # sshd holds the log file open exclusively, so the task that runs it is stopped first (the stop step below is best effort and runs after this one).
+        run: powershell -NoProfile -NonInteractive -Command "Stop-ScheduledTask -TaskName PortalOpenSshCi; Start-Sleep -Seconds 3; Get-Content -LiteralPath ($env:ProgramData + '\portal-openssh-ci\sshd.log') -Tail 200"
       - name: Stop the OpenSSH server and remove the account
         if: always()
         shell: cmd
