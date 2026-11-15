@@ -128,7 +128,12 @@ jobs:
             Stop-ScheduledTask -TaskName PortalOpenSshCi -ErrorAction Continue
             Get-Process -Name sshd -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction Continue
             Get-Process -Name sshd -ErrorAction SilentlyContinue | Wait-Process -Timeout 15 -ErrorAction Continue
-            Show-Processes 'processes after every sshd process was ended'
+            # The tests leave commands that outlive their session (the previous run listed cmd.exe /c "ping -n 120 127.0.0.1" children of a connection process that was gone).
+            # They inherited the log handle from sshd, and nothing else keeps the file open, so they are ended too.
+            $leftover = @(Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -ge $since -and $_.CommandLine -like '*ping*-n*' } | ForEach-Object { $_.ProcessId })
+            $leftover | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+            $leftover | ForEach-Object { Wait-Process -Id $_ -Timeout 10 -ErrorAction SilentlyContinue }
+            Show-Processes 'processes after every sshd process and every ping command was ended'
             Read-SshdLog
           }
       - name: Stop the OpenSSH server and remove the account
