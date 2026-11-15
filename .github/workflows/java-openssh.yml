@@ -60,7 +60,7 @@ jobs:
       # is not one of the sizes of the test JVM (portal.test.cpus, heap, forks), so the step above is not affected. The whole of both modules is run, not a list of classes.
       - name: Unit tests of portal-store and portal-ssh with permission bits and symbolic links required
         working-directory: java
-        run: ./gradlew --no-daemon --console=plain :portal-store:test :portal-ssh:test -Pportal.test.require=posix,links
+        run: ./gradlew --no-daemon --console=plain --continue :portal-store:test :portal-ssh:test -Pportal.test.require=posix,links
       - name: Stop the OpenSSH server and remove the account
         if: always()
         run: sh java/ci/openssh-linux.sh stop

@@ -141,7 +141,7 @@ class FileOutputPayloadStoreTest {
     }
 
     @Test
-    @DisplayName("RC-A-511: only verified bytes are returned: a damaged byte, a second hard link and a mode that others can read are refused where the file store can tell, "
+    @DisplayName("RC-A-511 (S-D0117-01, S-D0117-03: a second hard link and rights that others have are no longer refused): only verified bytes are returned: a damaged byte is refused, "
         + "and an output id cannot leave the folder; the authorization check per read belongs to the output-read use case")
     void onlyVerifiedBytesAreReturned(@TempDir Path folder) throws IOException {
         FileOutputPayloadStore store = store(folder, 1024 * 1024);
@@ -160,23 +160,13 @@ class FileOutputPayloadStoreTest {
         Files.write(out, original);
         assertThat(readAll(store.openFormat(id, OutputFormat.JSON, span))).isEqualTo(json);
 
-        boolean linkCountVisible = Files.getFileStore(out).supportsFileAttributeView("unix");
+        // S-D0117-03, S-D0117-01: a second hard link and rights that others have are not reasons to refuse a read (3.0 does not look at them); what the store made is owner only.
+        TestStorage.assertOwnerOnly(out);
         Path extra = folder.resolve("extra-link");
         Files.createLink(extra, out);
-        if (linkCountVisible) {
-            assertThatThrownBy(() -> store.openFormat(id, OutputFormat.JSON, span)).isInstanceOf(RequestRefusedException.class);
-        } else {
-            assertThat(readAll(store.openFormat(id, OutputFormat.JSON, span))).as("this file store does not report link counts, so the rule cannot apply").isEqualTo(json);
-        }
+        assertThat(readAll(store.openFormat(id, OutputFormat.JSON, span))).as("a second hard link is read as the file it is").isEqualTo(json);
         Files.delete(extra);
-
-        boolean posix = Files.getFileStore(out).supportsFileAttributeView("posix");
-        if (posix) {
-            assertThat(Files.getPosixFilePermissions(out)).as("created owner only").isEqualTo(PosixFilePermissions.fromString("rw-------"));
-            Files.setPosixFilePermissions(out, PosixFilePermissions.fromString("rw-r--r--"));
-            assertThatThrownBy(() -> store.openFormat(id, OutputFormat.JSON, span)).isInstanceOf(RequestRefusedException.class);
-            Files.setPosixFilePermissions(out, PosixFilePermissions.fromString("rw-------"));
-        }
+        TestStorage.openUp(out);
         assertThat(readAll(store.openFormat(id, OutputFormat.JSON, span))).isEqualTo(json);
 
         assertThatThrownBy(() -> new OutputId("../unsafe")).isInstanceOf(IllegalArgumentException.class);
