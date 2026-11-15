@@ -168,7 +168,21 @@ public final class TestFiles {
         throw new IllegalStateException("No readable non-empty text file owned by another account was found near the top of any root of the file system");
     }
 
+    private static boolean onStoreOf(Path entry, FileStore store) {
+        try {
+            return Files.getFileStore(entry).equals(store);
+        } catch (IOException e) {
+            return false; // an entry whose file store cannot be read is not a candidate
+        }
+    }
+
     private static Optional<Path> foreignFileNear(Path root, UserPrincipal me) {
+        FileStore rootStore;
+        try {
+            rootStore = Files.getFileStore(root);
+        } catch (IOException e) {
+            return Optional.empty(); // a root that cannot be read (an empty drive) has no such file
+        }
         Deque<Path> folders = new ArrayDeque<>(List.of(root));
         for (int visited = 0; !folders.isEmpty() && visited < 400; visited++) {
             Path folder = folders.poll();
@@ -179,6 +193,9 @@ public final class TestFiles {
                 continue; // a folder that the account may not list is not where the file is; the next folder is tried
             }
             for (Path entry : entries) {
+                if (!onStoreOf(entry, rootStore)) {
+                    continue; // a virtual file system (proc, sys, a mounted share) is not a place for a file that stands in for a key
+                }
                 if (isForeignReadableFile(entry, me)) {
                     return Optional.of(entry);
                 }
