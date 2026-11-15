@@ -266,6 +266,12 @@ SSH Approval Portal is licensed under the [GNU Affero General Public License, ve
 
 Releases up to and including 2.4.2 were published under the MIT License. The MIT terms continue to apply only to copies of those already published releases.
 
-Files that carry their own license notice keep that license: `native/freerdp-input/` (Apache-2.0, a patch to FreeRDP) and the Gradle wrapper (`java/gradlew`, `java/gradlew.bat`, `java/gradle/wrapper/`, Apache-2.0).
+The copyright holder adds terms under section 7 of the AGPL (notices, origin and names). They are stated in [ADDITIONAL-TERMS.md](ADDITIONAL-TERMS.md), which is the effective text; [ADDITIONAL-TERMS.ko.md](ADDITIONAL-TERMS.ko.md) is a Korean translation. Every source file carries a three-line header with the SPDX identifier, the copyright notice and a reference to that file.
+
+Files that carry their own license notice keep that license and are excluded from the additional terms and from the source header: `native/freerdp-input/` (Apache-2.0, a patch to FreeRDP) and the Gradle wrapper (`java/gradlew`, `java/gradlew.bat`, `java/gradle/wrapper/`, Apache-2.0).
+
+A commercial license is available from the copyright holder. To ask for one, open an issue in this GitHub repository and request contact; do not include confidential information in the issue.
+
+This project does not accept external contributions (pull requests or patches). You may fork the repository under the license terms.
 
 If you modify the program and let users interact with it over a network, section 13 of the license requires you to offer those users the corresponding source code of your version.

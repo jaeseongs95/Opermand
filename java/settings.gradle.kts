@@ -4,6 +4,9 @@ pluginManagement {
     val springBootVersion = settings.extra["springBootVersion"] as String
     plugins {
         id("org.springframework.boot") version springBootVersion
+        // Source headers (docs/migration/regression-cases.part-b.md, case S-LIC-05). Apache-2.0 (spotless-plugin-gradle POM). 8.10.4 was published on Maven Central
+        // on 2026-10-08, more than two weeks before this change; the newer 8.11.0 (2026-11-02) is younger than that and is not used.
+        id("com.diffplug.spotless") version "8.10.4"
     }
 }
 

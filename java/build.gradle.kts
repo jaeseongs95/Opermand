@@ -1,6 +1,46 @@
 // Shared build of the 3.0.0 Java product (docs/migration/foundation-cases.md). Module-specific dependencies live in each module's build.gradle.kts;
 // versions come from the Spring Boot BOM and the Spring AI BOM, and a build file names a version only for a library that neither BOM manages.
+plugins {
+    id("com.diffplug.spotless")
+}
+
 val springBootVersion = property("springBootVersion")
+
+// The source header of every file (the three-product common additional terms text, revision 1; case S-LIC-05): Java in // lines, SQL in -- lines, YAML and
+// properties in # lines. Documents (Markdown, HTML) carry no header; the License section of the README covers them. Not covered: native/freerdp-input and the Gradle
+// wrapper (Apache-2.0, own notices; they are outside the targets), and generated code (excluded below).
+// Each delimiter starts at the first line that is neither one of the three header lines nor empty (so that the blank line after the header does not make the step
+// add a second one on every run, which Spotless reports as "does not converge"), so that a header is replaced and a comment that already stands at the top of a
+// file (the SQL scripts and the properties file start with one) is kept.
+// spotlessCheck is NOT part of check or build yet: enforceCheck = false. It is connected after spotlessApply has run once over the tree.
+val headerLines = listOf(
+    "SPDX-License-Identifier: AGPL-3.0-or-later",
+    "Copyright (C) 2026 Jaeseong Song",
+    "See ADDITIONAL-TERMS.md for the additional terms under AGPL section 7.",
+)
+
+fun header(comment: String) = headerLines.joinToString("\n", postfix = "\n\n") { "$comment $it" }
+
+fun notHeader(comment: String) = "^(?!${Regex.escape(comment)} (SPDX-License-Identifier|Copyright \\(C\\) 2026|See ADDITIONAL-TERMS)|$)"
+
+spotless {
+    isEnforceCheck = false // a Kotlin DSL property of the Java getter isEnforceCheck()/setEnforceCheck(boolean)
+    java {
+        target("portal-*/src/**/*.java")
+        targetExclude("**/generated/**", "**/build/**")
+        licenseHeader(header("//"), notHeader("//"))
+    }
+    format("sql") {
+        target("portal-*/src/**/*.sql")
+        targetExclude("**/generated/**", "**/build/**")
+        licenseHeader(header("--"), notHeader("--"))
+    }
+    format("yamlAndProperties") {
+        target("portal-*/src/**/*.yaml", "portal-*/src/**/*.yml", "portal-*/src/**/*.properties")
+        targetExclude("**/generated/**", "**/build/**")
+        licenseHeader(header("#"), notHeader("#"))
+    }
+}
 
 allprojects {
     group = "io.github.jaeseongs95.portal"

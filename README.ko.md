@@ -266,6 +266,12 @@ SSH Approval Portal은 [GNU Affero General Public License 3판 또는 (선택에
 
 2.4.2 이하 릴리스는 MIT 라이선스로 공개되었습니다. MIT 조건은 이미 공개된 그 릴리스의 사본에만 계속 적용됩니다.
 
-자체 라이선스 고지가 있는 파일은 그 라이선스를 유지합니다. 해당 파일은 `native/freerdp-input/`(Apache-2.0, FreeRDP 패치)과 Gradle wrapper(`java/gradlew`, `java/gradlew.bat`, `java/gradle/wrapper/`, Apache-2.0)입니다.
+저작권자는 AGPL 7조에 따라 추가 조항(표시, 출처, 이름)을 둡니다. 추가 조항은 효력을 갖는 영문판 [ADDITIONAL-TERMS.md](ADDITIONAL-TERMS.md)에 있으며, [ADDITIONAL-TERMS.ko.md](ADDITIONAL-TERMS.ko.md)는 한국어 번역입니다. 모든 소스 파일 머리에는 SPDX 식별자, 저작권 표시, 이 파일을 가리키는 문구의 3줄이 들어 있습니다.
+
+자체 라이선스 고지가 있는 파일은 그 라이선스를 유지하며, 추가 조항과 소스 머리 적용에서 제외합니다. 해당 파일은 `native/freerdp-input/`(Apache-2.0, FreeRDP 패치)과 Gradle wrapper(`java/gradlew`, `java/gradlew.bat`, `java/gradle/wrapper/`, Apache-2.0)입니다.
+
+상용 라이선스는 저작권자에게 문의할 수 있습니다. 이 GitHub 저장소에 이슈를 열어 연락을 요청하세요. 이슈에 비밀 정보를 적지 마세요.
+
+이 프로젝트는 외부 기여(풀 리퀘스트·패치)를 받지 않습니다. 라이선스 조건에 따라 저장소를 포크할 수는 있습니다.
 
 프로그램을 수정해 네트워크로 사용자에게 제공하면, 라이선스 13조에 따라 그 사용자에게 수정판의 대응 소스 코드를 받을 수 있는 방법을 제공해야 합니다.
