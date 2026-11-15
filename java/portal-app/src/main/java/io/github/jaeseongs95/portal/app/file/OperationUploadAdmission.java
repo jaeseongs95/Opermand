@@ -37,6 +37,8 @@ public class OperationUploadAdmission implements UploadAdmission {
      *
      * @throws IllegalArgumentException when the operation is not an upload
      * @throws io.github.jaeseongs95.portal.domain.error.RequestRefusedException the entrance or the intake refused, with the code of the limit or the conflict
+     * @throws io.github.jaeseongs95.portal.domain.error.DispatchRefusedException the audit of the new operation did not become durable (DECISION_AUDIT, AUDIT_FAILED), also when the
+     *     judgement is only a review; nothing is stored
      */
     @Override
     public OperationId admit(NewOperation operation) {

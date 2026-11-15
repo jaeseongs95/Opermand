@@ -87,8 +87,12 @@ public class OperationIntake {
      *
      * <p>The audit comes first (decision D3-14, as for the owner's approval): the id and the time are made here, the lines {@code submitted} and then {@code execution-queued}
      * or {@code denied} are written, and only then is the row stored, so a row that a dispatcher can claim never exists without its audit, and an audit that does not become
-     * durable stores nothing. When the row is not stored after its audit (the room in the queue was gone at the moment of the insert, a lost race), one more line says so, so
-     * the lines of an operation that does not exist have an end.
+     * durable stores nothing. When the row is not stored after its audit (the room in the queue was gone at the moment of the insert, a lost race, a second line that did not
+     * become durable), a {@code not-stored} line is tried once ({@link AuditAction#NOT_STORED}); if that line fails too, its failure is added to the exception that is thrown.
+     *
+     * <p><b>What a reader of the audit log must know:</b> the journal is the record of an operation. An id that is in the audit log only, with no row in the journal, is an
+     * operation that was never stored. A {@code not-stored} line that is left when the outcome of the commit is not known does not overrule the journal either: the journal
+     * wins. Nothing cleans such ids up at a restart.
      *
      * @throws RequestRefusedException {@code TARGET_UNAVAILABLE}, {@code TARGET_REVISION_CONFLICT}, {@code MAINTENANCE_ACTIVE}, {@code REQUEST_CAPACITY_EXCEEDED}, the code
      *     of the queue limit that is reached (for a judgement that queues, when the queue is full), {@code OPERATION_KEY_CONFLICT} (the key was used with another contract),
@@ -115,12 +119,12 @@ public class OperationIntake {
         try {
             inserted = journal.accept(spec, admission, id, at, room);
         } catch (RuntimeException e) {
-            audit.appendAfter(new AuditEvent(AuditAction.FAILED, id, "not stored: " + (e instanceof RequestRefusedException refused ? refused.code().name() : e.getClass().getSimpleName())));
+            audit.appendAfter(new AuditEvent(AuditAction.NOT_STORED, id, "not stored: " + (e instanceof RequestRefusedException refused ? refused.code().name() : e.getClass().getSimpleName())));
             throw e;
         }
         return switch (inserted) {
             case JournalInsert.Existing existing -> {
-                audit.appendAfter(new AuditEvent(AuditAction.FAILED, id, "not stored: the key was stored by another request"));
+                audit.appendAfter(new AuditEvent(AuditAction.NOT_STORED, id, "not stored: the key was stored by another request"));
                 yield existing.operation();
             }
             case JournalInsert.Inserted stored -> {
@@ -130,15 +134,28 @@ public class OperationIntake {
         };
     }
 
+    /**
+     * Writes {@code submitted} and then the line of the judgement. A {@code submitted} that fails leaves no line, so nothing needs an end. When a later line fails, the
+     * {@code not-stored} line is tried once; if it fails too, that failure is added to the refusal as suppressed and the refusal of the first failure is the one thrown.
+     */
     private void auditBeforeStoring(OperationId id, NewOperation spec, Admission admission) {
         audit.appendBefore(DispatchStage.DECISION_AUDIT, new AuditEvent(AuditAction.SUBMITTED, id, "kind " + spec.kind().wire()));
-        switch (admission) {
-            case Admission.Queue queue ->
-                audit.appendBefore(DispatchStage.DECISION_AUDIT, new AuditEvent(AuditAction.EXECUTION_QUEUED, id, "authority " + queue.authority().mode().wire()));
-            case Admission.Deny deny -> audit.appendBefore(DispatchStage.DECISION_AUDIT, new AuditEvent(AuditAction.DENIED, id, ""));
-            case Admission.Review review -> {
-                // Waits for the owner; nothing more to audit.
+        try {
+            switch (admission) {
+                case Admission.Queue queue ->
+                    audit.appendBefore(DispatchStage.DECISION_AUDIT, new AuditEvent(AuditAction.EXECUTION_QUEUED, id, "authority " + queue.authority().mode().wire()));
+                case Admission.Deny deny -> audit.appendBefore(DispatchStage.DECISION_AUDIT, new AuditEvent(AuditAction.DENIED, id, ""));
+                case Admission.Review review -> {
+                    // Waits for the owner; nothing more to audit.
+                }
             }
+        } catch (DispatchRefusedException refused) {
+            try {
+                audit.appendBefore(DispatchStage.DECISION_AUDIT, new AuditEvent(AuditAction.NOT_STORED, id, "not stored: the audit of the judgement did not become durable"));
+            } catch (DispatchRefusedException ending) {
+                refused.addSuppressed(ending);
+            }
+            throw refused;
         }
     }
 

@@ -13,6 +13,11 @@ import io.github.jaeseongs95.portal.domain.operation.NewOperation;
  */
 public interface UploadAdmission {
 
-    /** Accepts the upload operation and answers its id. */
+    /**
+     * Accepts the upload operation and answers its id.
+     *
+     * @throws io.github.jaeseongs95.portal.domain.error.RequestRefusedException the request was refused, with the code of the limit or the conflict
+     * @throws io.github.jaeseongs95.portal.domain.error.DispatchRefusedException the audit of the new operation did not become durable (DECISION_AUDIT, AUDIT_FAILED); nothing is stored
+     */
     OperationId admit(NewOperation operation);
 }

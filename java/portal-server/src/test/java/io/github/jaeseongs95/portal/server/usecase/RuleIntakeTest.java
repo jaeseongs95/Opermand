@@ -326,7 +326,7 @@ class RuleIntakeTest {
 
             assertThat(journal.findByRequestKey(late.requestKey())).isEmpty();
             assertThat(audit.actionsOf(orphan.get())).as("the lines of the operation that was never stored have an end")
-                .containsExactly(AuditAction.SUBMITTED, AuditAction.EXECUTION_QUEUED, AuditAction.FAILED);
+                .containsExactly(AuditAction.SUBMITTED, AuditAction.EXECUTION_QUEUED, AuditAction.NOT_STORED);
         } finally {
             release.countDown();
             audit.failNothing();
@@ -334,5 +334,50 @@ class RuleIntakeTest {
         for (Operation operation : held) {
             kit.awaitTerminal(operation.id());
         }
+    }
+
+    @Test
+    @DisplayName("S-D0119-17 a second audit line that fails is ended by a not-stored line and nothing is stored; when that line fails too, its failure is added to the refusal")
+    void aFailedSecondLineIsEndedByANotStoredLine() {
+        rule(List.of("touch"), List.of("rm"));
+        assertThat(AuditAction.NOT_STORED.wire()).isEqualTo("not-stored");
+        java.util.concurrent.atomic.AtomicReference<io.github.jaeseongs95.portal.domain.id.OperationId> id = new java.util.concurrent.atomic.AtomicReference<>();
+
+        for (String command : List.of("touch ends-queued", "rm ends-denied")) {
+            audit.failNothing();
+            audit.failOn(AuditAction.EXECUTION_QUEUED);
+            audit.failOn(AuditAction.DENIED);
+            audit.whenWritten(event -> {
+                if (event.action() == AuditAction.SUBMITTED) {
+                    id.set(event.operationId());
+                }
+            });
+            NewOperation spec = kit.command(command);
+
+            assertThatThrownBy(() -> intake.submit(spec)).as(command).isInstanceOfSatisfying(DispatchRefusedException.class, e -> {
+                assertThat(e.failure()).isEqualTo(DispatchFailure.stepFailed(DispatchStage.DECISION_AUDIT, DispatchReason.AUDIT_FAILED));
+                assertThat(e.getSuppressed()).as("the ending line became durable, so nothing is added").isEmpty();
+            });
+            assertThat(journal.findByRequestKey(spec.requestKey())).as(command).isEmpty();
+            assertThat(audit.actionsOf(id.get())).as(command).containsExactly(AuditAction.SUBMITTED, AuditAction.NOT_STORED);
+        }
+
+        audit.failNothing();
+        audit.failOn(AuditAction.EXECUTION_QUEUED);
+        audit.failOn(AuditAction.NOT_STORED);
+        audit.whenWritten(event -> {
+            if (event.action() == AuditAction.SUBMITTED) {
+                id.set(event.operationId());
+            }
+        });
+        NewOperation spec = kit.command("touch ending-fails-too");
+
+        assertThatThrownBy(() -> intake.submit(spec)).isInstanceOfSatisfying(DispatchRefusedException.class, e -> {
+            assertThat(e.failure()).isEqualTo(DispatchFailure.stepFailed(DispatchStage.DECISION_AUDIT, DispatchReason.AUDIT_FAILED));
+            assertThat(e.getSuppressed()).hasSize(1).allSatisfy(suppressed -> assertThat(suppressed).isInstanceOf(DispatchRefusedException.class));
+        });
+        assertThat(journal.findByRequestKey(spec.requestKey())).isEmpty();
+        assertThat(audit.actionsOf(id.get())).containsExactly(AuditAction.SUBMITTED);
+        assertThat(executor.requestsSent()).isZero();
     }
 }

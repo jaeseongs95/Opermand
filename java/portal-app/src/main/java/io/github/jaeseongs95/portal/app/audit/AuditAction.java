@@ -14,6 +14,8 @@ public enum AuditAction {
     /** The final audit of an operation: 2.x wrote the state name as the action (approval-queue.mjs:228). */
     COMPLETED("completed"),
     FAILED("failed"),
+    /** The audit lines of a new operation were written but its row was not stored: ends those lines. The journal is the record of an operation (defect D-0119). */
+    NOT_STORED("not-stored"),
     CANCELLED("cancelled"),
     UNKNOWN("unknown"),
     EXPIRED("expired"),
