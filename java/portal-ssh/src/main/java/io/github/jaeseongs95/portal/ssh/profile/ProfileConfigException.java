@@ -15,7 +15,7 @@ public sealed class ProfileConfigException extends RuntimeException permits Conf
     public enum Code {
         /** There is no file at the path. */
         NOT_FOUND,
-        /** The file is there and cannot be read (a folder in place of the file, or an I/O failure). */
+        /** The file is there and cannot be used: it is not a regular file (a folder, a FIFO, a device), it is empty, or reading it failed. */
         UNREADABLE,
         /** The text is not TOML. */
         NOT_TOML,

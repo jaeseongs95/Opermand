@@ -68,7 +68,7 @@ public final class TomlProfileLoader {
      * Loads the profiles of the file.
      *
      * @throws ConfigNotFoundException when there is no file at the path
-     * @throws ProfileConfigException when the file cannot be read (a folder in place of the file is such a case), is not TOML, breaks the schema or has names with a shared credential prefix
+     * @throws ProfileConfigException when the file cannot be used (it is not a regular file, it is empty, or reading failed), is not TOML, breaks the schema or has names with a shared credential prefix
      */
     public ProfileCatalog load(Path path) {
         Objects.requireNonNull(path, "path");
@@ -82,7 +82,23 @@ public final class TomlProfileLoader {
         return catalog;
     }
 
+    /**
+     * The text of the file. What is at the path must be a regular file (a link is followed first), and it is checked before any byte is read: a folder, a FIFO, a device or a
+     * socket is refused, so that reading a FIFO or {@code /dev/zero} never starts. A file with no bytes is refused too: the profile file holds what the owner wrote, and an empty
+     * one is a mistake to name, not a configuration (decision D-0117).
+     */
     private String read(Path path) {
+        if (Files.exists(path) && !Files.isRegularFile(path)) {
+            throw new ProfileConfigException(ProfileConfigException.Code.UNREADABLE, "Config file " + path + " is not a regular file");
+        }
+        String text = readText(path);
+        if (text.isEmpty()) {
+            throw new ProfileConfigException(ProfileConfigException.Code.UNREADABLE, "Config file " + path + " is empty");
+        }
+        return text;
+    }
+
+    private String readText(Path path) {
         try {
             return Files.readString(path, StandardCharsets.UTF_8);
         } catch (NoSuchFileException e) {
