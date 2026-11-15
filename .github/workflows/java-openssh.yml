@@ -111,6 +111,17 @@ jobs:
             -Pportal.test.openssh.known-hosts="$PORTAL_OPENSSH_KNOWN_HOSTS" \
             -Pportal.test.openssh.platform=windows \
             -Pportal.test.openssh.windows-python="$PORTAL_OPENSSH_WINDOWS_PYTHON"
+      # Case S-D0117-09: the tests of the access control list rules need an NTFS volume, which only this job has (the Linux job has permission bits and symbolic links and runs
+      # the tests for those; its ACL tests are skipped there). -Pportal.test.require=acl makes a test that needs the ability fail instead of skipping, so these tests cannot pass
+      # by skipping. Only the classes that need the ability are run: the module tests as a whole are not part of this job. The tests change real ACLs in the runner's temporary folder.
+      - name: Unit tests of the ACL rules with access control lists required
+        shell: bash
+        working-directory: java
+        run: >-
+          ./gradlew --no-daemon --console=plain --continue
+          :portal-store:test --tests 'io.github.jaeseongs95.portal.store.storage.AclPrivateStorageTest'
+          :portal-ssh:test --tests 'io.github.jaeseongs95.portal.ssh.profile.PrivateFileRuleTest'
+          -Pportal.test.require=acl
       # Diagnostic: the server log (LogLevel VERBOSE, no command text) of the sshd the preparation script started.
       # It runs whatever the tests did and cannot fail the job (continue-on-error), so it never hides the result of the tests. First it prints, for reference only, how many ping commands
       # started after the prepared sshd are running and how many sshd processes exist. The ping count is not evidence for case S-D0038-02: a 15 s command ends by itself
@@ -159,5 +170,7 @@ jobs:
           path: |
             java/portal-ssh/build/test-results/realOpenSshTest/*.xml
             java/portal-ssh/build/reports/tests/realOpenSshTest
+            java/portal-store/build/test-results/test/*.xml
+            java/portal-ssh/build/test-results/test/*.xml
           if-no-files-found: warn
           retention-days: 14
