@@ -18,7 +18,7 @@ public interface OperationJournal {
     /**
      * Stores a new operation. The request key is unique: the same key with the same contract returns {@link JournalInsert.Existing}, the same key with another contract
      * throws {@code RequestRefusedException(OPERATION_KEY_CONFLICT)}. The implementation makes the id and the time (an {@code OperationIdGenerator} and the one
-     * {@code Clock}) and writes the first event in the same transaction. A refused intake because the journal is full ({@code OPERATION_CAPACITY}) is also an exception.
+     * {@code Clock}) and writes the first event in the same transaction.
      */
     JournalInsert accept(NewOperation spec);
 

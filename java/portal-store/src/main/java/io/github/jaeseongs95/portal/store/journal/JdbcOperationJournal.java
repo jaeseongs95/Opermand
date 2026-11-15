@@ -34,32 +34,18 @@ import io.github.jaeseongs95.portal.store.Savepoints;
 @Repository
 public class JdbcOperationJournal implements OperationJournal {
 
-    /** Rows kept in the journal before a new intake is refused (2.x {@code maxRows 10000}, design D-12); imported 2.x rows do not count. */
-    static final long MAX_ROWS = 10_000;
-
     private final OperationRowRepository operations;
     private final OperationEventRowRepository events;
-    private final OperationLegacyRowRepository legacy;
     private final OperationStorage storage;
     private final OperationIdGenerator ids;
     private final Clock clock;
     private final Savepoints savepoints;
 
-    private final long maxRows;
-
     @Autowired
-    public JdbcOperationJournal(OperationRowRepository operations, OperationEventRowRepository events, OperationLegacyRowRepository legacy, OperationStorage storage,
+    public JdbcOperationJournal(OperationRowRepository operations, OperationEventRowRepository events, OperationStorage storage,
                                 OperationIdGenerator ids, Clock clock, Savepoints savepoints) {
-        this(operations, events, legacy, storage, ids, clock, savepoints, MAX_ROWS);
-    }
-
-    /** The row limit is a parameter so that a test can reach it with a few rows (test RC-B-207). */
-    JdbcOperationJournal(OperationRowRepository operations, OperationEventRowRepository events, OperationLegacyRowRepository legacy, OperationStorage storage,
-                         OperationIdGenerator ids, Clock clock, Savepoints savepoints, long maxRows) {
-        this.maxRows = maxRows;
         this.operations = operations;
         this.events = events;
-        this.legacy = legacy;
         this.storage = storage;
         this.ids = ids;
         this.clock = clock;
@@ -72,9 +58,6 @@ public class JdbcOperationJournal implements OperationJournal {
         Optional<OperationRow> known = operations.findByRequestKey(spec.requestKey().value());
         if (known.isPresent()) {
             return answerFor(known.orElseThrow(), spec);
-        }
-        if (operations.count() - legacy.count() >= maxRows) {
-            throw new RequestRefusedException(OperationErrorCode.OPERATION_CAPACITY);
         }
         Operation created = Operation.accept(spec, ids.next(), clock.instant());
         try {

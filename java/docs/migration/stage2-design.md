@@ -888,7 +888,7 @@ CREATE TABLE operation_legacy (
 ```
 - `[사실]` 2.x는 정규 표(`operations`)의 `body` 열에 JSON 한 덩이로 모든 필드를 담고 `contract` 열(정렬된 JSON)과 그 SHA-256 `digest`로 멱등을 확인했다. 3.0은 열로 풀고 계약 digest만 `contract_digest`로 남긴다(`Operation#contractDigest`는 도메인이 계산: 불변 필드 `owner, targetId, targetRevision, kind, 입력, inputDigest, conflictKey, expiresAt, deadline`을 고정 순서 정규형으로 `Digester`에 넣음). 2.x의 `generation`·`policyRevision`·`approval` 계약 필드는 생산 코드에서 설정하는 곳이 0이라 열을 만들지 않았다(`[사실: src/**`에서 `generation:`·`deadline:`을 설정하는 곳을 찾지 못함, 요청 키 검사에만 등장 `operation-store.mjs:28-32`] — 결정 D-10). `deadline_at`·`conflict_key`는 스케줄러가 읽으므로(`operation-scheduler.mjs:99`, `operation-store.mjs:257`) 유지한다.
 - `[제안]` `kind`에 `AGENT_CLI`를 더한 이유: 2.x는 CLI 요청을 별도 SQLite 저널(`agent-cli.sqlite`)에 같은 job 모양으로 두고 스케줄러 슬롯만 공유했다(A-073). 상태 기계를 하나로 합치려고(2.1절) 같은 `operation` 행에 `AGENT_CLI`로 두고 세부는 `agent_cli_request`(V5)에 둔다. 공개 wire `kind` 4값에는 나오지 않는다(owner HTTP 전용, 2.x `kind:'command'`로 보였음 — 표시는 4단계). 결정 D-11.
-- `[제안]` 작업 이력의 상한: 2.x는 `maxRows 10000`·`maxBytes 64MiB`를 넘으면 `OPERATION_CAPACITY`로 새 접수를 거절(`operation-store.mjs:99-102`)하고 저널 행 상한을 명령·CLI 저널에도 10000으로 걸었다(`command-state.mjs:65`). 3.0은 행 수 상한(`COUNT(*) < 10000 + legacy 행 수`)만 둔다. 바이트 상한은 본문이 열·CLOB 길이 제약으로 바뀌어 의미가 없다. 결정 D-12.
+- `[제안]` 작업 이력의 상한: 2.x는 `maxRows 10000`·`maxBytes 64MiB`를 넘으면 `OPERATION_CAPACITY`로 새 접수를 거절(`operation-store.mjs:99-102`)하고 저널 행 상한을 명령·CLI 저널에도 10000으로 걸었다(`command-state.mjs:65`). 3.0은 행 수 상한(`COUNT(*) < 10000 + legacy 행 수`)만 둔다. 바이트 상한은 본문이 열·CLOB 길이 제약으로 바뀌어 의미가 없다. 결정 D-12. **[D-0050 정정]** 결정(2026-11-15): 행 수 상한도 두지 않는다(상한 없음, 장부 SSH_PORTAL-D-0050). 작업 이력에 고정 한도를 두지 않으며, 한도 문제를 이력 삭제로 풀지 않는다. 근거: 2.4.2에서 한도(1만 행·64MiB)에 닿아 모든 접수가 `OPERATION_CAPACITY`로 거부된 사례(장부 SSH_PORTAL-D-0050). 위 제안 문장은 기록으로 남기고, `JdbcOperationJournal`의 검사는 제거했다. `OPERATION_CAPACITY` 값은 Contract 2.0 공개 오류 코드 목록의 일부라 enum과 계약 스키마에 남기되 던지는 코드는 없다.
 - `[제안]` `operation_fence`(선택 O-2): `CREATE TABLE operation_fence (target_id VARCHAR(512) NOT NULL, target_revision VARCHAR(64) NOT NULL, conflict_key VARCHAR(512) NOT NULL, operation_id CHAR(48) NOT NULL, CONSTRAINT pk_operation_fence PRIMARY KEY (target_id, target_revision, conflict_key), CONSTRAINT fk_operation_fence_op FOREIGN KEY (operation_id) REFERENCES operation (id))`. claim이 `STARTING`으로 가면서 한 행을 넣고 종료(`UNKNOWN` 제외 5종)로 가면서 지운다. 같은 키의 동시 claim은 PK 충돌(`DuplicateKeyException`)로 막힌다. 3.3절의 SERIALIZABLE을 H2에서 확인하지 못하면 이 표와 `operation_slot`(전역·대상별 슬롯 PK)으로 한도를 DB 제약으로 옮긴다. 기본안에는 넣지 않았다(표 26개는 이 선택 표를 세지 않음).
 
 **V2__artifact.sql** — artifact 메타(2.x는 `<id>.json` manifest 파일, `artifacts.mjs:91-149`; 바이트는 `<id>.part` 파일)
@@ -1450,7 +1450,7 @@ A-228, A-249, A-460(브라우저·UI 입력, 4단계 portal-web), B-466(MCP subm
 | D-09 | `TargetRevision` 알고리즘 | (a) 2.x JSON 바이트와 같게(불가능: 입력 형식이 vendor 레지스트리) (b) 새 정규형 + 이전 이력의 `legacy-unbound` 처리 | **(b)** | 2.x 입력(`reader`·`writer`)이 3.0에 없음. 7단계 portal-migrate가 이전 행의 revision을 `legacy-unbound`로 두는 규칙 필요 |
 | D-10 | `operation`의 미사용 계약 필드 | (a) `generation`·`policyRevision`·`approval` 열 유지 (b) 열을 만들지 않음 | **(b)** | 2.x 생산 코드가 설정하는 곳 0(`operation-store.mjs:28-32`의 계약 digest 입력에만 등장). 필요하면 추가 마이그레이션 `V7` |
 | D-11 | CLI 설치 요청의 저장 | (a) 별도 상태·표(2.x 별도 SQLite) (b) `operation`(kind `AGENT_CLI`) + `agent_cli_request` | **(b)** | 상태 기계 하나(D-02). 스케줄러 슬롯을 이미 공유(A-073). 공개 wire `kind`에는 노출 안 함 |
-| D-12 | 이력 상한 | (a) 행 10000 + 바이트 64MiB(2.x) (b) 행 수만 | **(b)** | 본문이 열이 되어 바이트 상한이 의미 없음. 값은 메인이 확정 |
+| D-12 | 이력 상한 | (a) 행 10000 + 바이트 64MiB(2.x) (b) 행 수만 | **(b)** | 본문이 열이 되어 바이트 상한이 의미 없음. 값은 메인이 확정. **[D-0050 정정] 상한 없음으로 바꿈**: (b)의 행 수 상한도 두지 않는다 |
 | D-13 | artifact·출력 바이트 저장 | (a) 파일 (b) `BLOB` (c) 소형 DB·대형 파일 | **(a)** | 2.x가 파일(8.5절 사실), DBMS 중립(개발원칙 4.3), 쿼터가 디스크 여유를 봄. 트랜잭션 밖 파일 I/O(4.4) |
 | D-14 | claim 동시성 | (a) 단일 스케줄러 스레드 + `@Transactional(SERIALIZABLE)` + `@Version` (b) `operation_slot`·`operation_fence` 표 PK 제약 | **(a)**, H2 SERIALIZABLE이 쓰기 왜곡을 막는지 확인 실패 시 (b) | 사실 보존은 FK·CHECK·UNIQUE(개발원칙 4.2~4.3). `[미확인]` H2 문서 확인 |
 | D-15 | 작업 입력·결과의 저장 모양 | (a) 열로 풀기(표 26개) (b) 종류별 JSON을 `CLOB` 한 열 | **(a)** | ANSI·DBMS 중립, 이력·지표 질의가 JSON 함수(DBMS 고유) 없이 가능, CHECK로 어휘 보존. 비용: DDL 길이. (b)는 표 12개로 줄지만 질의·제약 포기 |
@@ -1487,7 +1487,7 @@ A-228, A-249, A-460(브라우저·UI 입력, 4단계 portal-web), B-466(MCP subm
 | D-09 | **(b) 채택** | revision 값이 2.x와 달라지므로, 업그레이드 뒤 에이전트가 갖고 있던 2.x revision으로 제출하면 `TARGET_REVISION_CONFLICT`가 난다. 이것은 의도한 결과이며, 7단계 업그레이드 안내에 「업그레이드 후 `targets`를 다시 조회」라고 적는다 |
 | D-10 | **(b) 채택** | |
 | D-11 | **(b) 채택** | |
-| D-12 | **(b) 채택** | 값은 행 10,000으로 2.x와 같다 |
+| D-12 | **(b) 채택** | 값은 행 10,000으로 2.x와 같다. **[D-0050 정정] 상한 없음으로 바꿈**(2026-11-15 결정, SSH_PORTAL-D-0050: 작업 이력에 고정 한도를 두지 않고, 한도 문제를 이력 삭제로 풀지 않는다). 원래 판정은 기록으로 남기며 3.0.0은 이력 행 수 한도가 없다 |
 | D-13 | **(a) 채택** | |
 | D-14 | **(b)로 변경** | 아래 13.2 |
 | D-15 | **(a) 채택** | |
