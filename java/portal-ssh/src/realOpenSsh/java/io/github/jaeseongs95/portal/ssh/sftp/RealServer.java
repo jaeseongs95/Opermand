@@ -92,6 +92,11 @@ public final class RealServer implements AutoCloseable {
         return windows;
     }
 
+    /** The name of the account the tests log in as (the {@code portal.test.openssh.user} property). */
+    public String user() {
+        return required("user");
+    }
+
     /** The home directory of the account as the SFTP server sees it: {@code /home/user} or {@code /C:/Users/user}. */
     public String sftpHome() throws IOException {
         try (org.apache.sshd.sftp.client.SftpClient sftp = new SftpChannels().open(session)) {

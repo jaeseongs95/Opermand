@@ -32,8 +32,16 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.channels.Channels;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.AclEntry;
+import java.nio.file.attribute.AclEntryPermission;
+import java.nio.file.attribute.AclEntryType;
+import java.nio.file.attribute.AclFileAttributeView;
+import java.nio.file.attribute.UserPrincipal;
 import java.security.SecureRandom;
 import java.time.Clock;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -50,8 +58,8 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 /**
  * The file adapter against a real OpenSSH server (S3-RO-04, S3-RO-07, S3-RO-08, S3-RW-02 to S3-RW-04; the real-server counterparts of the embedded-server tests). It runs only through
  * the Gradle task {@code realOpenSshTest}, on a machine where the CI preparation scripts started the server; nothing here was run on the machine that wrote it. The server's
- * system is data ({@link RealServer#isWindows()}), so the same tests run on Linux and on Windows and no test is skipped, except the permission part of S3-RO-08, which a Windows run
- * reports as not run by an assumption (S-D0013-02). Where one system has nothing to observe, the test states what it checks instead. Each test works in a directory of its own in the home directory of the account and removes it.
+ * system is data ({@link RealServer#isWindows()}), so the same tests run on Linux and on Windows and no test is skipped. Where one system has nothing to observe, the
+ * test states what it checks instead. Each test works in a directory of its own in the home directory of the account and removes it.
  */
 @Timeout(300)
 class RealSftpTest {
@@ -259,28 +267,49 @@ class RealSftpTest {
     }
 
     @Test
-    @DisplayName("S3-RO-08 S-D0013-02 D-0013 D-0034 (the permission part is observed on a POSIX server; a Windows run is reported as not run by an assumption) a file the account may not read is PERMISSION_DENIED (not a transport error); a write that fails for lack of space is not read as a permission problem either")
+    @DisplayName("S3-RO-08 S-D0013-02 D-0013 D-0034 a file the account may not read is PERMISSION_DENIED, not a transport error (a POSIX server: chmod 000; a Windows server: a READ_DATA deny entry "
+        + "of the account in the file's ACL, set through AclFileAttributeView); a write that fails for lack of space is not read as a permission problem either (POSIX: /dev/full)")
     void statusCodesOfARealServer() throws IOException {
         byte[] content = "secret".getBytes(StandardCharsets.UTF_8);
         RemotePath file = path("secret.bin");
         transfer.upload(upload(file, content, OverwriteMode.FAIL_IF_EXISTS), source(content), control());
         AtomicInteger observed = new AtomicInteger(-1);
+        DownloadResult denied;
         if (server.isWindows()) {
-            // S-D0013-02: the refusal below is made with chmod 000 and /dev/full, which a Windows account has no counterpart of that this test could set up and observe on
-            // the machine that wrote it (an ACL deny entry through icacls is untried). So that the Windows run does not pass without saying so, it checks what it can (the
-            // account reads its own file: a read is not refused without a reason) and then reports the permission case as not run.
-            java.io.ByteArrayOutputStream own = new java.io.ByteArrayOutputStream();
-            DownloadResult readable = fetch(file, own);
-            assertThat(readable).as("S-D0013-02 the account reads its own file on Windows: %s", readable).isInstanceOf(DownloadResult.Fetched.class);
-            assertThat(own.toByteArray()).isEqualTo(content);
-            org.junit.jupiter.api.Assumptions.assumeFalse(true, "S-D0013-02: the PERMISSION_DENIED and no-space cases are observed on a POSIX server only (chmod 000, /dev/full); "
-                + "no Windows way to make the account's own file unreadable is set up here");
-        }
-        if (!server.isWindows()) {
+            // The Windows server of the test runs on the machine of the test (the CI job starts it there, java/ci/openssh-windows.cmd), so the file the account made in its home
+            // directory is a file of this machine, and the test JVM (the runner administrator) may change its ACL. A deny entry of the account for READ_DATA comes first in
+            // the list (a Windows ACL is read in order); the owner has no READ_DATA of its own to fall back on. The ACL is put back before anything else, so that the cleanup of
+            // the directory (made by the account) works.
+            Path local = Path.of(server.sftpHome().substring(1), directoryName, "secret.bin");
+            assertThat(Files.exists(local)).as("S-D0013-02 the Windows server runs on the machine of the test, so the file is at %s", local).isTrue();
+            AclFileAttributeView view = Files.getFileAttributeView(local, AclFileAttributeView.class);
+            assertThat(view).as("the file system of %s has ACLs", local).isNotNull();
+            List<AclEntry> original = view.getAcl();
+            UserPrincipal account = local.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName(server.user());
+            List<AclEntry> denying = new ArrayList<>();
+            denying.add(AclEntry.newBuilder().setType(AclEntryType.DENY).setPrincipal(account).setPermissions(AclEntryPermission.READ_DATA).build());
+            denying.addAll(original);
+            view.setAcl(denying);
+            try {
+                denied = fetch(file, new java.io.ByteArrayOutputStream());
+            } finally {
+                view.setAcl(original);
+            }
+            // The same file, after the deny entry is gone: the refusal came from the entry and from nothing else.
+            java.io.ByteArrayOutputStream again = new java.io.ByteArrayOutputStream();
+            DownloadResult readable = fetch(file, again);
+            assertThat(readable).as("the file is readable again once the deny entry is removed: %s", readable).isInstanceOf(DownloadResult.Fetched.class);
+            assertThat(again.toByteArray()).isEqualTo(content);
+        } else {
             server.exec("chmod 000 \"$HOME/" + directoryName + "/secret.bin\"");
-            DownloadResult denied = fetch(file, new java.io.ByteArrayOutputStream());
-            assertThat(denied).isInstanceOf(DownloadResult.Refused.class);
-            assertThat(((DownloadResult.Refused) denied).code()).isEqualTo(TransferErrorCode.PERMISSION_DENIED);
+            denied = fetch(file, new java.io.ByteArrayOutputStream());
+        }
+        assertThat(denied).as("a file the account may not read: %s", denied).isInstanceOf(DownloadResult.Refused.class);
+        assertThat(((DownloadResult.Refused) denied).code()).isEqualTo(TransferErrorCode.PERMISSION_DENIED);
+        if (!server.isWindows()) {
+            // The no-space case is POSIX only: it needs a file system that is full, which /dev/full is. A Windows server has no such device, and the JDK has no API that makes
+            // a volume full or sets a quota (creating a small volume is disk administration, and a full real volume is not one this test may fill), so the Windows run
+            // checks the permission case above and the log line below says that no space status was observed.
             // /dev/full answers every write with ENOSPC: the status the real sftp-server gives for it is whatever it is, and it must not be taken for permission or transport.
             try (SftpClient sftp = new SftpChannels().open(server.session())) {
                 Throwable failure = org.assertj.core.api.Assertions.catchThrowable(() -> {
@@ -294,7 +323,7 @@ class RealSftpTest {
                 assertThat(classified.kind()).isIn(SftpFailure.Kind.NO_SPACE, SftpFailure.Kind.PLAIN_FAILURE);
             }
         }
-        System.getLogger(RealSftpTest.class.getName()).log(System.Logger.Level.INFO, "sftp-server status for a write to /dev/full: {0}", observed.get());
+        System.getLogger(RealSftpTest.class.getName()).log(System.Logger.Level.INFO, "sftp-server status for a write to /dev/full: {0} (-1: not observed, a Windows server)", observed.get());
     }
 
     @Test
