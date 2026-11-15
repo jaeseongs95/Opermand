@@ -307,9 +307,11 @@ class RealSftpTest {
         assertThat(denied).as("a file the account may not read: %s", denied).isInstanceOf(DownloadResult.Refused.class);
         assertThat(((DownloadResult.Refused) denied).code()).isEqualTo(TransferErrorCode.PERMISSION_DENIED);
         if (!server.isWindows()) {
-            // The no-space case is POSIX only: it needs a file system that is full, which /dev/full is. A Windows server has no such device, and the JDK has no API that makes
-            // a volume full or sets a quota (creating a small volume is disk administration, and a full real volume is not one this test may fill), so the Windows run
-            // checks the permission case above and the log line below says that no space status was observed.
+            // The no-space case is POSIX only: it needs a file system that is full, which /dev/full is. A Windows server has no such device. Whether the JDK has an API that makes
+            // a volume full or sets a quota is unconfirmed: the package summary of java.nio.file.attribute
+            // (https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/nio/file/attribute/package-summary.html) lists no view for it and does not say that none
+            // exists, and no official statement was found. Creating a small volume is disk administration and a full real volume is not one this test may fill, so the
+            // Windows run checks the permission case above and the log line below says that no space status was observed.
             // /dev/full answers every write with ENOSPC: the status the real sftp-server gives for it is whatever it is, and it must not be taken for permission or transport.
             try (SftpClient sftp = new SftpChannels().open(server.session())) {
                 Throwable failure = org.assertj.core.api.Assertions.catchThrowable(() -> {
