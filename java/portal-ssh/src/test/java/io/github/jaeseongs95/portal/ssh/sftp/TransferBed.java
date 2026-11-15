@@ -189,7 +189,9 @@ final class TransferBed implements AutoCloseable {
      * the moment of an event it waits for ({@link #expireDeadline()}) instead of guessing a duration that is longer than the steps before it (defect D-0013, case S-D0013-19).
      */
     private static final class HeldDeadlineScheduler extends ThreadPoolTaskScheduler {
-        private final AtomicReference<Runnable> lastTask = new AtomicReference<>();
+        private static final long serialVersionUID = 1L;
+
+        private final transient AtomicReference<Runnable> lastTask = new AtomicReference<>();
 
         @Override
         public ScheduledFuture<?> schedule(Runnable task, Instant startTime) {
