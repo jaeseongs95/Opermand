@@ -137,8 +137,8 @@ class OpenSshExecPilotTest {
                         assertThat(channel.getExitSignal()).isEqualTo("INT");
                     }
                     case WINDOWS -> {
-                        // Whether Win32-OpenSSH acts on the signal is what this case finds out; what holds either way is that the command ends (by the signal, or by itself after
-                        // COMMAND_SECONDS) and the channel closes. The test waits for that with a time limit and does not close the channel while the command runs: a channel
+                        // Whether Win32-OpenSSH acts on the signal is not recorded or asserted here (neither the exit status nor the exit signal is read); the test asserts only that
+                        // the channel closes within the time limit, which on a command of COMMAND_SECONDS happens after the signal or after the command ended by itself. The test waits for that with a time limit and does not close the channel while the command runs: a channel
                         // closed by the client did not end the command on Win32-OpenSSH (SSH_PORTAL-D-0091), and a command left running was followed by a failure of S-D0038-01 in the
                         // same run (observed; the mechanism is not confirmed, see S-D0038-02 in regression-cases.part-b.md).
                         Set<ClientChannelEvent> events = channel.waitFor(EnumSet.of(ClientChannelEvent.CLOSED), LIMIT);

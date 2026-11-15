@@ -70,7 +70,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
  * <p><b>This test fixes a category; it does not explain the defect.</b> Defect SSH_PORTAL-D-0038 was recorded against 2.x as "the next request fails after the SSH session
  * was closed on the server side". Its cause was never confirmed: the 2.x test asserted only a hypothesis, and the CI pilot of stage 3 (OpenSshSessionPilotTest) used a bare MINA
  * session and never passed through the pool. This test is the first one that runs the 3.0 pool against a real {@code sshd} that closed a session: after the close, the next request must
- * make one new connection and succeed, and nothing may be replayed. A green result shows that this scenario works on the 3.0 pool; it does not show what went wrong in 2.x.
+ * succeed on a session other than the closed one and run its command once (the marker of the command appears exactly once in the output; the number of connections made is not counted). A green result shows that this scenario works on the 3.0 pool; it does not show what went wrong in 2.x.
  *
  * <p><b>How the server closes the session (both platforms, one method).</b> The test connects to the idle port of the prepared server ({@code java/ci/openssh-linux.sh},
  * {@code java/ci/openssh-windows.cmd}: the same {@code sshd} listens on a second loopback port, and a {@code Match LocalPort} block gives only that port
@@ -191,7 +191,7 @@ class OpenSshSessionPoolTest {
                 .contains(ClientSessionEvent.CLOSED);
         }
 
-        // The next request: the pool must not hand out the closed session and must not fail; it makes one new connection and the command runs.
+        // The next request: the pool must not hand out the closed session and must not fail; the command runs once, on a session other than the closed one (asserted below).
         Run after = run("echo " + AFTER);
         assertThat(after.outcome().verdict()).as("the request after the server closed the session: " + after.outcome()).isEqualTo(OperationState.COMPLETED);
         assertThat(after.stdout()).as("the command ran once: its marker is in the output exactly once, and the marker of the first request is not").containsOnlyOnce(AFTER).doesNotContain(BEFORE);

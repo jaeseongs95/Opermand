@@ -94,10 +94,11 @@ jobs:
             -Pportal.test.openssh.platform=windows \
             -Pportal.test.openssh.windows-python="$PORTAL_OPENSSH_WINDOWS_PYTHON"
       # Diagnostic: the server log (LogLevel VERBOSE, no command text) of the sshd the preparation script started.
-      # It runs whatever the tests did and cannot fail the job (continue-on-error), so it never hides the result of the tests. First it prints how many ping commands
-      # started after the prepared sshd are still running (case S-D0038-02 expects none when the tests end); nothing is ended before that count is printed. The log is
-      # read with a sharing mode (the running sshd has the file open). If it still cannot be read, the step says so and ends the sshd processes and the leftover ping
-      # commands it just counted, then reads the file once more. This is a diagnostic of the CI job, not product or test code.
+      # It runs whatever the tests did and cannot fail the job (continue-on-error), so it never hides the result of the tests. First it prints, for reference only, how many ping commands
+      # started after the prepared sshd are running and how many sshd processes exist. The ping count is not evidence for case S-D0038-02: a 15 s command ends by itself
+      # before the step counts, so zero proves nothing. Nothing is ended before the counts are printed. The log is read with a sharing mode first; on this job that read
+      # is usually refused while the prepared sshd runs, so the usual path is the one in the catch block: the step says so, ends the sshd processes and the ping commands
+      # it counted, then reads the file once more. This is a diagnostic of the CI job, not product or test code.
       - name: Show the log of the prepared sshd
         if: always()
         continue-on-error: true
