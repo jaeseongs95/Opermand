@@ -123,17 +123,18 @@ final class MigrationRunner {
         // The runner has its own connection of the product's one account, not a connection of a transaction.
         try (Connection connection = dataSource.getConnection()) {
             connection.setAutoCommit(false);
+            // The product name is read once, from this connection: it picks the dialect of SqlBuilder (the encoding probe, the long text declaration), and it builds the error translator
+            // (a translator made from the data source would open a connection of its own for the same name).
+            String productName = connection.getMetaData().getDatabaseProductName();
+            SqlBuilder.Database database = SqlBuilder.ofProductName(productName);
             // Text is UTF-8 from end to end, and a script may hold Korean text: a database in another encoding is refused here, before a script fails half way with an encoding error.
-            verifyEncoding(connection);
+            verifyEncoding(connection, database);
             ensureHistory(connection, phase);
             // The history is read once: it decides which scripts are pending and also the attempt of each, so that a peer that committed a number after this read is met as a duplicate key.
             List<HistoryRow> history = readHistory(connection, phase);
             List<MigrationScript> pending = pending(scripts, history, phase);
             connection.commit();
-            // The product name is read once, from this connection: it picks the dialect of SqlBuilder, which declares the long text column, and it builds the error translator (a
-            // translator made from the data source would open a connection of its own for the same name).
-            String productName = connection.getMetaData().getDatabaseProductName();
-            String longText = SqlBuilder.generateLongText(SqlBuilder.ofProductName(productName));
+            String longText = SqlBuilder.generateLongText(database);
             SQLExceptionTranslator translator = new SQLErrorCodeSQLExceptionTranslator(productName);
             int applied = 0;
             for (MigrationScript script : pending) {
@@ -153,21 +154,39 @@ final class MigrationRunner {
     private static final String ENCODING_PROBE = "한글";
 
     /**
-     * Text is UTF-8 from end to end; a database in another encoding cannot hold it, and is refused before anything else. The check is standard SQL, not a setting of one DBMS: the
-     * database is asked how many characters the probe has (TRIM: an H2 CHAR(10) is padded with blanks to its width, and the probe is the two syllables). A database of another single-byte encoding cannot take the text at all (the statement fails), and one that does not read it as
-     * UTF-8 (PostgreSQL's SQL_ASCII) counts its bytes.
+     * Text is UTF-8 from end to end; a database in another encoding cannot hold it, and is refused before anything else. The check is a query, not a setting of one DBMS (the
+     * dialect's spelling of it, {@link SqlBuilder#generateEncodingProbe}): the database is asked how many characters the probe has and what the probe is after it was cast to the
+     * schema's character type. A database of another single-byte encoding cannot take the text at all (the statement fails); one that does not read it as UTF-8 (PostgreSQL's
+     * SQL_ASCII) counts its bytes; a type whose code page has no such text gives back another value.
      */
-    static void verifyEncoding(Connection connection) throws SQLException {
-        long characters;
-        try {
-            characters = queryLong(connection, "SELECT CHAR_LENGTH(TRIM(CAST(? AS CHAR(10))))", ENCODING_PROBE);
+    static void verifyEncoding(Connection connection, SqlBuilder.Database database) throws SQLException {
+        EncodingProbe answer;
+        try (PreparedStatement statement = connection.prepareStatement(SqlBuilder.generateEncodingProbe(database))) {
+            statement.setString(1, ENCODING_PROBE);
+            statement.setString(2, ENCODING_PROBE);
+            try (ResultSet found = statement.executeQuery()) {
+                found.next();
+                answer = new EncodingProbe(found.getInt(1), found.getString(2));
+            }
         } catch (SQLException unstorable) {
             connection.rollback();
             throw new MigrationException(Reason.DB_ENCODING_MISMATCH, "The database cannot take UTF-8 text.", unstorable);
         }
         connection.rollback();
-        if (characters != ENCODING_PROBE.length()) {
-            throw new MigrationException(Reason.DB_ENCODING_MISMATCH, "The database does not read UTF-8 text: two characters count as " + characters + ".");
+        judgeEncoding(answer);
+    }
+
+    /** What the database answered to the probe: the characters it counts in the text and the text it gives back. */
+    record EncodingProbe(int characters, String value) {
+    }
+
+    /** Both must be the text's own: a count of bytes is a database that does not read UTF-8, and another value (such as {@code ??}) is a type whose code page has no such text. */
+    static void judgeEncoding(EncodingProbe answer) {
+        if (answer.characters() != ENCODING_PROBE.length()) {
+            throw new MigrationException(Reason.DB_ENCODING_MISMATCH, "The database does not read UTF-8 text: two characters count as " + answer.characters() + ".");
+        }
+        if (!ENCODING_PROBE.equals(answer.value())) {
+            throw new MigrationException(Reason.DB_ENCODING_MISMATCH, "The database's character type does not keep UTF-8 text: it gives back '" + answer.value() + "'.");
         }
     }
 

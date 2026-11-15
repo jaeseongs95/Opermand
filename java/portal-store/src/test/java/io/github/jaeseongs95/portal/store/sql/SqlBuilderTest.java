@@ -137,6 +137,22 @@ class SqlBuilderTest {
     }
 
     @Test
+    @DisplayName("S-SQLB-23: each of the seven products checks UTF-8 with a query that returns the character count and the value of the text cast to the schema's character type")
+    void probesTheEncodingWithTheCharacterCountAndTheValueOfEachDialect() {
+        assertThat(SqlBuilder.generateEncodingProbe(SqlBuilder.Database.POSTGRESQL)).isEqualTo("SELECT CHAR_LENGTH(CAST(? AS VARCHAR(10))), CAST(? AS VARCHAR(10))");
+        assertThat(SqlBuilder.generateEncodingProbe(SqlBuilder.Database.H2)).isEqualTo("SELECT CHAR_LENGTH(CAST(? AS VARCHAR(10))), CAST(? AS VARCHAR(10))");
+        assertThat(SqlBuilder.generateEncodingProbe(SqlBuilder.Database.ORACLE)).isEqualTo("SELECT LENGTH(CAST(? AS VARCHAR2(10))), CAST(? AS VARCHAR2(10)) FROM DUAL");
+        assertThat(SqlBuilder.generateEncodingProbe(SqlBuilder.Database.DB2))
+            .isEqualTo("SELECT CHARACTER_LENGTH(CAST(? AS VARCHAR(10)) USING CODEUNITS32), CAST(? AS VARCHAR(10)) FROM SYSIBM.SYSDUMMY1");
+        assertThat(SqlBuilder.generateEncodingProbe(SqlBuilder.Database.SQLSERVER)).isEqualTo("SELECT LEN(CAST(? AS VARCHAR(10))), CAST(? AS VARCHAR(10))");
+        assertThat(SqlBuilder.generateEncodingProbe(SqlBuilder.Database.MARIADB)).isEqualTo("SELECT CHAR_LENGTH(CAST(? AS CHAR(10))), CAST(? AS CHAR(10))");
+        assertThat(SqlBuilder.generateEncodingProbe(SqlBuilder.Database.MYSQL)).isEqualTo("SELECT CHAR_LENGTH(CAST(? AS CHAR(10))), CAST(? AS CHAR(10))");
+        for (SqlBuilder.Database db : SqlBuilder.Database.values()) {
+            assertThat(SqlBuilder.generateEncodingProbe(db).chars().filter(c -> c == '?').count()).as(db + " takes the text twice: for the count and for the value").isEqualTo(2);
+        }
+    }
+
+    @Test
     @DisplayName("S-SQLB-21: each of the seven product names a connection reports selects its product, by name alone and without a connection")
     void selectsTheDialectFromEachProductName() {
         assertThat(SqlBuilder.ofProductName("H2")).isEqualTo(SqlBuilder.Database.H2);

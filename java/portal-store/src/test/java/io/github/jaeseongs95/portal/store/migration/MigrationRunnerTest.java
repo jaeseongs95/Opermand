@@ -31,6 +31,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import io.github.jaeseongs95.portal.domain.id.Sha256Digester;
 import io.github.jaeseongs95.portal.store.migration.MigrationException.Reason;
 import io.github.jaeseongs95.portal.store.migration.MigrationRunner.Phase;
+import io.github.jaeseongs95.portal.store.sql.SqlBuilder;
 
 /**
  * S-D0109-01 to S-D0109-05, 09 to 13 and 15: the migration runner on a real embedded H2 database (no compatibility mode), with scripts the test writes. The format is the
@@ -237,7 +238,18 @@ class MigrationRunnerTest {
     void theEncodingCheckPasses() throws SQLException {
         try (Connection connection = database.getConnection()) {
             connection.setAutoCommit(false);
-            assertThatCode(() -> MigrationRunner.verifyEncoding(connection)).doesNotThrowAnyException();
+            SqlBuilder.Database h2 = SqlBuilder.ofProductName(connection.getMetaData().getDatabaseProductName());
+            assertThatCode(() -> MigrationRunner.verifyEncoding(connection, h2)).doesNotThrowAnyException();
+            // What the check judges, read from the real database: the characters it counts in the cast text, and the text itself.
+            try (var statement = connection.prepareStatement(SqlBuilder.generateEncodingProbe(h2))) {
+                statement.setString(1, "한글");
+                statement.setString(2, "한글");
+                try (var answer = statement.executeQuery()) {
+                    assertThat(answer.next()).isTrue();
+                    assertThat(answer.getInt(1)).as("characters counted").isEqualTo(2);
+                    assertThat(answer.getString(2)).as("value given back").isEqualTo("한글");
+                }
+            }
         }
     }
 }

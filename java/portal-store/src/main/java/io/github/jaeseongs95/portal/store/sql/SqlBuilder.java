@@ -108,6 +108,35 @@ public class SqlBuilder {
         };
     }
 
+    /**
+     * A query with two {@code ?} (the same text twice) for the start-up check that the database takes UTF-8 text in the character type the schema uses (the migration scripts'
+     * {@code VARCHAR}; {@code VARCHAR2} on Oracle). The text is cast to that type, and the query returns two columns: the number of characters the database counts in the cast
+     * value, and the cast value itself. The count catches a database that counts bytes (PostgreSQL's SQL_ASCII); the value catches a type that loses the text (a {@code VARCHAR}
+     * of a code page that has no Korean turns it into {@code ??}, and then the count is still 2). Both must equal the text.
+     *
+     * <p>It is a fixed table by dialect, not a JDBC scalar function escape ({@code {fn CHAR_LENGTH(...)}}): the escape's translation is each driver's own and a driver's
+     * documentation of it could not be confirmed for all seven products, and the products differ in more than the function name (a FROM clause, the type name). Where a cast
+     * to {@code CHAR(n)} would pad the value (PostgreSQL's value comes back padded), a variable-length type is used.
+     */
+    public static String generateEncodingProbe(Database database) {
+        // PostgreSQL char_length: https://www.postgresql.org/docs/current/functions-string.html
+        // H2 CHAR_LENGTH: https://h2database.com/html/functions.html#char_length
+        // MySQL CHAR_LENGTH (code points; CAST has CHAR, not VARCHAR, and CAST ... AS CHAR(n) is not padded): https://dev.mysql.com/doc/refman/8.4/en/string-functions.html
+        // MariaDB CHAR_LENGTH: https://mariadb.com/docs/server/reference/sql-functions/string-functions/char_length
+        // Oracle LENGTH (characters), VARCHAR2, FROM DUAL as before 23ai: https://docs.oracle.com/en/database/oracle/oracle-database/23/sqlrf/LENGTH.html
+        // Db2 CHARACTER_LENGTH(... USING CODEUNITS32), FROM SYSIBM.SYSDUMMY1: https://www.ibm.com/docs/en/db2/12.1.x?topic=functions-character-length
+        // SQL Server has no CHAR_LENGTH: LEN counts characters (and drops trailing spaces): https://learn.microsoft.com/en-us/sql/t-sql/functions/len-transact-sql
+        //     The cast is to VARCHAR, not NVARCHAR: NVARCHAR is UTF-16 whatever the collation and would always pass, while the schema's VARCHAR holds Korean only with a UTF-8 collation
+        //     (SQL Server 2019 or later), https://learn.microsoft.com/en-us/sql/t-sql/data-types/char-and-varchar-transact-sql
+        return switch (database) {
+            case POSTGRESQL, H2 -> "SELECT CHAR_LENGTH(CAST(? AS VARCHAR(10))), CAST(? AS VARCHAR(10))";
+            case MARIADB, MYSQL -> "SELECT CHAR_LENGTH(CAST(? AS CHAR(10))), CAST(? AS CHAR(10))";
+            case ORACLE -> "SELECT LENGTH(CAST(? AS VARCHAR2(10))), CAST(? AS VARCHAR2(10)) FROM DUAL";
+            case DB2 -> "SELECT CHARACTER_LENGTH(CAST(? AS VARCHAR(10)) USING CODEUNITS32), CAST(? AS VARCHAR(10)) FROM SYSIBM.SYSDUMMY1";
+            case SQLSERVER -> "SELECT LEN(CAST(? AS VARCHAR(10))), CAST(? AS VARCHAR(10))";
+        };
+    }
+
     /** Appends the dialect's row limit to an otherwise complete query. */
     public String applyLimit(String statement, String parameter) {
         return statement + " " + generateLimit(parameter);
