@@ -839,6 +839,12 @@
 | RC-B-946 | 동시 구성 변경은 감지해 maintenance를 유지하고 실패 | update 도중 환경 파일에 줄 추가(env-change 주입) | 종료 코드 0이 아님, stderr에 `Compose configuration changed; maintenance retained.`, 서비스 health maintenance `true` | 종료 코드, stderr 문구, health | packaging | test/compose-update-ci.sh:261, test/compose-update-ci.sh:265 | D-0047(후보) |
 | RC-B-947 | 정상 갱신: 내구 이미지 교체·재시작 비교·release 성공 | 신뢰 기록·구성이 모두 정상인 후보로 update | 출력에 `"commandRequestsChecked":1`, 새 인스턴스 ID가 이전과 다름, 이미지 == candidate, 서비스 delivery-runtime 점검 통과, maintenance 해제 후 PASS 요약 `Actual Compose durable image replacement, restart comparison and release` | 출력 문자열, 인스턴스 ID, 이미지 ID | packaging | test/compose-update-ci.sh:270 | - |
 
+### S 사례 (3.0에서 새로 정한 행동. RC 사례 수에 넣지 않음)
+
+| 사례 ID | 대상 기능 | 입력·조건 | 기대 결과 | 판정 방법 | 3.0 모듈 | 원 시험 | 연결 결함 |
+|---|---|---|---|---|---|---|---|
+| S-D0038-01 | 서버가 기존 SSH 세션을 닫은 뒤의 다음 요청(원인 미확인 결함의 범주 고정. 2.x에서 「세션이 서버 쪽에서 닫힌 뒤 다음 요청이 실패」로 기록됐으나 원인은 확인되지 않았다. 2.x 시험은 가설만 단언했고, 3단계 CI 파일럿(`OpenSshSessionPilotTest`)은 `SshSessionPool`을 거치지 않았다. 이 사례는 원인을 설명하지 않으며, 3.0 풀이 이 범주에서 성공함을 실제 서버로 고정한다) | 대상 `SshSessionPool`·`SessionConnector`·`MinaRemoteExecutor`(Spring 문맥과 같은 배선), 실제 OpenSSH `sshd`(Linux CI, 키 로그인, strict 호스트 키 검사). 풀의 세션에서 exec 채널로 `kill -9 $PPID`를 실행해 서버가 자기 세션 프로세스를 끝낸다(사전 확인: `/proc/$PPID/comm`이 `sshd`를 포함). 제품 코드는 세션을 닫지 않는다. Windows 서버는 세션 프로세스를 비관리자 계정이 끝낼 수 있는지 확인되지 않아 가정(assumption)으로 건너뛴다(`realOpenSshTest`는 두 플랫폼에서 시험을 발견하므로 0건 실행 실패가 없다) | 서버 종료 뒤 클라이언트 세션이 닫힘. 다음 요청은 풀을 거쳐 새 연결 1회로 `COMPLETED`이고 명령은 새 연결에서 한 번만 실행됨(앞 요청의 출력이 섞이지 않음). 풀이 새로 내준 세션은 닫힌 세션과 다른 객체이고 열려 있음. `Failed`·`NoChannelPermit` 없음 | `ExecutionOutcome.verdict()`, 표준 출력, 세션 `CLOSED` 이벤트, 세션 객체 동일성 | portal-ssh | (2.x 시험 없음. 3.0 파일럿 `OpenSshSessionPilotTest`는 풀을 거치지 않음) | SSH_PORTAL-D-0038 |
+
 ## 3. 삭제 표
 
 3.0에 옮기지 않는 원 시험이다. 사유는 「Node 런타임 고유」「Python helper 언어 고유 세부」「Windows helper 언어 고유 세부」「cloudflared 실행」「agentapi·codex queue CLI 깨우기」「vendor ssh-mcp/ssh2」「기존 install.sh·compose 셸 시험」 중 하나와 근거 한 줄이다. 삭제가 없는 묶음은 「없음」으로 적는다.
