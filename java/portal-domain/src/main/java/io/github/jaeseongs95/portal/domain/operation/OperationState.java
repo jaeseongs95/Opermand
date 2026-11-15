@@ -4,20 +4,16 @@ import com.fasterxml.jackson.annotation.JsonValue;
 import java.util.Locale;
 
 /**
- * Where an operation is in its life. One type has all thirteen states (stage 2 design 2.1): 2.x kept the durable eleven in the journal and the other two
- * ({@code pending}, {@code evaluating}) in the memory of the approval queue, and the two disagreed (defect D-0004). The wire value is the lowercase name, the order
+ * Where an operation is in its life. One type has all eleven states (stage 2 design 2.1, changed by defect D-0119): 2.x kept the durable eleven in the journal and two more
+ * ({@code pending}, {@code evaluating}) in the memory of the approval queue, and the two disagreed (defect D-0004). 3.0.0 has neither {@code accepted} nor {@code evaluating}: the rule judges at intake and the first stored state is the judgement. The wire value is the lowercase name, the order
  * is the contract's ({@code public-contract.mjs:15}); the database column holds the name.
  *
  * <p>{@link #canMoveTo(OperationState)} is the one table of allowed moves (design 2.3, transitions T1 to T25 without the initial one). {@link Operation} checks it
  * for every transition and adds the conditions a table cannot state (a deadline, an authority, an outcome).
  */
 public enum OperationState {
-    /** The intent is stored; it has not reached the approval step. A new operation is accepted and moves on in the same transaction, so nobody observes this. */
-    ACCEPTED,
     /** Waiting for the owner's decision. */
     PENDING,
-    /** The automatic approval is being evaluated. */
-    EVALUATING,
     /** Approved and waiting in the execution queue. */
     QUEUED,
     /** Claimed; the external effect has not begun. */
@@ -36,8 +32,6 @@ public enum OperationState {
     /** True when the operation may move from this state to {@code to}. A final state moves nowhere; {@link #UNKNOWN} moves only to a confirmed result. */
     public boolean canMoveTo(OperationState to) {
         return switch (this) {
-            case ACCEPTED -> to == EVALUATING || to == PENDING || to == EXPIRED || to == CANCELLED || to == UNKNOWN;
-            case EVALUATING -> to == PENDING || to == DENIED || to == EXPIRED || to == CANCELLED || to == UNKNOWN;
             case PENDING -> to == QUEUED || to == DENIED || to == EXPIRED || to == CANCELLED || to == FAILED;
             case QUEUED -> to == STARTING || to == DENIED || to == EXPIRED || to == CANCELLED || to == FAILED || to == UNKNOWN;
             case STARTING -> to == RUNNING || to == TERMINATING || to == COMPLETED || to == FAILED || to == CANCELLED || to == EXPIRED || to == UNKNOWN;
@@ -52,7 +46,7 @@ public enum OperationState {
     public boolean isTerminal() {
         return switch (this) {
             case COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN -> true;
-            case ACCEPTED, PENDING, EVALUATING, QUEUED, STARTING, RUNNING, TERMINATING -> false;
+            case PENDING, QUEUED, STARTING, RUNNING, TERMINATING -> false;
         };
     }
 
@@ -65,14 +59,14 @@ public enum OperationState {
     public boolean isActive() {
         return switch (this) {
             case STARTING, RUNNING, TERMINATING -> true;
-            case ACCEPTED, PENDING, EVALUATING, QUEUED, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN -> false;
+            case PENDING, QUEUED, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN -> false;
         };
     }
 
     /** True before the external effect: expiry, denial and cancellation are still certain there. */
     public boolean isPreDispatch() {
         return switch (this) {
-            case ACCEPTED, EVALUATING, PENDING, QUEUED -> true;
+            case PENDING, QUEUED -> true;
             case STARTING, RUNNING, TERMINATING, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN -> false;
         };
     }

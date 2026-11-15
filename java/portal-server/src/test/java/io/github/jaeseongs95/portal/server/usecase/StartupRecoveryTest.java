@@ -16,6 +16,8 @@ import io.github.jaeseongs95.portal.app.journal.ClaimStore;
 import io.github.jaeseongs95.portal.app.journal.OperationJournal;
 import io.github.jaeseongs95.portal.app.recovery.StartupRecovery;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
+import io.github.jaeseongs95.portal.domain.operation.Admission;
+import io.github.jaeseongs95.portal.domain.operation.DecisionReason;
 import io.github.jaeseongs95.portal.domain.operation.ExecutionOutcome;
 import io.github.jaeseongs95.portal.domain.operation.NewOperation;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
@@ -68,8 +70,7 @@ class StartupRecoveryTest {
 
     private Operation pending(String command) {
         NewOperation spec = kit.command(command);
-        Operation accepted = journal.accept(spec).operation();
-        return journal.save(accepted.awaitOwnerDecision(clock.instant()), accepted.version());
+        return journal.accept(spec, Admission.of(DecisionReason.NO_MATCHING_RULE, spec.kind(), 0L)).operation();
     }
 
     private Operation queued(String command) {
@@ -92,10 +93,10 @@ class StartupRecoveryTest {
     @Test
     @DisplayName("S3-UC-05 RC-B-493 an operation that was running is unknown and never sent again, a pending one expires, a finished one is not touched, and a queued one is dispatched once; each ended one is announced once and nobody is audited")
     void inFlightOperationsAreClosedAndNothingIsReplayed() throws Exception {
-        Operation wasRunning = running("echo was-running");
-        Operation wasPending = pending("echo was-pending");
-        Operation wasQueued = queued("echo was-queued");
-        Operation wasCompleted = completed("echo was-completed");
+        Operation wasRunning = running("touch was-running");
+        Operation wasPending = pending("touch was-pending");
+        Operation wasQueued = queued("touch was-queued");
+        Operation wasCompleted = completed("touch was-completed");
 
         List<Operation> changed = recovery.recover();
 
@@ -115,7 +116,7 @@ class StartupRecoveryTest {
         assertThat(untouched.version()).isEqualTo(wasCompleted.version());
 
         assertThat(kit.awaitTerminal(wasQueued.id()).state()).isEqualTo(OperationState.COMPLETED);
-        assertThat(executor.sentLines()).containsExactly("echo was-queued");
+        assertThat(executor.sentLines()).containsExactly("touch was-queued");
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
             assertThat(listener.timesTold(wasRunning.id())).isEqualTo(1);
             assertThat(listener.timesTold(wasPending.id())).isEqualTo(1);
@@ -129,7 +130,7 @@ class StartupRecoveryTest {
     @Test
     @DisplayName("S3-UC-05 a second recovery over the same journal changes nothing")
     void aSecondRecoveryChangesNothing() {
-        Operation wasRunning = running("echo twice");
+        Operation wasRunning = running("touch twice");
         assertThat(recovery.recover().stream().map(Operation::id).toList()).contains(wasRunning.id());
         long version = kit.find(wasRunning.id()).version();
 

@@ -33,10 +33,7 @@ public record ApprovalDecision(DecisionReason reason, ReviewReason review, Model
 
     /** The kind the reason fixes: only {@code policy_denied} refuses, the three automatic reasons run, every other reason leaves the request to the owner. */
     public DecisionKind kind() {
-        if (reason == DecisionReason.POLICY_DENIED) {
-            return DecisionKind.DENY;
-        }
-        return reason.isAutomatic() ? DecisionKind.EXECUTE : DecisionKind.REVIEW;
+        return reason.kind();
     }
 
     /** True when the request runs without the owner. */

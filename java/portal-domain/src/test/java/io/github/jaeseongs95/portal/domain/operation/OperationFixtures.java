@@ -41,16 +41,13 @@ public final class OperationFixtures {
             new CommandInput(new CommandText(text), new Utf8Text(""), new Utf8Text("")), conflict, requestedExpiry);
     }
 
-    public static Operation accepted() {
-        return Operation.accept(command("fixture-key-000001", "printf ok"), id('1'), T0);
-    }
-
-    public static Operation evaluating() {
-        return accepted().beginEvaluation(T0.plusSeconds(1));
+    /** The admission of a request no rule covers: the owner decides (version 1, state pending). */
+    public static Admission review() {
+        return Admission.of(DecisionReason.NO_MATCHING_RULE, OperationKind.COMMAND, 0L);
     }
 
     public static Operation pending() {
-        return accepted().awaitOwnerDecision(T0.plusSeconds(1));
+        return Operation.admit(command("fixture-key-000001", "printf ok"), id('1'), T0, review());
     }
 
     public static Operation queued() {

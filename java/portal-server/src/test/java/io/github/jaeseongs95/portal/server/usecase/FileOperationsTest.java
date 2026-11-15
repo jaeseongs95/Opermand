@@ -62,8 +62,6 @@ import io.github.jaeseongs95.portal.domain.text.Utf8Text;
 @UseCaseTest
 class FileOperationsTest {
 
-    private static final StartAuthority OWNER = new StartAuthority.Owner();
-
     private final StagedFileService staged;
     private final OperationUploadAdmission admission;
     private final OperationIntake intake;
@@ -113,7 +111,7 @@ class FileOperationsTest {
     }
 
     private Operation approvedAndDone(OperationId id) throws Exception {
-        intake.approve(id, OWNER);
+        intake.approve(id);
         return kit.awaitTerminal(id);
     }
 
@@ -235,7 +233,7 @@ class FileOperationsTest {
         assertThat(admission.admit(upload)).as("the same key and contract is the same operation").isEqualTo(id);
         assertThat(kit.find(id).state()).isEqualTo(OperationState.PENDING);
         assertThat(audit.actionsOf(id)).containsExactly(AuditAction.SUBMITTED);
-        assertThatThrownBy(() -> admission.admit(kit.command("echo not-an-upload"))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> admission.admit(kit.command("touch not-an-upload"))).isInstanceOf(IllegalArgumentException.class);
         assertThat(transfer.uploadsSent()).isZero();
         intake.deny(id);
     }

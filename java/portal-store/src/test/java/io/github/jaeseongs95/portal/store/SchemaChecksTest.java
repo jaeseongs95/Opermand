@@ -186,11 +186,36 @@ class SchemaChecksTest {
     }
 
     @Test
+    @DisplayName("S-D0119-10: there is no accepted and no evaluating state: neither the operation nor its events can hold them, and every state of the domain is accepted")
+    void noStateBeforeTheJudgement() {
+        for (String state : new String[] {"ACCEPTED", "EVALUATING"}) {
+            assertThatThrownBy(() -> inSavepoint("UPDATE operation SET state = '" + state + "'")).as(state).isInstanceOf(DataIntegrityViolationException.class);
+            assertThatThrownBy(() -> inSavepoint("UPDATE operation_event SET state = '" + state + "'")).as(state).isInstanceOf(DataIntegrityViolationException.class);
+        }
+        for (io.github.jaeseongs95.portal.domain.operation.OperationState state : io.github.jaeseongs95.portal.domain.operation.OperationState.values()) {
+            inSavepoint("UPDATE operation SET state = '" + state.name() + "'");
+            inSavepoint("UPDATE operation_event SET state = '" + state.name() + "'");
+        }
+    }
+
+    @Test
+    @DisplayName("S-D0119-10: every decision reason of the domain is accepted by the column of the stored decision")
+    void everyDecisionReasonIsAccepted() {
+        for (io.github.jaeseongs95.portal.domain.operation.DecisionReason reason : io.github.jaeseongs95.portal.domain.operation.DecisionReason.values()) {
+            jdbc.update("DELETE FROM operation_decision_command");
+            jdbc.update("DELETE FROM operation_decision_attempt");
+            jdbc.update("DELETE FROM operation_decision");
+            jdbc.update("INSERT INTO operation_decision (operation_id, decision, reason_code, review_reason, policy_revision) VALUES ('" + OP + "', '" + reason.kind().name()
+                + "', '" + reason.name() + "', 'NONE', 0)");
+        }
+    }
+
+    @Test
     @DisplayName("S2-DB-02: keys are enforced: a second operation with the same request key, a second row for one slot, a child without its parent")
     void keysAreEnforced() {
         assertThatThrownBy(() -> inSavepoint("INSERT INTO operation (id, request_key, owner_id, target_id, target_revision, kind, state, version, approval_mode, profile,"
             + " contract_digest, created_at, updated_at, recovery_reason, audit_failure) VALUES ('" + "d".repeat(48) + "', 'request-key-000001', 'o', 'alpha', '" + HEX
-            + "', 'COMMAND', 'ACCEPTED', 1, 'NOT_DECIDED', 'default', '" + HEX + "', " + STAMP + ", " + STAMP + ", 'NONE', 'NONE')")).isInstanceOf(DataIntegrityViolationException.class);
+            + "', 'COMMAND', 'PENDING', 1, 'NOT_DECIDED', 'default', '" + HEX + "', " + STAMP + ", " + STAMP + ", 'NONE', 'NONE')")).isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> inSavepoint("INSERT INTO operation_slot (scope, slot_no, operation_id) VALUES ('GLOBAL', 1, '" + OP + "')"))
             .isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> inSavepoint("INSERT INTO operation_command (operation_id, command_text, caller_context, display_context) VALUES ('" + "e".repeat(48)

@@ -117,7 +117,7 @@ class ReadCommandServiceTest {
     }
 
     @Test
-    @DisplayName("RC-A-468 an execution-queued audit that does not become durable is READ_COMMAND_NOT_STARTED without the audit's text; the operation is cancelled and nothing ran")
+    @DisplayName("RC-A-468 an execution-queued audit that does not become durable is READ_COMMAND_NOT_STARTED without the audit's text; nothing is stored and nothing ran")
     void aQueuedAuditFailureIsNotStarted() {
         audit.failOn(AuditAction.EXECUTION_QUEUED);
         RequestKey key = kit.newKey();
@@ -126,7 +126,7 @@ class ReadCommandServiceTest {
             assertThat(e.getMessage()).doesNotContain("SECRET-AUDIT-DETAIL");
             assertThat(e.attempt()).isEqualTo(ExecutionAttempt.NOT_ATTEMPTED);
         });
-        assertThat(journal.findByRequestKey(key).orElseThrow().state()).isEqualTo(OperationState.CANCELLED);
+        assertThat(journal.findByRequestKey(key)).as("the audit comes before the row (D-0119): nothing was stored").isEmpty();
         assertThat(executor.requestsSent()).isZero();
     }
 

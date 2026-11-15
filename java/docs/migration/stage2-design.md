@@ -24,7 +24,7 @@
 `D:/codex/build/ssh-portal-v300-prep/java/docs/migration/vendor-ssh-mcp-rules.md`는 2026-11-12 이 문서를 쓰는 시점에 존재하지 않았다(해당 폴더에 `vendor*` 파일 0개를 확인). 그래서 6절의 분류기·redactor 규칙은 「vendor 문서 대기」로 두었다.
 
 ### 0.4 핵심 수치(자체 점검 결과는 부록 A)
-- 상태 값: Operation 상태 13(wire 공개 enum) = 내구 11 + `pending`·`evaluating`. 2.x 승인 큐 job 상태는 이 13의 부분집합이다.
+- 상태 값: Operation 상태 11(wire 공개 enum). 2.x는 13개(내구 11 + `pending`·`evaluating`)였으나 3.0.0은 `accepted`·`evaluating`을 없앴다(SSH_PORTAL-D-0119, 2.2절·결정 D-03 개정). 2.x 승인 큐 job 상태는 2.x 13개의 부분집합이었다.
 - ErrorCode: 2.x 소스·기준본에서 잡힌 오류 코드 전부를 3.0 카테고리 enum 8종에 배정했다(5.4절).
 - SQLite 표: 2.x 11개(`operations`, `operation_events`, `operation_legacy_budget`, `operation_schema`, `policy`, `requests`(명령), `requests`(CLI), `reservation`, `last_release`, `runtime_capacity`, `outputs`)와 파일 기반 artifact manifest 1종을 3.0 Flyway 표 26개로 옮겼다(8절).
 - 사례: 2단계에서 닫는 사례 162건, 미루는 사례 558건과 모듈 열이 깨진 6건(9절).
@@ -96,7 +96,8 @@
 ### 2.1 두 층을 하나로 합친다 [제안]
 - `[사실]` 2.x는 상태를 두 곳에서 관리한다. 내구 저널은 11종(`operation-store.mjs:6`): `accepted, queued, starting, running, terminating, completed, failed, cancelled, expired, denied, unknown`. 메모리 승인 job은 `pending, evaluating, queued, running`에 종료 6종(`approval-queue.mjs:12`: `completed, failed, denied, expired, cancelled, unknown`)을 더한다. 관찰 응답은 `accepted`를 job 상태 또는 `pending`으로 바꿔 보여 준다(`operations.mjs:15-19`: `state: record.state === 'accepted' ? job?.state ?? 'pending' : record.state`). 공개 enum은 합집합 13종이다(`public-contract.mjs:15`).
 - `[사실]` 두 층이 어긋나면 D-0004 같은 결함(승인된 요청이 대기열 대신 `busy_check`에서 즉시 실패)이 생겼다. `syncOperation`(`approval-queue.mjs:235-244`)이 두 층을 손으로 맞춘다.
-- `[제안]` 3.0은 `Operation` 하나가 13개 상태를 모두 갖는다. 메모리 job을 두지 않는다. 재시작해도 DB 행이 진실이다.
+- `[제안]` 3.0은 `Operation` 하나가 상태를 모두 갖는다. 메모리 job을 두지 않는다. 재시작해도 DB 행이 진실이다.
+- `[개정 D-0119]` 상태는 11개다. 사용자 결정 「규칙 자동 승인 기본」(2026-11-16)에 따라 접수 즉시 소유자의 규칙으로 판정하고, 첫 저장 상태가 판정 결과다(`QUEUED`·`DENIED`·`PENDING`). 판정 앞에 저장되는 상태가 없으므로 `ACCEPTED`가 필요 없고, 판정은 동기라서 기다리는 평가 단계가 없으므로 `EVALUATING`도 필요 없다. 아래 2.2~2.4절의 `ACCEPTED`·`EVALUATING` 서술(표 행, T1~T3, T5~T7, T21, T23, 금지 전이)은 2.x 근거를 보존한 것이고, 3.0.0은 그 행을 쓰지 않는다. `T1`은 `Operation.admit(spec, id, at, Admission)`이 첫 상태를 정하는 것으로 바뀌었고, `T2`·`T3`·`T21`·`T23`은 없다. 읽기 전용 명령의 자동 실행은 읽기 프로필(읽기 도구 경로)에서만이고, 쓰기 프로필로 접수한 읽기 전용 명령은 읽기 전용 단계를 건너뛰어 금지 목록, 허용 목록, 소유자 검토 순으로 판정한다(S-D0119-05).
 
 ### 2.2 `OperationState` enum (2.x 원값 그대로)
 
@@ -104,9 +105,9 @@ wire 값은 `public-contract.mjs:15` 순서다. Java 상수 이름은 대문자,
 
 | 상수 | wire(2.x 원값) | 뜻(2.x 근거) | 종료 | 2.x 내구 저널에 있나 |
 |---|---|---|---|---|
-| `ACCEPTED` | `accepted` | 의도가 내구 저장됨, 아직 승인 단계 전(`operation-store.mjs:176`) | 아니오 | 예 |
+| ~~`ACCEPTED`~~ | ~~`accepted`~~ | **3.0.0에서 삭제(D-0119)**. 2.x는 접수한 의도를 먼저 `accepted`로 저장하고 다음 단계로 옮겼다. 3.0.0은 접수 때 판정해 첫 저장 상태가 판정 결과다 | - | 2.x에만 |
 | `PENDING` | `pending` | 소유자 승인 대기(`approval-queue.mjs:59`) | 아니오 | 아니오(메모리 job) |
-| `EVALUATING` | `evaluating` | 자동 승인 평가 중(`:123`) | 아니오 | 아니오(메모리 job) |
+| ~~`EVALUATING`~~ | ~~`evaluating`~~ | **3.0.0에서 삭제(D-0119)**. 규칙 판정은 동기라 기다리는 단계가 없다. 모델 판정을 연결할 때 필요하면 다시 들인다 | - | 2.x에만(메모리 job) |
 | `QUEUED` | `queued` | 승인됐고 실행 대기열에 있음(`operation-scheduler.mjs:129`) | 아니오 | 예 |
 | `STARTING` | `starting` | claim됨, 외부 효과 직전(`operation-store.mjs:258`) | 아니오 | 예 |
 | `RUNNING` | `running` | 실행 중(`operation-scheduler.mjs:66`) | 아니오 | 예 |
@@ -119,8 +120,8 @@ wire 값은 `public-contract.mjs:15` 순서다. Java 상수 이름은 대문자,
 | `UNKNOWN` | `unknown` | 결과 불확실, 대조 필요 | 「종료」로 취급(`operation-store.mjs:8`)하지만 `COMPLETED·FAILED·CANCELLED`로만 나갈 수 있음 | 예 |
 
 - `[사실]` 「종료」 집합(`terminal`)은 `completed, failed, cancelled, expired, denied, unknown`이다(`operation-store.mjs:8`, `operation-scheduler.mjs:1`, `approval-queue.mjs:12`). 활성 집합은 `starting, running, terminating`(`operation-store.mjs:9`).
-- `[제안]` 메서드: `isTerminal()`(위 6종), `isFinal()`(`unknown` 제외 5종), `isActive()`, `isPreDispatch()`(`ACCEPTED, EVALUATING, PENDING, QUEUED` — 외부 효과 전이라 만료·거부·취소가 확정 가능한 상태).
-- `[제안]` 새 코드는 `ACCEPTED`를 한 트랜잭션 안에서만 쓴다. `Operation.accept(...)`가 `ACCEPTED`(v1 이벤트)를 만들고 같은 트랜잭션에서 곧바로 `PENDING` 또는 `EVALUATING`(v2 이벤트)으로 전이한다. 그래서 관찰자는 `accepted`를 보지 못한다(2.x와 같은 관찰 동작). `ACCEPTED` 값은 계약 enum 호환·이전 행·충돌 복구를 위해 남긴다.
+- `[제안]` 메서드: `isTerminal()`(위 6종), `isFinal()`(`unknown` 제외 5종), `isActive()`, `isPreDispatch()`(`PENDING, QUEUED` — 외부 효과 전이라 만료·거부·취소가 확정 가능한 상태. D-0119로 `ACCEPTED`·`EVALUATING` 제외).
+- `[폐기 D-0119]` ~~새 코드는 `ACCEPTED`를 한 트랜잭션 안에서만 쓴다. `Operation.accept(...)`가 `ACCEPTED`(v1 이벤트)를 만들고 같은 트랜잭션에서 곧바로 `PENDING` 또는 `EVALUATING`(v2 이벤트)으로 전이한다.~~ 3.0.0은 `Operation.admit`가 판정 결과 상태를 v1로 한 번에 삽입한다(`ACCEPTED`·`EVALUATING` 상수와 CHECK 값을 지웠다). 접수와 저장이 두 번의 커밋이라 사이에 죽으면 `ACCEPTED`가 `UNKNOWN`이 되던 경로도 없어진다.
 
 ### 2.3 전이표 (출발 · 사건 · 도착 · 조건 · 2.x 근거)
 
@@ -128,13 +129,13 @@ wire 값은 `public-contract.mjs:15` 순서다. Java 상수 이름은 대문자,
 
 | # | 출발 | 사건(메서드) | 도착 | 조건 | 2.x 근거 |
 |---|---|---|---|---|---|
-| T1 | (없음) | `Operation.accept` | `ACCEPTED` | 요청 키 새로움, 계약 필드 유효, 유지보수 아님 | `operation-store.mjs:165-186`, `approval-queue.mjs:50` |
-| T2 | `ACCEPTED` | `beginEvaluation` | `EVALUATING` | 자동화 평가 경로 | `approval-queue.mjs:123` |
-| T3 | `ACCEPTED`·`EVALUATING` | `awaitOwnerDecision` | `PENDING` | 평가 끝(`review`) 또는 평가 없음 | `approval-queue.mjs:59, 131-137` |
-| T4 | `PENDING` | `enqueue(mode)` | `QUEUED` | 유지보수 아님, 만료 아님, 시작 권한 일치(7.3), 큐 포화 아님 | `approval-queue.mjs:159-189`, `operation-scheduler.mjs:115-131` |
-| T5 | `PENDING`·`QUEUED`·`EVALUATING` | `deny` | `DENIED` | 외부 효과 전 | `approval-queue.mjs:108-113, 131-136`, `operation-store.mjs:11-12` |
-| T6 | `ACCEPTED`·`EVALUATING`·`PENDING`·`QUEUED` | `expire(at)` | `EXPIRED` | `at >= expiresAt`. 철회할 수 없다(감사 실패와 무관) | `approval-queue.mjs:86-92`, `operation-scheduler.mjs:83` |
-| T7 | `ACCEPTED`·`EVALUATING`·`PENDING`·`QUEUED` | `requestCancel` | `CANCELLED` | 외부 효과 전, 결과 `outcomeCertainty=NOT_DISPATCHED` | `operation-scheduler.mjs:136` |
+| T1 | (없음) | `Operation.admit(spec, id, at, admission)` | `QUEUED`·`DENIED`·`PENDING` | 요청 키 새로움, 계약 필드 유효, 유지보수 아님. 도착 상태는 접수 때의 규칙 판정이 정한다(D-0119): 실행=`QUEUED`(`AUTOMATIC`, 큐 여유가 있을 때만), 금지=`DENIED`, 그 밖=`PENDING`. 결정(`operation_decision`)과 이벤트 v1이 같은 삽입·같은 트랜잭션 | `operation-store.mjs:165-186`, `approval-queue.mjs:50` |
+| ~~T2~~ | - | - | - | **삭제(D-0119)**: `EVALUATING`이 없다 | `approval-queue.mjs:123` |
+| ~~T3~~ | - | - | - | **삭제(D-0119)**: `PENDING`은 T1이 첫 상태로 직접 만든다 | `approval-queue.mjs:59, 131-137` |
+| T4 | `PENDING` | `enqueue(mode)` | `QUEUED` | 소유자의 승인(관리 화면 버튼)만. 유지보수 아님, 만료 아님, 시작 권한 일치(7.3), 큐 포화 아님 | `approval-queue.mjs:159-189`, `operation-scheduler.mjs:115-131` |
+| T5 | `PENDING`·`QUEUED` | `deny` | `DENIED` | 외부 효과 전. 소유자의 거절은 `PENDING`에서만 받고(`OperationIntake.deny`), `QUEUED`에서의 거부는 실행 직전 재판정(D-0121)이 쓴다 | `approval-queue.mjs:108-113, 131-136`, `operation-store.mjs:11-12` |
+| T6 | `PENDING`·`QUEUED` | `expire(at)` | `EXPIRED` | `at >= expiresAt`. 철회할 수 없다(감사 실패와 무관) | `approval-queue.mjs:86-92`, `operation-scheduler.mjs:83` |
+| T7 | `PENDING`·`QUEUED` | `requestCancel` | `CANCELLED` | 외부 효과 전, 결과 `outcomeCertainty=NOT_DISPATCHED` | `operation-scheduler.mjs:136` |
 | T8 | `QUEUED` | `claim(at)` | `STARTING` | 한도(전역·대상·unknown 예산·conflictKey 펜스) 통과. 저장 계층이 같은 트랜잭션에서 보장(3.3절) | `operation-store.mjs:248-259` |
 | T9 | `STARTING` | `refuseBeforeDispatch(failure)` | `FAILED` | 사전 guard 실패, `NOT_DISPATCHED`·`reason=input_failed` | `operation-scheduler.mjs:53-56`, `operation-store.mjs:265-267` |
 | T10 | `STARTING` | `expire(at)` | `EXPIRED` | claim 직후 마감 확인, `NOT_DISPATCHED` | `operation-scheduler.mjs:62-65`, `operation-store.mjs:13` |
@@ -148,9 +149,9 @@ wire 값은 `public-contract.mjs:15` 순서다. Java 상수 이름은 대문자,
 | T18 | `STARTING`·`RUNNING`·`TERMINATING` | `recoverAfterRestart` | `UNKNOWN` | 시작 시 활성 상태 전부. `recoveryReason=BRIDGE_RESTART`, `requiresReconciliation` | `operation-store.mjs:270-274` |
 | T19 | `QUEUED` | `recoverAfterRestart` | `UNKNOWN` | 2.x 승인 큐는 재시작 시 `queued`·`running`을 `unknown`으로(메모리 job 복원) | `approval-queue.mjs:119`, `command-state.mjs:23` |
 | T20 | `PENDING` | `recoverAfterRestart` | `EXPIRED` | 시작 시 대기 중이던 소유자 승인 요청은 만료로 닫는다 | `command-state.mjs:24`, `agent-cli-state.mjs:21-27` |
-| T21 | `EVALUATING` | `recoverAfterRestart` | `UNKNOWN` | 평가 중단은 결과 불명 | `command-state.mjs:23` |
+| ~~T21~~ | - | - | - | **삭제(D-0119)**: `EVALUATING`이 없다 | `command-state.mjs:23` |
 | T22 | `UNKNOWN` | `reconcile(evidence)` | `COMPLETED`·`FAILED`·`CANCELLED` | 소유자 대조 근거가 있을 때만 | `operation-store.mjs:16` |
-| T23 | `ACCEPTED`·`QUEUED` | `abortEvaluation`·`recordUnknown` | `UNKNOWN` | 평가·저장 중단 | `approval-queue.mjs:124`, `operation-store.mjs:11-12` |
+| ~~T23~~ | - | - | - | **삭제(D-0119)**: 접수와 저장이 한 번의 삽입이라 그 사이에 죽어 남는 `ACCEPTED`가 없다 | `approval-queue.mjs:124`, `operation-store.mjs:11-12` |
 | T24 | `QUEUED` | `refuseBeforeDispatch(maintenance)` | `FAILED` | 유지보수 예약 시 대기 작업 닫기 | `approval-queue.mjs:32-37` |
 | T25 | `PENDING` | `refuseBeforeDispatch(queue_full·test_server_bypass)` | `FAILED` | 자동 배차 거절 후 소유자 검토를 남기지 않는 경우만 | `approval-queue.mjs:152-158` |
 
@@ -162,12 +163,12 @@ wire 값은 `public-contract.mjs:15` 순서다. Java 상수 이름은 대문자,
 |---|---|
 | `COMPLETED·FAILED·CANCELLED·EXPIRED·DENIED` → 어떤 상태든 | 종료 상태는 불변(`operation-store.mjs:10-17` 표에 출발 키가 없음, `:157` `INVALID_OPERATION_TRANSITION`) |
 | `UNKNOWN` → `QUEUED·PENDING·STARTING·RUNNING·TERMINATING·EXPIRED·DENIED` | 결과 불명 작업의 자동 재전송 금지(`execution-failure.mjs:6, 13` `automaticReplay:false`, `approval-queue.mjs:253` 「never replay」). 나갈 수 있는 곳은 T22뿐 |
-| `STARTING·RUNNING·TERMINATING` → `QUEUED·PENDING·EVALUATING·ACCEPTED` | 실행 경계를 넘은 뒤에는 되돌리지 않는다. 시작 롤백은 DB 트랜잭션 롤백이지 상태 전이가 아니다(2.x는 메모리 job을 손으로 `pending`으로 되돌렸다 `approval-queue.mjs:181`) |
-| `ACCEPTED·EVALUATING·PENDING` → `STARTING·RUNNING` | 승인(`QUEUED`)을 건너뛰어 실행할 수 없다(`:12-13` 표) |
-| `EVALUATING` → `QUEUED` | 평가 뒤에는 반드시 `PENDING`을 거친다(`approval-queue.mjs:131-137`; 자동 승인의 `startCommand`도 `pending`에서 시작 `:138-141`) |
+| `STARTING·RUNNING·TERMINATING` → `QUEUED·PENDING` | 실행 경계를 넘은 뒤에는 되돌리지 않는다. 시작 롤백은 DB 트랜잭션 롤백이지 상태 전이가 아니다(2.x는 메모리 job을 손으로 `pending`으로 되돌렸다 `approval-queue.mjs:181`) |
+| `PENDING` → `STARTING·RUNNING` | 승인(`QUEUED`)을 건너뛰어 실행할 수 없다(`:12-13` 표) |
+| ~~`EVALUATING` → `QUEUED`~~ | 삭제(D-0119): `EVALUATING`이 없다. 규칙이 실행을 판정하면 접수 때 곧바로 `QUEUED`로 저장한다 |
 | `QUEUED` → `RUNNING` | claim(`STARTING`)을 건너뛸 수 없다(`operation-store.mjs:12`) |
 | `RUNNING` → `EXPIRED·DENIED` | 마감·거부는 외부 효과 전에만(`:14` 표에 없음) |
-| 어떤 상태든 → `ACCEPTED` | 초기 상태 전용 |
+| 어떤 상태든 → 판정 전 상태 | 없음(D-0119). 첫 상태는 `Operation.admit`이 판정 결과로 정한다 |
 | 계약 필드 변경(`request_key`, `owner`, `target_id`, `target_revision`, `kind`, 입력, `input_digest`, `created_at`, `conflict_key`, `expires_at`, `deadline`) | `OPERATION_CONTRACT_IMMUTABLE`(`operation-store.mjs:153-155`) |
 
 ### 2.5 `settle` 판정표 [사실: `operation-store.mjs:261-269`]
@@ -199,8 +200,8 @@ wire 값은 `public-contract.mjs:15` 순서다. Java 상수 이름은 대문자,
 - `final class Operation`(불변). 상태·버전·시각·결과를 모두 보관하고, 전이마다 새 인스턴스를 돌려준다. 바깥 `static` 판정은 두지 않는다. 필드마다 null을 쓰지 않도록 아래를 sealed·enum으로 모델링한다.
   - 식별·계약(불변): `OperationId id`, `RequestKey requestKey`, `OwnerId owner`, `TargetId targetId`, `TargetRevision targetRevision`, `OperationKind kind`(`COMMAND, SOURCE, UPLOAD, DOWNLOAD`), `OperationInput input`(sealed: `CommandInput`·`SourceInput`·`UploadInput`·`DownloadInput`), `Digest contractDigest`, `Instant createdAt`, `Deadline expiry`(sealed: `NoDeadline`·`DeadlineAt(Instant)`), `ConflictKey conflictKey`(sealed: `NoConflictKey`·`ConflictKeyOf(String)`).
   - 가변(전이로만 변경): `OperationState state`, `long version`, `Instant updatedAt`, `ApprovalMode approvalMode`(`OWNER`·`AUTOMATIC`·`NOT_DECIDED` enum — null 대신), `DecisionRecord decision`(sealed: `NoDecision`·`Decided(...)`), `Settlement settlement`(sealed: `Unsettled`·`Settled(ExecutionResult result, OutcomeCertainty certainty, Reconciliation reconciliation, Instant finishedAt)`), `RecoveryReason recovery`(`NONE`·`BRIDGE_RESTART`·`LEGACY_IMPORT`), `Instant cancellationRequestedAt`(sealed 대신 `CancellationRequest`: `NotRequested`·`RequestedAt`).
-- 메서드 시그니처(구현 담당이 이름·인자를 그대로 쓴다): `static Operation accept(NewOperation spec, OperationId id, Instant at)`, `Operation beginEvaluation(Instant at)`, `Operation awaitOwnerDecision(Instant at)`, `Operation recordDecision(DecisionRecord decision, Instant at)`, `Operation enqueue(StartAuthority authority, Instant at)`, `Operation deny(Instant at)`, `Operation expire(Instant at)`, `Operation claim(Instant at)`, `Operation markRunning(Instant at)`, `Operation requestCancel(Instant at)`, `Operation refuseBeforeDispatch(DispatchFailure failure, Instant at)`, `Operation settle(ExecutionOutcome outcome, Instant at)`, `Operation recoverAfterRestart(Instant at)`, `Operation reconcile(ReconciliationEvidence evidence, Instant at)`. 잘못된 전이는 `InvalidOperationTransitionException`(코드 `INVALID_OPERATION_TRANSITION`).
-- `[제안]` `OperationState`의 전이 표는 `OperationState#canMoveTo(OperationState)`(enum 인스턴스 메서드, 표는 2.3절의 데이터)가 한 곳에서 갖고, `Operation` 메서드가 그 표와 추가 조건을 같이 본다. 표는 시험이 2.3·2.4절을 전수 열거로 확인한다(13×13 = 169 조합).
+- 메서드 시그니처(구현 담당이 이름·인자를 그대로 쓴다): `static Operation admit(NewOperation spec, OperationId id, Instant at, Admission admission)`(D-0119: 첫 저장 상태가 판정 결과. `beginEvaluation`·`awaitOwnerDecision`·`recordDecision`·`abortEvaluation`은 삭제), `Operation enqueue(StartAuthority authority, Instant at)`, `Operation deny(Instant at)`, `Operation expire(Instant at)`, `Operation claim(Instant at)`, `Operation markRunning(Instant at)`, `Operation requestCancel(Instant at)`, `Operation refuseBeforeDispatch(DispatchFailure failure, Instant at)`, `Operation settle(ExecutionOutcome outcome, Instant at)`, `Operation recoverAfterRestart(Instant at)`, `Operation reconcile(ReconciliationEvidence evidence, Instant at)`. 잘못된 전이는 `InvalidOperationTransitionException`(코드 `INVALID_OPERATION_TRANSITION`).
+- `[제안]` `OperationState`의 전이 표는 `OperationState#canMoveTo(OperationState)`(enum 인스턴스 메서드, 표는 2.3절의 데이터)가 한 곳에서 갖고, `Operation` 메서드가 그 표와 추가 조건을 같이 본다. 표는 시험이 2.3·2.4절을 전수 열거로 확인한다(11×11 = 121 조합. D-0119로 `ACCEPTED`·`EVALUATING` 제외).
 
 ---
 
@@ -671,7 +672,7 @@ CREATE TABLE operation (
     CONSTRAINT pk_operation PRIMARY KEY (id),
     CONSTRAINT uq_operation_request_key UNIQUE (request_key),
     CONSTRAINT ck_operation_kind CHECK (kind IN ('COMMAND','SOURCE','UPLOAD','DOWNLOAD','AGENT_CLI')),
-    CONSTRAINT ck_operation_state CHECK (state IN ('ACCEPTED','PENDING','EVALUATING','QUEUED','STARTING','RUNNING','TERMINATING','COMPLETED','FAILED','CANCELLED','DENIED','EXPIRED','UNKNOWN')),
+    CONSTRAINT ck_operation_state CHECK (state IN ('PENDING','QUEUED','STARTING','RUNNING','TERMINATING','COMPLETED','FAILED','CANCELLED','DENIED','EXPIRED','UNKNOWN')),
     CONSTRAINT ck_operation_approval CHECK (approval_mode IN ('OWNER','AUTOMATIC','NOT_DECIDED')),
     CONSTRAINT ck_operation_class CHECK (command_class IN ('READ_ONLY','SAFE','PRIVILEGED','UNKNOWN')),
     CONSTRAINT ck_operation_certainty CHECK (outcome_certainty IS NULL OR outcome_certainty IN ('NOT_DISPATCHED','EXITED','UNKNOWN')),
@@ -694,7 +695,7 @@ CREATE TABLE operation_event (
     CONSTRAINT pk_operation_event PRIMARY KEY (event_sequence),
     CONSTRAINT uq_operation_event_version UNIQUE (operation_id, version),
     CONSTRAINT fk_operation_event_op FOREIGN KEY (operation_id) REFERENCES operation (id),
-    CONSTRAINT ck_operation_event_state CHECK (state IN ('ACCEPTED','PENDING','EVALUATING','QUEUED','STARTING','RUNNING','TERMINATING','COMPLETED','FAILED','CANCELLED','DENIED','EXPIRED','UNKNOWN'))
+    CONSTRAINT ck_operation_event_state CHECK (state IN ('PENDING','QUEUED','STARTING','RUNNING','TERMINATING','COMPLETED','FAILED','CANCELLED','DENIED','EXPIRED','UNKNOWN'))
 );
 
 -- 종류별 입력(1:1). 2.x 는 body JSON 안의 operation 필드였다(approval-queue.mjs:58, command-automation.mjs:111-114, files.mjs:42-46).
@@ -1317,7 +1318,7 @@ A-228, A-249, A-460(브라우저·UI 입력, 4단계 portal-web), B-466(MCP subm
 
 | ID | 대상 | 입력 | 기대·판정 |
 |---|---|---|---|
-| S2-ST-01 | `OperationState#canMoveTo` | 13×13 = 169 조합 | 2.3절 T1~T25의 도메인 전이만 true, 나머지 false. 종료 5종은 출발로 항상 false. `UNKNOWN`의 도착은 `COMPLETED·FAILED·CANCELLED`뿐 |
+| S2-ST-01 | `OperationState#canMoveTo` | 11×11 = 121 조합(D-0119) | 2.3절 T4~T25의 도메인 전이만 true, 나머지 false. 종료 5종은 출발로 항상 false. `UNKNOWN`의 도착은 `COMPLETED·FAILED·CANCELLED`뿐 |
 | S2-ST-02 | `Operation.settle` 판정표 | 2.5절 5행 × 경계(예: `cleanupComplete=false`+정상 종료) | 표대로 `COMPLETED/FAILED/CANCELLED/UNKNOWN`, `outcomeCertainty`·`reconciliation` 일치 |
 | S2-ST-03 | D-0035 | `FilePublished` 증거 없이 `COMPLETED` 요구 | 컴파일되지 않는 생성자(없음) + 증거가 `CommandExited(코드≠0)`면 `FAILED` |
 | S2-ST-04 | 시작 복원 | 각 활성·대기 상태 행 | T18~T21대로 `UNKNOWN`/`EXPIRED`, `recoveryReason=BRIDGE_RESTART`, 이벤트 1건 |
@@ -1338,7 +1339,7 @@ A-228, A-249, A-460(브라우저·UI 입력, 4단계 portal-web), B-466(MCP subm
 | S2-CO-01 | `ErrorCode` 기준본 일치 | 8개 enum 전체 | 5.3절 (1)~(4) |
 | S2-CO-02 | 계약 record 구조 | `OperationData` 등 30여 record를 `null` 포함 직렬화 | `mcp/tools/*.json` outputSchema와 구조 일치(8.1: `properties·required·type·enum·additionalProperties`) |
 | S2-CO-03 | `Envelope` | `ok=true`+`error` 있음, `ok=false`+`data` 있음 | 생성 거절. 직렬화에 4개 필드 모두 존재 |
-| S2-CO-04 | `OperationState` wire | 13개 | `@JsonValue`가 `public-contract.mjs:15`와 같은 소문자 13값 |
+| S2-CO-04 | `OperationState` wire | 11개(D-0119, S-D0119-13) | `@JsonValue`가 `public-contract.mjs:15`에서 `accepted`·`evaluating`을 뺀 소문자 11값 |
 | S2-CO-05 | 상수 | `commandBytes` 등 6개 | `targets.limits`와 일치 |
 | S2-RE-01 | 리소스 바이트 | `risk/command-risks.json`, `risk/automation-risk-question.json` | 길이 22856/4644, SHA-256 `eb65ce4e…3d83`/`ef0f1cc1…8fbc` |
 | S2-RE-02 | 질문 digest | 로더가 만든 압축 JSON | SHA-256 `77634c80b0c225777dca0ddc2766db5072b173b7a34e01fdf8e35a48560ac0c5` |
@@ -1400,7 +1401,7 @@ A-228, A-249, A-460(브라우저·UI 입력, 4단계 portal-web), B-466(MCP subm
 |---|---|---|---|
 | 값 타입의 `Pattern` 상수 | 상수 | `OperationId`·`RequestKey`·`TargetId`·`Digest`·`ArtifactUuid`·`PosixRemotePath`·`WindowsRemotePath`·`UploadHostPattern`·`AdminOrigin`·`SemanticVersion`·`CommandText`(숨은 문자)·`CallerContext`(자격 증거) | 정규식은 한 번 컴파일(개발원칙 5.1) |
 | 소유 타입의 상수 | 상수 | `CommandText.MAX_BYTES 32768`, `SourceText.MAX_BYTES 16384`, `CallerContext.MAX_CHARS 8192`, `AssessmentContext.MAX_CHARS 12288`, `ApprovalPolicy.VALIDITY`, `ArtifactRetention.UPLOAD_TTL`, `OutputRetention.TTL/MAX_BYTES/BUDGET/MAX_COUNT`, `ArtifactLimits.MAX_BYTES/CHUNK_BYTES`, `ConcurrencyLimits.DEFAULT_*`, `AdmissionLimits.DEFAULT_*`, `ErrorData` 정규식 | 한도는 소유 타입에 둔다. 한곳에 모은 `Limits` 클래스는 만들지 않는다(안티패턴 T5) |
-| 정적 생성 | 정적 생성 | `Operation.accept`, `Digest.of(byte[])`, `Capacity.parse`, `RemotePath.parse`, `PosixRemotePath.of`, `WindowsRemotePath.of`, `UploadHostPatterns.parse`, `OperationData.from`·`TargetData.from`·`ExecutionData.from`(계약 변환), `Envelope.success`·`Envelope.failure`, `DispatchFailure.refused`·`stepFailed` | 새 값을 만드는 자리. 구성요소 검증은 compact constructor |
+| 정적 생성 | 정적 생성 | `Operation.admit`, `Digest.of(byte[])`, `Capacity.parse`, `RemotePath.parse`, `PosixRemotePath.of`, `WindowsRemotePath.of`, `UploadHostPatterns.parse`, `OperationData.from`·`TargetData.from`·`ExecutionData.from`(계약 변환), `Envelope.success`·`Envelope.failure`, `DispatchFailure.refused`·`stepFailed` | 새 값을 만드는 자리. 구성요소 검증은 compact constructor |
 | 순수 값 변환 | 순수 변환 | `Digest.toHex()`(인스턴스), `SemanticVersion.compareTo`(인스턴스) | 인스턴스 메서드이므로 `static`이 아님 |
 
 예상 정적 메서드 수: 정적 생성 약 15개. 허용 목록(`UTILITY_ALLOWED`)에 넣을 클래스는 0개(정적 메서드만 가진 클래스가 없으므로).
@@ -1441,7 +1442,7 @@ A-228, A-249, A-460(브라우저·UI 입력, 4단계 portal-web), B-466(MCP subm
 |---|---|---|---|---|
 | **D-01** | `CommandLineGrammar` interface의 소유 모듈 | (a) portal-app 포트(feature-map 판정) (b) portal-domain interface, 구현은 portal-ssh | **(b)**. `TargetPlatform`은 portal-app 유지 | `CommandPolicy`(domain)가 문법을 쓰고 domain은 어떤 모듈에도 의존할 수 없다(`ModuleTable.java`: `domain → Set.of()`, A-DIR). DIP: 정책이 자기 interface를 정의(개발원칙 3.0). feature-map 4.1의 한 문장 수정 필요 |
 | D-02 | 작업 상태 기계: 두 층 유지 vs 하나로 통합 | (a) 내구 11종 + 메모리 job (b) `Operation` 13종 통합 | **(b)** | 두 층의 불일치가 D-0004류 결함의 원인(`approval-queue.mjs:235-244`의 수동 동기화). 상태·동작을 한 타입에(개발원칙 3.0 캡슐화) |
-| D-03 | `ACCEPTED`의 취급 | (a) 계속 노출 (b) 같은 트랜잭션에서 `PENDING`·`EVALUATING`으로 곧바로 전이(관찰 불가), 값은 계약·이전용으로 유지 | **(b)** | 2.x 관찰 동작 보존(`operations.mjs:15-19`: `accepted`→`pending`) |
+| D-03 | `ACCEPTED`의 취급 | (a) 계속 노출 (b) 같은 트랜잭션에서 `PENDING`·`EVALUATING`으로 곧바로 전이(관찰 불가), 값은 계약·이전용으로 유지 (c) **상태에서 삭제**(D-0119 개정) | **(c)** | 원래 결정 (b)는 2.x 관찰 동작을 보존하려던 것이다. 사용자 결정 「규칙 자동 승인 기본」(접수 즉시 소유자의 규칙으로 판정)으로 접수 때 이미 판정이 끝나므로 첫 저장 상태가 판정 결과(`QUEUED`·`DENIED`·`PENDING`)다. 관찰될 수 없는 값을 계약에 남길 이유가 없고 3.0.0은 하위 호환이 없다. `EVALUATING`도 동기 규칙 판정에는 기다리는 단계가 없어 함께 삭제했다 |
 | D-04 | wire 값과 enum 상수 이름 | (a) 상수를 소문자로 정의 (b) 대문자 상수 + `@JsonValue`로 2.x 소문자 wire 값, DB는 이름 | **(b)** | A-DOMAIN은 jackson-annotations만 허용(`PortalRules.domain`). Spring Data JDBC 기본 「Enums get mapped to their names」(개발원칙 4.2). Java 명명 관례 |
 | D-05 | 스케줄러 공정성 구현 | (a) 메모리 링 유지(2.x) (b) 데이터로 계산(대상별 `lastStartedAt`) | **(b)** | 싱글턴 가변 필드 금지(패턴 8.15). 재시작·이중 실행에 결정적. 사례 B-186 관찰 결과는 같음 |
 | D-06 | 시간 접근 방식 | (a) 전이 메서드에 `Instant` 인자(유스케이스가 `Clock` 한 번 읽음) (b) 도메인 객체 안에서 `Clock` 호출 | **(a)** + 정책 객체는 `Clock` 생성자 주입 | `Clock` 한 빈(개발원칙 4.5), 시험이 결정적. 한 유스케이스 안 시각 일관 |
@@ -1477,8 +1478,8 @@ A-228, A-249, A-460(브라우저·UI 입력, 4단계 portal-web), B-466(MCP subm
 | 번호 | 판정 | 덧붙임 |
 |---|---|---|
 | D-01 | **(b) 채택** | `CommandLineGrammar` interface는 portal-domain `command`가 소유한다. 구현 2종은 3단계 portal-ssh가 만든다(D-23). feature-map 4.1절의 해당 문장은 prep 쪽에서 고친다 |
-| D-02 | **(b) 채택** | `Operation` 하나가 상태 13종을 모두 가진다 |
-| D-03 | **(b) 채택** | |
+| D-02 | **(b) 채택** | `Operation` 하나가 상태를 모두 가진다(D-0119 이후 11종) |
+| D-03 | **(c) 채택(D-0119 개정)** | `ACCEPTED`·`EVALUATING`을 상태와 wire 계약(11개)에서 삭제한다. 업그레이드 안내(영·한)에 적는다 |
 | D-04 | **(b) 채택** | |
 | D-05 | **(b) 채택** | 2.x 링과 똑같이 관찰되는지는 B-186이 판정한다. 다르면 사례 표의 기대값을 바꾸지 말고 보고한다 |
 | D-06 | **(a) 채택** | |

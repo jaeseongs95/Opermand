@@ -318,15 +318,15 @@ class AutomaticApprovalPolicyTest {
     }
 
     @Test
-    @DisplayName("S2-PO-02 exactly three reasons run a command without the owner and exactly one refuses it")
+    @DisplayName("S2-PO-02 exactly six reasons run a command without the owner and exactly one refuses it")
     void kindsOfTheTwentyReasons() {
-        List<DecisionReason> automatic = List.of(DecisionReason.COMMAND_SET, DecisionReason.MODEL_PASSED, DecisionReason.TEST_SERVER_BYPASS);
+        List<DecisionReason> automatic = List.of(DecisionReason.COMMAND_SET, DecisionReason.MODEL_PASSED, DecisionReason.TEST_SERVER_BYPASS, DecisionReason.READ_ONLY, DecisionReason.AUTOMATIC_UPLOAD, DecisionReason.AUTOMATIC_DOWNLOAD);
         for (DecisionReason reason : DecisionReason.values()) {
             ApprovalDecision decision = ApprovalDecision.byRule(reason);
             DecisionKind expected = automatic.contains(reason) ? DecisionKind.EXECUTE : reason == DecisionReason.POLICY_DENIED ? DecisionKind.DENY : DecisionKind.REVIEW;
             assertThat(decision.kind()).as(reason.name()).isEqualTo(expected);
         }
-        assertThat(DecisionReason.values()).hasSize(20);
+        assertThat(DecisionReason.values()).hasSize(25);
         assertThat(ApprovalDecision.EXPLANATION_RULE_VERSION).isEqualTo("command-explanation-v1");
     }
 

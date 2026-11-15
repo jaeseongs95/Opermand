@@ -49,6 +49,8 @@ import io.github.jaeseongs95.portal.domain.file.FileTargetBinding;
 import io.github.jaeseongs95.portal.domain.id.ArtifactUuid;
 import io.github.jaeseongs95.portal.domain.id.OwnerId;
 import io.github.jaeseongs95.portal.domain.id.Sha256Digester;
+import io.github.jaeseongs95.portal.domain.operation.Admission;
+import io.github.jaeseongs95.portal.domain.operation.DecisionReason;
 import io.github.jaeseongs95.portal.domain.operation.CompletionEvidence;
 import io.github.jaeseongs95.portal.domain.operation.DownloadInput;
 import io.github.jaeseongs95.portal.domain.operation.Elevation;
@@ -218,8 +220,7 @@ class AssemblyContextTest {
 
     /** Accepts the operation, has the owner approve it, claims it and marks it running: the steps of the dispatcher that the journal records. */
     private Operation claimAndRun(NewOperation spec) {
-        Operation accepted = journal.accept(spec).operation();
-        Operation pending = journal.save(accepted.awaitOwnerDecision(clock.instant()), accepted.version());
+        Operation pending = journal.accept(spec, Admission.of(DecisionReason.NO_MATCHING_RULE, spec.kind(), 0L)).operation();
         Operation queued = journal.save(pending.enqueue(new StartAuthority.Owner(), clock.instant()), pending.version());
         ClaimResult claimed = claims.claim(queued.id(), queued.version(), ConcurrencyLimits.defaults(), clock.instant());
         assertThat(claimed).isInstanceOf(ClaimResult.Claimed.class);
