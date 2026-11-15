@@ -178,8 +178,11 @@ class OpenSshSessionPoolTest {
         return ((AcquireResult.Leased) result).lease();
     }
 
-    /** The executable of an sshd (Linux {@code sshd}, Windows {@code sshd.exe}) as the first word of a command line, then the configuration folder of the CI preparation script. */
-    private static final Pattern PREPARED_LISTENER = Pattern.compile("^\"?(\\S*[/\\\\])?sshd(\\.exe)?\"?\\s.*portal-openssh-ci", Pattern.DOTALL);
+    /**
+     * A word of a command line that is the sshd executable (Linux {@code sshd} or {@code /usr/sbin/sshd}, Windows {@code sshd.exe}), also as the process title that a POSIX
+     * {@code sshd} sets for its listener ({@code sshd: /usr/sbin/sshd -f ... [listener]}); the sshd jar of a class path ({@code sshd-core-...jar}) is not such a word.
+     */
+    private static final Pattern SSHD_WORD = Pattern.compile("(^|[\\s/\\\\\"])sshd(\\.exe)?:?\"?(\\s|$)");
 
     private static boolean namesSshd(ProcessHandle process) {
         return process.info().command().map(command -> {
@@ -189,19 +192,23 @@ class OpenSshSessionPoolTest {
     }
 
     /**
-     * The listener of the server that the CI preparation script started: an sshd whose command line names the configuration folder {@code portal-openssh-ci}. When the operating
-     * system does not give the command line of a process of another account (a SYSTEM process on Windows), the listener is the sshd that no sshd started.
+     * A process of the server that the CI preparation script started: an sshd whose command line names the configuration folder {@code portal-openssh-ci}. A Win32-OpenSSH
+     * listener starts its connection processes with the same command line, so the listener is the one of these processes that none of them started ({@link #endTheSessionOnTheServer}).
+     * When the operating system does not give the command line of a process of another account, the sshd that no sshd started stands for it.
      */
-    private static boolean isPreparedListener(ProcessHandle process) {
+    private static boolean isOfPreparedServer(ProcessHandle process) {
         return process.info().commandLine()
-            .map(line -> PREPARED_LISTENER.matcher(line).find())
+            .map(line -> line.contains("portal-openssh-ci") && SSHD_WORD.matcher(line).find())
             .orElseGet(() -> namesSshd(process) && process.parent().map(parent -> !namesSshd(parent)).orElse(true));
     }
 
     /** The server side ends the session: every process of a connection of the prepared listener is ended; what was done, as text for the failure message. */
     private static String endTheSessionOnTheServer() {
-        List<ProcessHandle> listeners = ProcessHandle.allProcesses().filter(OpenSshSessionPoolTest::isPreparedListener).toList();
-        assertThat(listeners).as("the listener of the sshd that the CI preparation script started on this machine").hasSize(1);
+        List<ProcessHandle> ofServer = ProcessHandle.allProcesses().filter(OpenSshSessionPoolTest::isOfPreparedServer).toList();
+        List<ProcessHandle> listeners = ofServer.stream().filter(process -> process.parent().map(parent -> ofServer.stream().noneMatch(other -> other.pid() == parent.pid())).orElse(true)).toList();
+        assertThat(listeners).as("the listener of the sshd that the CI preparation script started on this machine (processes of that server: " + ofServer + "; processes whose command line names sshd: "
+            + ProcessHandle.allProcesses().filter(process -> process.info().commandLine().map(line -> line.contains("sshd")).orElse(false))
+                .map(process -> process.pid() + " " + process.info().commandLine().orElse("")).toList() + ")").hasSize(1);
         List<ProcessHandle> connections = listeners.get(0).descendants().toList();
         assertThat(connections).as("the processes of the connections of the listener (pid " + listeners.get(0).pid() + ")").isNotEmpty();
         long refused = connections.stream().filter(process -> !process.destroyForcibly()).count();
