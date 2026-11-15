@@ -88,10 +88,17 @@ class OperationStorage {
         return Operation.restore(mapper.snapshot(row, input, decision, result));
     }
 
-    /** Inserts a new operation: its row, its input rows and the event of its first version. */
-    void insertNew(Operation operation) {
+    /**
+     * Inserts a new operation in the state its admission decided: its row, its input rows, its decision and the event of its first version. A queued operation also
+     * takes the place it was given in the ready order; the caller read it before it counted what the place has to respect (see {@code JdbcOperationJournal#accept}).
+     */
+    void insertNew(Operation operation, Long readySequence) {
         OperationSnapshot s = operation.snapshot();
-        aggregates.insert(mapper.operationRow(s, null, null, null));
+        boolean queued = s.state() == OperationState.QUEUED;
+        if (queued != (readySequence != null)) {
+            throw new IllegalArgumentException("A queued operation takes a place in the ready order and no other does");
+        }
+        aggregates.insert(mapper.operationRow(s, readySequence, queued ? s.updatedAt() : null, null));
         switch (s.input()) {
             case CommandInput command -> aggregates.insert(mapper.commandRow(s.id(), command));
             case SourceInput source -> aggregates.insert(mapper.sourceRow(s.id(), source));
@@ -101,6 +108,7 @@ class OperationStorage {
                 // The digest of the intent is the column input_digest of the operation row; the rest of the install is AgentCliRequestStore's.
             }
         }
+        writeDecision(s);
         aggregates.insert(new OperationEventRow(s.id().value(), s.version(), s.state(), s.updatedAt()));
     }
 
@@ -109,6 +117,14 @@ class OperationStorage {
      * {@code RequestRefusedException(OPERATION_VERSION_CONFLICT)} when the stored version is another one.
      */
     Operation persist(OperationRow before, Operation next, long expectedVersion) {
+        return persist(before, next, expectedVersion, null);
+    }
+
+    /**
+     * The same, for a transition into {@code QUEUED} whose caller read the place in the ready order itself, before it counted the room in the queue ({@code place});
+     * without one the place is read here. See {@code JdbcOperationJournal#save}.
+     */
+    Operation persist(OperationRow before, Operation next, long expectedVersion, Long place) {
         OperationSnapshot s = next.snapshot();
         if (s.version() != expectedVersion + 1) {
             throw new IllegalArgumentException("The next version must be " + (expectedVersion + 1) + " but is " + s.version());
@@ -121,11 +137,11 @@ class OperationStorage {
         Instant startedAt = before.startedAt();
         switch (s.state()) {
             case QUEUED -> {
-                readySequence = operations.maxReadySequence() + 1;
+                readySequence = place != null ? place : operations.maxReadySequence() + 1;
                 readyAt = s.updatedAt();
             }
             case STARTING -> startedAt = s.updatedAt();
-            case ACCEPTED, PENDING, EVALUATING, RUNNING, TERMINATING, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN -> {
+            case PENDING, RUNNING, TERMINATING, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN -> {
                 // The ready position and the start belong to the transitions into QUEUED and STARTING only.
             }
         }

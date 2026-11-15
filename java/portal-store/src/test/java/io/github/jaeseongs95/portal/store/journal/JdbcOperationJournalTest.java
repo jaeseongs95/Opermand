@@ -52,6 +52,7 @@ import io.github.jaeseongs95.portal.domain.operation.ReconciliationEvidence;
 import io.github.jaeseongs95.portal.domain.operation.RecordedResult;
 import io.github.jaeseongs95.portal.domain.operation.Settlement;
 import io.github.jaeseongs95.portal.domain.operation.SourceInput;
+import io.github.jaeseongs95.portal.domain.operation.StartAuthority;
 import io.github.jaeseongs95.portal.domain.operation.UploadInput;
 import io.github.jaeseongs95.portal.domain.operation.UploadProtocol;
 import io.github.jaeseongs95.portal.domain.path.RemotePath;
@@ -94,8 +95,12 @@ class JdbcOperationJournalTest {
         this.jdbc = jdbc;
     }
 
+    private JournalInsert accept(NewOperation spec) {
+        return journal.accept(spec, JournalFixture.review(spec));
+    }
+
     private void assertConflict(NewOperation changed) {
-        assertThatThrownBy(() -> journal.accept(changed)).isInstanceOfSatisfying(RequestRefusedException.class,
+        assertThatThrownBy(() -> accept(changed)).isInstanceOfSatisfying(RequestRefusedException.class,
             e -> assertThat(e.code()).isEqualTo(RequestErrorCode.OPERATION_KEY_CONFLICT));
     }
 
@@ -103,8 +108,8 @@ class JdbcOperationJournalTest {
     @DisplayName("RC-B-201 and S2-DB-04: the same contract is the same operation, a changed contract is OPERATION_KEY_CONFLICT, and the stored copy is the operation of the first intake")
     void theSameContractIsTheSameOperation() {
         NewOperation spec = fx.command("same", "alpha", "printf ok", new ConflictKey.None());
-        JournalInsert first = journal.accept(spec);
-        JournalInsert second = journal.accept(spec);
+        JournalInsert first = accept(spec);
+        JournalInsert second = accept(spec);
 
         assertThat(first).isInstanceOf(JournalInsert.Inserted.class);
         assertThat(second).isInstanceOf(JournalInsert.Existing.class);
@@ -118,28 +123,28 @@ class JdbcOperationJournalTest {
             new Deadline.At(JournalFixture.NOW.plus(Duration.ofMinutes(30)))));
 
         assertThat(journal.findByRequestKey(fx.requestKey("same")).orElseThrow().id()).isEqualTo(first.operation().id());
-        assertThat(journal.events(first.operation().id()).stream().map(OperationEvent::state)).containsExactly(OperationState.ACCEPTED);
+        assertThat(journal.events(first.operation().id()).stream().map(OperationEvent::state)).containsExactly(OperationState.PENDING);
     }
 
     @Test
     @DisplayName("RC-A-426: the request key is kept: submitting it again gives the same operation and the changed arguments are refused")
     void theRequestKeyIsKept() {
-        Operation first = journal.accept(fx.command("fixture-request-0001", "alpha", "sudo id", new ConflictKey.None())).operation();
-        assertThat(journal.accept(fx.command("fixture-request-0001", "alpha", "sudo id", new ConflictKey.None())).operation().id()).isEqualTo(first.id());
+        Operation first = accept(fx.command("fixture-request-0001", "alpha", "sudo id", new ConflictKey.None())).operation();
+        assertThat(accept(fx.command("fixture-request-0001", "alpha", "sudo id", new ConflictKey.None())).operation().id()).isEqualTo(first.id());
         assertConflict(fx.command("fixture-request-0001", "alpha", "sudo pwd", new ConflictKey.None()));
     }
 
     @Test
     @DisplayName("S2-DB-03: two writers that read the same version: the first transition is stored, the second is OPERATION_VERSION_CONFLICT and changes nothing")
     void theSecondWriterOfAVersionLoses() {
-        Operation accepted = journal.accept(fx.command("race", "alpha", "echo", new ConflictKey.None())).operation();
+        Operation accepted = accept(fx.command("race", "alpha", "echo", new ConflictKey.None())).operation();
         Operation staleCopy = journal.find(accepted.id()).orElseThrow();
 
-        Operation pending = journal.save(accepted.awaitOwnerDecision(JournalFixture.NOW), accepted.version());
+        Operation queued = journal.save(accepted.enqueue(new StartAuthority.Owner(), JournalFixture.NOW), accepted.version());
 
-        assertThatThrownBy(() -> journal.save(staleCopy.beginEvaluation(JournalFixture.NOW), staleCopy.version())).isInstanceOfSatisfying(RequestRefusedException.class,
+        assertThatThrownBy(() -> journal.save(staleCopy.requestCancel(JournalFixture.NOW), staleCopy.version())).isInstanceOfSatisfying(RequestRefusedException.class,
             e -> assertThat(e.code()).isEqualTo(OperationErrorCode.OPERATION_VERSION_CONFLICT));
-        assertThat(journal.find(accepted.id()).orElseThrow().snapshot()).isEqualTo(pending.snapshot());
+        assertThat(journal.find(accepted.id()).orElseThrow().snapshot()).isEqualTo(queued.snapshot());
         assertThat(journal.events(accepted.id()).stream().map(OperationEvent::version)).containsExactly(1L, 2L);
     }
 
@@ -159,7 +164,7 @@ class JdbcOperationJournalTest {
         Timestamp at = Timestamp.from(JournalFixture.NOW);
         // The rows are written straight into the table (a bulk batch, ANSI SQL): 10,000 intakes through accept would only repeat the same insert. Every NOT NULL column is set.
         jdbc.batchUpdate("INSERT INTO operation (id, request_key, owner_id, target_id, target_revision, kind, state, version, approval_mode, profile, contract_digest, "
-            + "created_at, updated_at, recovery_reason, audit_failure) VALUES (?, ?, 'owner', 'alpha', ?, 'COMMAND', 'ACCEPTED', 1, 'NOT_DECIDED', 'default', ?, ?, ?, 'NONE', 'NONE')",
+            + "created_at, updated_at, recovery_reason, audit_failure) VALUES (?, ?, 'owner', 'alpha', ?, 'COMMAND', 'PENDING', 1, 'NOT_DECIDED', 'default', ?, ?, ?, 'NONE', 'NONE')",
             new BatchPreparedStatementSetter() {
                 @Override
                 public void setValues(PreparedStatement ps, int i) throws SQLException {
@@ -181,7 +186,7 @@ class JdbcOperationJournalTest {
         assertThat(full).isEqualTo(before + filler);
 
         NewOperation next = fx.command("beyond", "alpha", "echo beyond", new ConflictKey.None());
-        JournalInsert inserted = journal.accept(next);
+        JournalInsert inserted = accept(next);
 
         assertThat(inserted).isInstanceOf(JournalInsert.Inserted.class);
         assertThat(journal.findByRequestKey(next.requestKey())).isPresent();
@@ -239,7 +244,7 @@ class JdbcOperationJournalTest {
         for (OperationInput input : inputs) {
             NewOperation spec = NewOperation.of(digester, fx.requestKey("kind" + number++), new OwnerId("owner"), new TargetId("alpha"), TargetRevision.of(JournalFixture.REVISION),
                 new ProfileAlias("default"), input, new ConflictKey.Of("one"), new Deadline.None());
-            Operation accepted = journal.accept(spec).operation();
+            Operation accepted = accept(spec).operation();
             assertThat(journal.find(accepted.id()).orElseThrow().snapshot()).as(input.getClass().getSimpleName()).isEqualTo(accepted.snapshot());
         }
     }
@@ -265,14 +270,41 @@ class JdbcOperationJournalTest {
             for (String zone : List.of("Asia/Seoul", "Pacific/Auckland", "America/Los_Angeles")) {
                 TimeZone.setDefault(TimeZone.getTimeZone(zone));
                 Instant moment = Instant.parse("2027-07-01T12:34:56.123456Z");
-                Operation accepted = journal.accept(fx.command("zone" + number++, "alpha", "echo " + zone, new ConflictKey.None())).operation();
-                Operation moved = journal.save(accepted.awaitOwnerDecision(moment), accepted.version());
+                Operation accepted = accept(fx.command("zone" + number++, "alpha", "echo " + zone, new ConflictKey.None())).operation();
+                Operation moved = journal.save(accepted.requestCancel(moment), accepted.version());
                 assertThat(journal.find(moved.id()).orElseThrow().updatedAt()).as(zone).isEqualTo(moment);
                 assertThat(journal.find(moved.id()).orElseThrow().createdAt()).as(zone).isEqualTo(accepted.createdAt());
             }
         } finally {
             TimeZone.setDefault(before);
         }
+    }
+
+    @Test
+    @DisplayName("S-D0119-11 D3 the check of the insert runs before the row and what it throws stops the insert; a known key is answered without running it (D4)")
+    void theCheckOfTheInsertStopsTheInsert() {
+        NewOperation spec = fx.command("check-first", "alpha", "touch a", new ConflictKey.None());
+        io.github.jaeseongs95.portal.domain.operation.Admission queued = io.github.jaeseongs95.portal.domain.operation.Admission.of(
+            io.github.jaeseongs95.portal.domain.operation.DecisionReason.COMMAND_SET, io.github.jaeseongs95.portal.domain.operation.OperationKind.COMMAND, 0L);
+        long before = operations.count();
+
+        // The refusal leaves the transaction of the test, which goes on: the call that is refused runs in a savepoint (Savepoints), as every caller that goes on does.
+        assertThatThrownBy(() -> savepoints.run(() -> journal.accept(spec, queued, ids.next(), clock.instant(), () -> {
+            throw new RequestRefusedException(OperationErrorCode.OPERATION_QUEUE_FULL);
+        }))).isInstanceOfSatisfying(RequestRefusedException.class, e -> assertThat(e.code()).isEqualTo(OperationErrorCode.OPERATION_QUEUE_FULL));
+        assertThat(operations.count()).as("nothing was stored").isEqualTo(before);
+        assertThat(journal.findByRequestKey(spec.requestKey())).isEmpty();
+
+        JournalInsert inserted = journal.accept(spec, queued, ids.next(), clock.instant(), () -> { });
+        assertThat(inserted).isInstanceOf(JournalInsert.Inserted.class);
+        assertThat(inserted.operation().state()).isEqualTo(OperationState.QUEUED);
+        assertThat(jdbc.queryForObject("SELECT ready_sequence FROM operation WHERE request_key = ?", Long.class, spec.requestKey().value())).as("a queued insert takes its place").isNotNull();
+
+        JournalInsert again = journal.accept(spec, queued, ids.next(), clock.instant(), () -> {
+            throw new AssertionError("a known key does not run the check");
+        });
+        assertThat(again).isInstanceOf(JournalInsert.Existing.class);
+        assertThat(again.operation().id()).isEqualTo(inserted.operation().id());
     }
 
     private Operation running(String key) {

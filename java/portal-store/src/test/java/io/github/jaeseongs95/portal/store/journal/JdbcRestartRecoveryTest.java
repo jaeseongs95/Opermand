@@ -54,8 +54,6 @@ class JdbcRestartRecoveryTest {
     @Test
     @DisplayName("S2-ST-04, RC-A-427, RC-A-428, RC-B-203: a restart closes every operation that was in flight: waiting for the owner expires, everything else becomes unknown, nothing is replayed")
     void aRestartClosesWhatWasInFlight() {
-        Operation evaluating = journal.accept(fx.command("evaluating", "alpha", "echo", new ConflictKey.None())).operation();
-        evaluating = journal.save(evaluating.beginEvaluation(JournalFixture.NOW), evaluating.version());
         Operation pending = fx.pending(journal, fx.command("pending", "alpha", "echo", new ConflictKey.None()));
         Operation queued = fx.queued(journal, fx.command("queued", "alpha", "echo", new ConflictKey.None()));
         Operation starting = starting("starting", "beta");
@@ -67,9 +65,9 @@ class JdbcRestartRecoveryTest {
 
         List<Operation> changed = recovery.recoverAfterRestart(RESTART);
 
-        assertThat(changed.stream().map(Operation::id)).containsExactlyInAnyOrder(evaluating.id(), pending.id(), starting.id(), running.id());
+        assertThat(changed.stream().map(Operation::id)).containsExactlyInAnyOrder(pending.id(), starting.id(), running.id());
         assertThat(journal.find(queued.id()).orElseThrow().snapshot()).as("a queued operation was never tried: it stays as it is (RC-B-203, RC-B-200)").isEqualTo(queued.snapshot());
-        Map<String, OperationState> expected = Map.of("evaluating", OperationState.UNKNOWN, "pending", OperationState.EXPIRED, "queued", OperationState.QUEUED,
+        Map<String, OperationState> expected = Map.of("pending", OperationState.EXPIRED, "queued", OperationState.QUEUED,
             "starting", OperationState.UNKNOWN, "running", OperationState.UNKNOWN, "done", OperationState.COMPLETED);
         for (Map.Entry<String, OperationState> entry : expected.entrySet()) {
             Operation read = journal.findByRequestKey(fx.requestKey(entry.getKey())).orElseThrow();
@@ -114,7 +112,7 @@ class JdbcRestartRecoveryTest {
         Operation startingOperation = starting("again", "alpha");
         recovery.recoverAfterRestart(RESTART);
 
-        Operation answer = journal.accept(fx.command("again", "alpha", "echo again", new ConflictKey.Of("again"))).operation();
+        Operation answer = fx.accept(journal, fx.command("again", "alpha", "echo again", new ConflictKey.Of("again"))).operation();
 
         assertThat(answer.id()).isEqualTo(startingOperation.id());
         assertThat(answer.state()).isEqualTo(OperationState.UNKNOWN);
@@ -122,7 +120,7 @@ class JdbcRestartRecoveryTest {
     }
 
     /** Every table a recovery could write: the journal, its result, the slots and fences it releases, and the policy row that must stay out of it. */
-    private static final List<String> TABLES = List.of("operation", "operation_command", "operation_result", "operation_event", "operation_slot", "operation_fence", "command_policy");
+    private static final List<String> TABLES = List.of("operation", "operation_command", "operation_decision", "operation_result", "operation_event", "operation_slot", "operation_fence", "command_policy");
 
     private Map<String, List<Map<String, Object>>> storedRows() {
         Map<String, List<Map<String, Object>>> rows = new LinkedHashMap<>();
@@ -147,8 +145,8 @@ class JdbcRestartRecoveryTest {
     }
 
     /**
-     * RC-A-485 in 3.0: the 2.x case stored seven states, one of them {@code accepted}, and expected no UPDATE at all. In 3.0 {@code accepted} is not terminal (design 2.1)
-     * and is closed as unknown, which RC-A-486 below covers; the six states that are terminal, and a queued operation (T19 withdrawn: it stays queued), are what a restart
+     * RC-A-485 in 3.0: the 2.x case stored seven states, one of them {@code accepted}, and expected no UPDATE at all. 3.0.0 has no {@code accepted} (S-D0119-10); the six
+     * states that are terminal, and a queued operation (T19 withdrawn: it stays queued), are what a restart
      * must leave untouched. The 2.x trigger that refused every UPDATE is replaced by a comparison of every stored row before and after, which runs the same on every DBMS.
      */
     @Test
@@ -186,18 +184,15 @@ class JdbcRestartRecoveryTest {
 
     /**
      * RC-A-486 in 3.0: the 2.x case turned queued into unknown. T19 is withdrawn (main's ruling, design 2.3): a queued operation was never tried and stays queued, so
-     * three of the four operations that 2.x changed are changed here and the queued one is not. {@code accepted}, which 2.x did not have in the journal, is added and
-     * becomes unknown. 2.x kept a result on the rows it changed; in 3.0 an operation has no result before it is settled, so the retained result is the one of the
-     * completed operation.
+     * two operations are changed here (a running one becomes unknown, a pending one expires) and the queued one is not. 3.0.0 has no {@code accepted} and no {@code evaluating}
+     * row to close (S-D0119-10: an operation is stored once, in the state its judgement gives, so no crash between two commits leaves one). 2.x kept a result on the rows
+     * it changed; in 3.0 an operation has no result before it is settled, so the retained result is the one of the completed operation.
      */
     @Test
-    @DisplayName("RC-A-486: a restart closes only what was in flight (unknown, unknown, unknown, expired; queued and completed stay), keeps identity, input and results, and a second recovery changes no row")
+    @DisplayName("RC-A-486: a restart closes only what was in flight (a running one is unknown, a pending one expires; queued and completed stay), keeps identity, input and results, and a second recovery changes no row")
     void aRestartChangesOnlyWhatWasInFlightAndTheSecondRecoveryNothing() {
         Operation queued = fx.queued(journal, fx.command("queued", "alpha", "echo", new ConflictKey.None()));
         Operation running = running("running", "beta");
-        Operation evaluating = journal.accept(fx.command("evaluating", "alpha", "echo", new ConflictKey.None())).operation();
-        evaluating = journal.save(evaluating.beginEvaluation(JournalFixture.NOW), evaluating.version());
-        Operation accepted = journal.accept(fx.command("accepted", "alpha", "echo", new ConflictKey.None())).operation();
         Operation pending = fx.pending(journal, fx.command("pending", "alpha", "echo", new ConflictKey.None()));
         Operation completed = settled("completed", "gamma", ExecutionOutcome.exited(0, List.of("retained result")));
         List<Map<String, Object>> identity = jdbc.queryForList("SELECT id, request_key, owner_id, target_id, target_revision, input_digest, contract_digest FROM operation ORDER BY id");
@@ -206,9 +201,8 @@ class JdbcRestartRecoveryTest {
 
         List<Operation> first = recovery.recoverAfterRestart(RESTART);
 
-        assertThat(first.stream().map(Operation::id)).containsExactlyInAnyOrder(accepted.id(), evaluating.id(), pending.id(), running.id());
-        Map<String, OperationState> expected = Map.of("queued", OperationState.QUEUED, "running", OperationState.UNKNOWN, "evaluating", OperationState.UNKNOWN,
-            "accepted", OperationState.UNKNOWN, "pending", OperationState.EXPIRED, "completed", OperationState.COMPLETED);
+        assertThat(first.stream().map(Operation::id)).containsExactlyInAnyOrder(pending.id(), running.id());
+        Map<String, OperationState> expected = Map.of("queued", OperationState.QUEUED, "running", OperationState.UNKNOWN, "pending", OperationState.EXPIRED, "completed", OperationState.COMPLETED);
         for (Map.Entry<String, OperationState> entry : expected.entrySet()) {
             assertThat(journal.findByRequestKey(fx.requestKey(entry.getKey())).orElseThrow().state()).as(entry.getKey()).isEqualTo(entry.getValue());
         }
@@ -221,7 +215,7 @@ class JdbcRestartRecoveryTest {
         assertThat(jdbc.queryForList("SELECT * FROM operation_command ORDER BY 1")).as("the stored inputs are not touched").usingRecursiveComparison().isEqualTo(inputs);
         assertThat(journal.find(completed.id()).orElseThrow().snapshot()).as("the completed operation keeps its result").isEqualTo(completed.snapshot());
         assertThat(journal.find(queued.id()).orElseThrow().snapshot()).isEqualTo(queued.snapshot());
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM operation_event", Long.class)).as("one event for each of the four that changed").isEqualTo(events + 4);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM operation_event", Long.class)).as("one event for each of the two that changed").isEqualTo(events + 2);
         Map<String, List<Map<String, Object>>> afterFirst = storedRows();
 
         assertThat(recovery.recoverAfterRestart(RESTART.plusSeconds(60))).as("the second recovery finds nothing in flight").isEmpty();

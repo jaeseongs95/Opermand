@@ -22,16 +22,16 @@ import io.github.jaeseongs95.portal.domain.operation.Deadline;
 import io.github.jaeseongs95.portal.domain.operation.NewOperation;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
 import io.github.jaeseongs95.portal.domain.operation.OperationState;
-import io.github.jaeseongs95.portal.domain.operation.StartAuthority;
 import io.github.jaeseongs95.portal.domain.target.ResolvedTarget;
 
 /**
- * The read-only command path (2.x {@code commands.run}, cases A-467 to A-469, B-356, B-358): a command the target's platform classifies as read-only is submitted,
- * approved under the server's read authority and queued like any operation, so it shares the scheduler and its limits with every other operation; then the caller
- * waits for the result up to the wait limit. Nothing here runs a command: the dispatcher does.
+ * The read-only command path (2.x {@code commands.run}, cases A-467 to A-469, B-356, B-358): a command the target's platform classifies as read-only is submitted and the
+ * intake's judgement queues it under the server's read authority like any operation, so it shares the scheduler and its limits with every other operation; then the
+ * caller waits for the result up to the wait limit. Nothing here runs a command: the dispatcher does. The owner's deny list applies here as it does to every command
+ * (defect D-0119, decision Q2; 2.x did not look at it), so a read-only command the list forbids is stored as denied and is not started.
  *
  * <p>The refusals are the contract's own and never show text of the transport: a command that is not read-only is {@code READ_COMMAND_REQUIRES_APPROVAL}, one that could
- * not be started is {@code READ_COMMAND_NOT_STARTED} (the operation is cancelled, so it cannot start later), one whose outcome is unknown is
+ * not be started (denied by the owner's list) is {@code READ_COMMAND_NOT_STARTED}, one whose outcome is unknown is
  * {@code READ_COMMAND_EXECUTION_UNKNOWN}. The method blocks the calling thread while it waits.
  */
 @Service
@@ -63,17 +63,20 @@ public class ReadCommandService {
         }
         NewOperation spec = NewOperation.of(digester, request.key(), request.owner(), target.target().id(), target.revision(), target.target().readProfile(),
             new CommandInput(request.command(), request.callerContext(), request.displayContext()), new ConflictKey.None(), new Deadline.None());
-        Operation submitted = intake.submit(spec);
-        Operation queued = submitted;
-        if (submitted.state() == OperationState.PENDING) {
-            try {
-                queued = intake.approve(submitted.id(), new StartAuthority.Policy(StartAuthority.PolicyScope.READ));
-            } catch (DispatchRefusedException e) {
-                operations.cancel(submitted.id());
-                throw new RequestRefusedException(RequestErrorCode.READ_COMMAND_NOT_STARTED, e);
-            }
+        Operation submitted;
+        try {
+            submitted = intake.submit(spec);
+        } catch (DispatchRefusedException e) {
+            throw new RequestRefusedException(RequestErrorCode.READ_COMMAND_NOT_STARTED, e);
         }
-        Operation result = awaitEnd(queued.id(), request.waitLimit());
+        if (submitted.state() == OperationState.DENIED) {
+            throw new RequestRefusedException(RequestErrorCode.READ_COMMAND_NOT_STARTED);
+        }
+        if (submitted.state() == OperationState.PENDING) {
+            operations.cancel(submitted.id());
+            throw new RequestRefusedException(RequestErrorCode.READ_COMMAND_NOT_STARTED);
+        }
+        Operation result = awaitEnd(submitted.id(), request.waitLimit());
         if (result.state() == OperationState.UNKNOWN) {
             throw new RequestRefusedException(RequestErrorCode.READ_COMMAND_EXECUTION_UNKNOWN);
         }

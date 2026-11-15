@@ -5,12 +5,13 @@ import io.github.jaeseongs95.portal.domain.error.DispatchFailure;
 import io.github.jaeseongs95.portal.domain.error.DispatchReason;
 import io.github.jaeseongs95.portal.domain.error.DispatchStage;
 import io.github.jaeseongs95.portal.domain.operation.ApprovalMode;
+import io.github.jaeseongs95.portal.domain.operation.DecisionReason;
+import io.github.jaeseongs95.portal.domain.operation.DecisionRecord;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
 import io.github.jaeseongs95.portal.domain.operation.OperationKind;
 import io.github.jaeseongs95.portal.domain.operation.OperationState;
 import io.github.jaeseongs95.portal.domain.operation.StartAuthority;
 import io.github.jaeseongs95.portal.domain.operation.StateCounts;
-import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
 import java.time.Instant;
 import java.util.Objects;
 
@@ -49,39 +50,20 @@ public final class ApprovalPolicy {
         return check(operation, OperationState.PENDING, authority, maintenance, at);
     }
 
-    /** Whether a claimed operation may cross into execution now: the guards are asked again after the claim, because time and the policy moved (2.x {@code executeScheduled}). */
+    /**
+     * Whether a claimed operation may cross into execution now: the guards are asked again after the claim, because time and the policy moved (2.x {@code executeScheduled}).
+     * The authority is derived from what the journal keeps: an owner approval is the owner's, an automatic start is the server's policy for the scope its stored decision
+     * reason stands for ({@link StartAuthority.Policy#of}, defect D-0119). 2.x kept the authority in memory ({@code job.executionAuthority}, approval-queue.mjs:185) and
+     * 3.0.0 no longer infers it from the profile or from a missing decision.
+     */
     public StartDecision checkDispatch(Operation operation, MaintenanceState maintenance, Instant at) {
         Objects.requireNonNull(operation, "operation");
         StartAuthority authority = switch (operation.approvalMode()) {
-            case AUTOMATIC -> new StartAuthority.Policy(policyScopeOf(operation.kind()));
+            case AUTOMATIC -> StartAuthority.Policy.of(operation.decision() instanceof DecisionRecord.Decided decided ? decided.reason() : DecisionReason.NO_MATCHING_RULE,
+                operation.kind());
             case OWNER, NOT_DECIDED -> new StartAuthority.Owner();
         };
         return check(operation, OperationState.STARTING, authority, maintenance, at);
-    }
-
-    /**
-     * Whether a claimed operation may cross into execution now, when the caller knows the <em>read profile</em> of the operation's target. 2.x kept the authority an
-     * operation was started with in memory ({@code job.executionAuthority}, approval-queue.mjs:185) and asked again under it at dispatch (:254); the journal keeps no
-     * authority scope, so the one start that needs it is derived from what the journal does keep: a command that is run on the read profile, started by the server
-     * (automatic) with no decision to execute, is the start of the server's read authority, which needs no decision (cases RC-A-467, RC-A-469). Any other automatic start is
-     * judged as {@link #checkDispatch(Operation, MaintenanceState, Instant)} does. The read start is no way round the decision rule: an automatic command without an
-     * execute decision is queued only under the read authority ({@link #checkStart} refuses it under the command authority), and the use case that starts a read command
-     * is the one that classifies it as read-only.
-     *
-     * @param readProfile the read profile of the operation's target
-     */
-    public StartDecision checkDispatch(Operation operation, ProfileAlias readProfile, MaintenanceState maintenance, Instant at) {
-        Objects.requireNonNull(operation, "operation");
-        Objects.requireNonNull(readProfile, "readProfile");
-        if (!startedUnderReadAuthority(operation, readProfile)) {
-            return checkDispatch(operation, maintenance, at);
-        }
-        return check(operation, OperationState.STARTING, new StartAuthority.Policy(StartAuthority.PolicyScope.READ), maintenance, at);
-    }
-
-    private boolean startedUnderReadAuthority(Operation operation, ProfileAlias readProfile) {
-        return operation.approvalMode() == ApprovalMode.AUTOMATIC && operation.kind() == OperationKind.COMMAND && operation.profile().equals(readProfile)
-            && !operation.decision().isExecute();
     }
 
     private StartDecision check(Operation operation, OperationState required, StartAuthority authority, MaintenanceState maintenance, Instant at) {
@@ -99,20 +81,11 @@ public final class ApprovalPolicy {
             return refused(DispatchReason.AUTHORITY, DispatchStage.AUTHORITY);
         }
         boolean automatic = authority.mode() == ApprovalMode.AUTOMATIC;
-        boolean readAuthority = authority instanceof StartAuthority.Policy policy && policy.scope() == StartAuthority.PolicyScope.READ;
-        if (automatic && !readAuthority && !operation.decision().isExecute()) {
+        if (automatic && !operation.decision().isExecute()) {
             boolean file = operation.kind() == OperationKind.UPLOAD || operation.kind() == OperationKind.DOWNLOAD;
             return refused(DispatchReason.AUTHORITY, file ? DispatchStage.FILE_GUARD : DispatchStage.AUTHORITY);
         }
         return new StartDecision.Startable();
-    }
-
-    private static StartAuthority.PolicyScope policyScopeOf(OperationKind kind) {
-        return switch (kind) {
-            case COMMAND, SOURCE, AGENT_CLI -> StartAuthority.PolicyScope.COMMAND;
-            case UPLOAD -> StartAuthority.PolicyScope.UPLOAD;
-            case DOWNLOAD -> StartAuthority.PolicyScope.DOWNLOAD;
-        };
     }
 
     private static StartDecision refused(DispatchReason reason, DispatchStage stage) {

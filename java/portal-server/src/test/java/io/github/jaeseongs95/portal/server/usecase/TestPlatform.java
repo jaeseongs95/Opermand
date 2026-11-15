@@ -1,5 +1,6 @@
 package io.github.jaeseongs95.portal.server.usecase;
 
+import java.util.List;
 import java.util.Objects;
 
 import io.github.jaeseongs95.portal.app.remote.AgentCliPlan;
@@ -17,7 +18,13 @@ import io.github.jaeseongs95.portal.domain.agentcli.AgentCliIntent;
 import io.github.jaeseongs95.portal.domain.agentcli.AgentRelease;
 import io.github.jaeseongs95.portal.domain.classify.CommandClassification;
 import io.github.jaeseongs95.portal.domain.classify.CommandClassifier;
+import io.github.jaeseongs95.portal.domain.command.CommandLineAnalysis;
 import io.github.jaeseongs95.portal.domain.command.CommandLineGrammar;
+import io.github.jaeseongs95.portal.domain.command.Completeness;
+import io.github.jaeseongs95.portal.domain.command.LinuxPolicyName;
+import io.github.jaeseongs95.portal.domain.command.NormalizedName;
+import io.github.jaeseongs95.portal.domain.command.SudoUse;
+import io.github.jaeseongs95.portal.domain.command.WindowsPolicyName;
 import io.github.jaeseongs95.portal.domain.command.TargetRule;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.error.TransferErrorCode;
@@ -65,14 +72,38 @@ final class TestPlatform implements TargetPlatform {
         return classifier.classify(command);
     }
 
+    /**
+     * A grammar for the use case tests: the first word of the line is the one name, and the analysis is complete when there is one. The tests only need the judgement of the
+     * intake to see a name it can look up in a rule.
+     */
     @Override
     public CommandLineGrammar commandLineGrammar() {
-        throw new IllegalStateException("The use cases do not read command names");
+        return new CommandLineGrammar() {
+            @Override
+            public CommandLineAnalysis analyze(CommandText command) {
+                String[] words = command.value().trim().split("\\s+");
+                if (words[0].isEmpty()) {
+                    return new CommandLineAnalysis(List.of(), Completeness.INCOMPLETE, SudoUse.NO_SUDO);
+                }
+                return new CommandLineAnalysis(List.of(words[0]), Completeness.COMPLETE, SudoUse.NO_SUDO);
+            }
+
+            @Override
+            public NormalizedName normalize(String proposedName) {
+                return new NormalizedName.Accepted(os == TargetOs.WINDOWS ? new WindowsPolicyName(proposedName) : new LinuxPolicyName(proposedName));
+            }
+
+            @Override
+            public TargetOs platform() {
+                return os;
+            }
+        };
     }
 
+    /** As a Linux target does: a denied name is one the grammar finds in the line or one of its words. The intake now asks the platform for the deny list (defect D-0119). */
     @Override
     public boolean deniesName(TargetRule rule, CommandText command) {
-        return false;
+        return rule.denies(commandLineGrammar().analyze(command), command);
     }
 
     @Override

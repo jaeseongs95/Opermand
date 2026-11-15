@@ -3,7 +3,6 @@ package io.github.jaeseongs95.portal.store.journal;
 import java.time.Duration;
 import java.time.Instant;
 
-import io.github.jaeseongs95.portal.app.journal.JournalInsert;
 import io.github.jaeseongs95.portal.app.journal.OperationJournal;
 import io.github.jaeseongs95.portal.domain.id.Digest;
 import io.github.jaeseongs95.portal.domain.id.Digester;
@@ -15,6 +14,9 @@ import io.github.jaeseongs95.portal.domain.operation.AgentCliInput;
 import io.github.jaeseongs95.portal.domain.operation.CommandInput;
 import io.github.jaeseongs95.portal.domain.operation.ConflictKey;
 import io.github.jaeseongs95.portal.domain.operation.Deadline;
+import io.github.jaeseongs95.portal.app.journal.JournalInsert;
+import io.github.jaeseongs95.portal.domain.operation.Admission;
+import io.github.jaeseongs95.portal.domain.operation.DecisionReason;
 import io.github.jaeseongs95.portal.domain.operation.NewOperation;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
 import io.github.jaeseongs95.portal.domain.operation.StartAuthority;
@@ -52,14 +54,22 @@ final class JournalFixture {
         return new RequestKey("req-" + key + "-0000000000000000");
     }
 
-    /** Accepts the operation and moves it to the pending state (version 2). */
-    Operation pending(OperationJournal journal, NewOperation spec) {
-        JournalInsert inserted = journal.accept(spec);
-        Operation accepted = inserted.operation();
-        return journal.save(accepted.awaitOwnerDecision(NOW), accepted.version());
+    /** Stores the operation as the owner's to decide and returns the insert. */
+    JournalInsert accept(OperationJournal journal, NewOperation spec) {
+        return journal.accept(spec, review(spec));
     }
 
-    /** Accepts the operation and brings it to {@code QUEUED} (version 3), approved by the owner. */
+    /** The admission of a request no rule covers: the owner decides. */
+    static Admission review(NewOperation spec) {
+        return Admission.of(DecisionReason.NO_MATCHING_RULE, spec.kind(), 0L);
+    }
+
+    /** Stores the operation as pending, for the owner to decide (version 1: the first stored state is the judgement). */
+    Operation pending(OperationJournal journal, NewOperation spec) {
+        return journal.accept(spec, review(spec)).operation();
+    }
+
+    /** Accepts the operation and brings it to {@code QUEUED} (version 2), approved by the owner. */
     Operation queued(OperationJournal journal, NewOperation spec) {
         Operation pending = pending(journal, spec);
         return journal.save(pending.enqueue(new StartAuthority.Owner(), NOW.plus(Duration.ofSeconds(1))), pending.version());

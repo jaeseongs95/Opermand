@@ -27,6 +27,8 @@ import io.github.jaeseongs95.portal.domain.id.OwnerId;
 import io.github.jaeseongs95.portal.domain.id.RequestKey;
 import io.github.jaeseongs95.portal.domain.id.Sha256Digester;
 import io.github.jaeseongs95.portal.domain.id.TargetId;
+import io.github.jaeseongs95.portal.domain.operation.Admission;
+import io.github.jaeseongs95.portal.domain.operation.DecisionReason;
 import io.github.jaeseongs95.portal.domain.operation.AgentCliInput;
 import io.github.jaeseongs95.portal.domain.operation.CommandInput;
 import io.github.jaeseongs95.portal.domain.operation.ConflictKey;
@@ -177,13 +179,13 @@ class HistoryServiceTest {
     private Operation accept(int number, TargetId target, TargetRevision revision, ProfileAlias profile, OperationInput input) {
         RequestKey key = new RequestKey(String.format("history-request-%010d", number));
         NewOperation spec = NewOperation.of(DIGESTER, key, new OwnerId("owner"), target, revision, profile, input, new ConflictKey.None(), new Deadline.None());
-        return Operation.accept(spec, new OperationId(String.format("%048x", number)), T0.plusSeconds(number));
+        return Operation.admit(spec, new OperationId(String.format("%048x", number)), T0.plusSeconds(number), Admission.of(DecisionReason.NO_MATCHING_RULE, input.kind(), 0L));
     }
 
     /** An operation that ran and ended with a result whose texts are as large as the test says. */
     private Operation settledWithTexts(int number, String text) {
         Operation accepted = command(number, KNOWN, targets.current().revision(), WRITE, "echo big");
-        Operation queued = accepted.awaitOwnerDecision(T0.plusSeconds(100)).enqueue(new StartAuthority.Owner(), T0.plusSeconds(101));
+        Operation queued = accepted.enqueue(new StartAuthority.Owner(), T0.plusSeconds(101));
         Operation running = queued.claim(T0.plusSeconds(102)).markRunning(T0.plusSeconds(103));
         return running.settle(ExecutionOutcome.exited(0, List.of(text)), T0.plusSeconds(104));
     }

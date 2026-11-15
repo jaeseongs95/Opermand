@@ -49,8 +49,6 @@ import io.github.jaeseongs95.portal.store.journal.JdbcExecutionTimelineStore;
 @UseCaseTest
 class ExecutionDispatcherTest {
 
-    private static final StartAuthority OWNER = new StartAuthority.Owner();
-
     private final OperationIntake intake;
     private final OperationsService operations;
     private final OperationJournal journal;
@@ -88,7 +86,7 @@ class ExecutionDispatcherTest {
 
     private Operation submitApproved(String text) {
         Operation submitted = intake.submit(kit.command(text));
-        intake.approve(submitted.id(), OWNER);
+        intake.approve(submitted.id());
         return submitted;
     }
 
@@ -99,15 +97,15 @@ class ExecutionDispatcherTest {
     @Test
     @DisplayName("S3-UC-01 an approved command is claimed, runs exactly once and completes; the states, the audit lines, the output and the notification are each written once")
     void anApprovedCommandRunsOnceAndCompletes() throws Exception {
-        Operation submitted = intake.submit(kit.command("echo hello"));
+        Operation submitted = intake.submit(kit.command("touch hello"));
         assertThat(submitted.state()).isEqualTo(OperationState.PENDING);
-        intake.approve(submitted.id(), OWNER);
+        intake.approve(submitted.id());
         OperationId id = submitted.id();
 
         Operation done = kit.awaitTerminal(id);
 
         assertThat(done.state()).isEqualTo(OperationState.COMPLETED);
-        assertThat(executor.sentLines()).containsExactly("echo hello");
+        assertThat(executor.sentLines()).containsExactly("touch hello");
         assertThat(journal.events(id).stream().map(OperationEvent::state).toList()).containsSubsequence(OperationState.PENDING, OperationState.QUEUED, OperationState.STARTING,
             OperationState.RUNNING, OperationState.COMPLETED);
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
@@ -122,7 +120,7 @@ class ExecutionDispatcherTest {
     @Test
     @DisplayName("S3-SS-05 the times of the phases of the execution are stored with the result: connected, request sent, closed")
     void theTimelineIsStored() throws Exception {
-        Operation submitted = submitApproved("echo timeline");
+        Operation submitted = submitApproved("touch timeline");
         kit.awaitTerminal(submitted.id());
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(timelines.timelineOf(submitted.id()).marks().stream().map(PhaseMark::phase).toList())
             .containsExactly(ExecutionPhase.CONNECTED, ExecutionPhase.REQUEST_SENT, ExecutionPhase.CLOSED));
@@ -158,7 +156,7 @@ class ExecutionDispatcherTest {
     @DisplayName("S3-UC-02 RC-A-468 a start audit that does not become durable stops the operation with StepFailed(START_AUDIT, AUDIT_FAILED) before the first byte is sent")
     void aFailedStartAuditSendsNothing() throws Exception {
         audit.failOn(AuditAction.APPROVED);
-        Operation submitted = submitApproved("echo never-sent");
+        Operation submitted = submitApproved("touch never-sent");
         Operation done = kit.awaitTerminal(submitted.id());
         assertThat(done.state()).isEqualTo(OperationState.FAILED);
         assertThat(resultOf(done)).isEqualTo(new RecordedResult.Refused(DispatchFailure.stepFailed(DispatchStage.START_AUDIT, DispatchReason.AUDIT_FAILED)));
@@ -170,7 +168,7 @@ class ExecutionDispatcherTest {
     @DisplayName("S3-UC-02 RC-A-471 a final audit that does not become durable changes nothing of the result: the operation stays completed, is marked, ran once, and is announced once")
     void aFailedFinalAuditLeavesTheOutcome() throws Exception {
         audit.failOn(AuditAction.COMPLETED);
-        Operation submitted = submitApproved("echo audited");
+        Operation submitted = submitApproved("touch audited");
         OperationId id = submitted.id();
         Operation done = kit.awaitTerminal(id);
         assertThat(done.state()).isEqualTo(OperationState.COMPLETED);
@@ -211,10 +209,10 @@ class ExecutionDispatcherTest {
         kit.await(second.id(), operation -> operation.state() == OperationState.RUNNING);
 
         Operation third = intake.submit(kit.command("third waits"));
-        intake.approve(third.id(), OWNER);
+        intake.approve(third.id());
         assertThat(kit.find(third.id()).state()).isEqualTo(OperationState.QUEUED);
         Operation expiring = intake.submit(kit.command("expiring waits", new Deadline.At(Instant.now().plusMillis(800))));
-        intake.approve(expiring.id(), OWNER);
+        intake.approve(expiring.id());
 
         assertThat(kit.awaitTerminal(expiring.id()).state()).isEqualTo(OperationState.EXPIRED);
         assertThat(operations.cancel(third.id()).state()).isEqualTo(OperationState.CANCELLED);
@@ -238,9 +236,9 @@ class ExecutionDispatcherTest {
         assertThat(((Settlement.Settled) done.settlement()).reconciliation()).isEqualTo(Reconciliation.REQUIRED);
         assertThat(executor.requestsSent()).isEqualTo(1);
 
-        Operation next = submitApproved("echo after");
+        Operation next = submitApproved("touch after");
         assertThat(kit.awaitTerminal(next.id()).state()).isEqualTo(OperationState.COMPLETED);
-        assertThat(executor.sentLines()).containsExactly("explodes", "echo after");
+        assertThat(executor.sentLines()).containsExactly("explodes", "touch after");
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(audit.actionsOf(exploded.id())).contains(AuditAction.UNKNOWN));
         assertThat(audit.all()).noneMatch(event -> event.note().contains("SECRET-TRANSPORT-CONTENT"));
     }
@@ -248,7 +246,7 @@ class ExecutionDispatcherTest {
     @Test
     @DisplayName("S3-TP-04 a command that the platform cannot take is refused before dispatch: failed with INVALID_COMMAND at COMMAND_VALIDATION, nothing sent")
     void aPlatformRefusalIsAFailureBeforeDispatch() throws Exception {
-        Operation submitted = submitApproved("echo " + TestPlatform.TOO_LARGE);
+        Operation submitted = submitApproved("touch " + TestPlatform.TOO_LARGE);
         Operation done = kit.awaitTerminal(submitted.id());
         assertThat(done.state()).isEqualTo(OperationState.FAILED);
         assertThat(resultOf(done)).isEqualTo(new RecordedResult.Refused(DispatchFailure.refused(DispatchReason.INVALID_COMMAND, DispatchStage.COMMAND_VALIDATION)));
