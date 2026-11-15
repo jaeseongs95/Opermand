@@ -290,6 +290,8 @@ class JdbcOperationJournalTest {
 
         // The refusal leaves the transaction of the test, which goes on: the call that is refused runs in a savepoint (Savepoints), as every caller that goes on does.
         assertThatThrownBy(() -> savepoints.run(() -> journal.accept(spec, queued, ids.next(), clock.instant(), () -> {
+            assertThat(operations.count()).as("the check runs before the row: nothing is stored yet").isEqualTo(before);
+            assertThat(journal.findByRequestKey(spec.requestKey())).isEmpty();
             throw new RequestRefusedException(OperationErrorCode.OPERATION_QUEUE_FULL);
         }))).isInstanceOfSatisfying(RequestRefusedException.class, e -> assertThat(e.code()).isEqualTo(OperationErrorCode.OPERATION_QUEUE_FULL));
         assertThat(operations.count()).as("nothing was stored").isEqualTo(before);

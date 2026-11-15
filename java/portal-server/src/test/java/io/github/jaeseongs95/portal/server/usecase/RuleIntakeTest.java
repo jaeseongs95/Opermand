@@ -59,6 +59,7 @@ class RuleIntakeTest {
 
     private final OperationIntake intake;
     private final ReadCommandService reads;
+    private final io.github.jaeseongs95.portal.domain.schedule.ConcurrencyLimits limits;
     private final OperationJournal journal;
     private final CommandPolicyStore policies;
     private final ScriptedExecutor executor;
@@ -66,10 +67,11 @@ class RuleIntakeTest {
     private final FixedTargets targets;
     private final UseCaseKit kit;
 
-    RuleIntakeTest(OperationIntake intake, ReadCommandService reads, OperationJournal journal, CommandPolicyStore policies, ScriptedExecutor executor, RecordingAudit audit, FixedTargets targets,
+    RuleIntakeTest(OperationIntake intake, io.github.jaeseongs95.portal.domain.schedule.ConcurrencyLimits limits, ReadCommandService reads, OperationJournal journal, CommandPolicyStore policies, ScriptedExecutor executor, RecordingAudit audit, FixedTargets targets,
                    UseCaseKit kit) {
         this.intake = intake;
         this.reads = reads;
+        this.limits = limits;
         this.journal = journal;
         this.policies = policies;
         this.executor = executor;
@@ -391,17 +393,18 @@ class RuleIntakeTest {
         executor.when("hold", executor.blocksUntil(release));
         List<Operation> held = new ArrayList<>();
         try {
-            for (int number = 0; number < 2; number++) {
+            // The limits are read from the configuration of the test, not assumed: the running places are taken, the queue is left one place short.
+            for (int number = 0; number < limits.globalConcurrency().value(); number++) {
                 held.add(intake.submit(kit.command("touch hold running " + number)));
             }
             for (Operation running : held) {
                 kit.await(running.id(), operation -> operation.state() == OperationState.RUNNING);
             }
-            for (int number = 0; number < 31; number++) {
+            for (int number = 0; number < limits.queueCapacity().value() - 1; number++) {
                 held.add(intake.submit(kit.command("touch hold queued " + number)));
             }
             java.util.concurrent.atomic.AtomicBoolean filled = new java.util.concurrent.atomic.AtomicBoolean();
-            // The first check of the approval finds room (31 of 32). While its audit line is written, another intake takes the last place: only the check inside the write sees it.
+            // The first check of the approval finds room (one place left). While its audit line is written, another intake takes the last place: only the check inside the write sees it.
             audit.whenWritten(event -> {
                 if (event.action() == AuditAction.EXECUTION_QUEUED && event.operationId().equals(waiting.id()) && filled.compareAndSet(false, true)) {
                     held.add(intake.submit(kit.command("touch hold filler")));

@@ -4,6 +4,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.Optional;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import io.github.jaeseongs95.portal.app.admission.AdmissionGate;
@@ -47,6 +49,8 @@ import io.github.jaeseongs95.portal.domain.target.ResolvedTarget;
  */
 @Service
 public class OperationIntake {
+
+    private static final Logger LOG = LoggerFactory.getLogger(OperationIntake.class);
 
     private final OperationJournal journal;
     private final OperationQueueView queueView;
@@ -122,7 +126,7 @@ public class OperationIntake {
         try {
             inserted = journal.accept(spec, admission, id, at, room);
         } catch (RuntimeException e) {
-            endAuditLines(id, e);
+            endAuditLines(DispatchStage.DECISION_AUDIT, id, e);
             throw e;
         }
         return switch (inserted) {
@@ -164,14 +168,15 @@ public class OperationIntake {
 
     /**
      * Tries once to end the audit lines of an operation whose write failed after its audit became durable, with a {@code not-stored} line that names the code of the failure. If
-     * that line fails too, its failure is added to {@code cause} as suppressed and the caller throws {@code cause}.
+     * that line fails too, its failure is added to {@code cause} as suppressed and logged, and the caller throws {@code cause}. {@code stage} is the audit stage of the caller.
      */
-    private void endAuditLines(OperationId id, RuntimeException cause) {
+    private void endAuditLines(DispatchStage stage, OperationId id, RuntimeException cause) {
         String why = cause instanceof RequestRefusedException refused ? refused.code().name() : cause.getClass().getSimpleName();
         try {
-            audit.appendBefore(DispatchStage.DECISION_AUDIT, new AuditEvent(AuditAction.NOT_STORED, id, "not stored: " + why));
+            audit.appendBefore(stage, new AuditEvent(AuditAction.NOT_STORED, id, "not stored: " + why));
         } catch (DispatchRefusedException ending) {
             cause.addSuppressed(ending);
+            LOG.warn("The not-stored line of operation {} could not be written", id.value(), ending);
         }
     }
 
@@ -186,7 +191,8 @@ public class OperationIntake {
      *
      * @throws RequestRefusedException {@code OPERATION_NOT_FOUND}, {@code TARGET_REVISION_CONFLICT}, the code of the queue limit that is reached (also when the room is
      *     gone at the moment of the write), or {@code OPERATION_VERSION_CONFLICT} when another writer took the place in the queue (retryable and not attempted: the operation
-     *     stays pending, the owner may press the button again). After the audit of the queueing became durable a failed write ends its lines with {@code not-stored}.
+     *     stays pending, the owner may press the button again); a version conflict of the write itself (the operation was changed meanwhile, for example denied at the same
+     *     time) keeps the default of the code: not retryable. After the audit of the queueing became durable a failed write ends its lines with {@code not-stored}.
      * @throws DispatchRefusedException a start guard refused, or the audit failed
      */
     public Operation approve(OperationId id) {
@@ -201,13 +207,17 @@ public class OperationIntake {
         audit.appendBefore(DispatchStage.START_AUDIT, new AuditEvent(AuditAction.EXECUTION_QUEUED, id, "authority " + authority.mode().wire()));
         // The room is counted again inside the transaction of the write, after the place in the queue was read: an approval, or an intake, that commits in between cannot
         // push the queue over its room. The one that loses the place is told OPERATION_VERSION_CONFLICT (retryable, not attempted) and the operation stays pending.
+        Operation stored;
         try {
-            return writes.store(operation.enqueue(authority, now), operation.version(), () -> requireRoomInQueue(operation.targetId()));
+            stored = journal.save(operation.enqueue(authority, now), operation.version(), () -> requireRoomInQueue(operation.targetId()));
         } catch (RuntimeException e) {
-            // The line execution-queued is durable and the operation is not queued: it stays pending, and the line gets its end (the journal wins over the audit log).
-            endAuditLines(id, e);
+            // The line execution-queued is durable and the operation is not queued: it stays pending, and the line gets its end (the journal wins over the audit log). Only the
+            // write is inside the try: what follows the commit (the announcement) never ends the lines of an operation that is stored.
+            endAuditLines(DispatchStage.START_AUDIT, id, e);
             throw e;
         }
+        writes.announce(stored);
+        return stored;
     }
 
     /** The owner refuses a pending operation; nothing ran. Any other state is refused at {@code REQUEST_STATE}: a queued operation is cancelled, not denied. */
