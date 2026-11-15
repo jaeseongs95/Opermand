@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -33,12 +34,14 @@ import io.github.jaeseongs95.portal.domain.target.Setting;
  * global one, and an empty variable counts as no variable. The code never calls {@code System.getenv}: the environment is an argument, so a test and a secret file
  * (see {@link SecretEnvPropertySource}) put their values in it the same way.
  *
- * <p><b>What a profile gets follows its authentication method</b> (the sealed {@link SshCredential} has one variant per method): {@code agent} gets the agent when
- * {@code SSH_AUTH_SOCK} is set; {@code password} gets the password; {@code key} gets the key text of the file that {@code keyRef}, {@code <prefix>_KEY} or
- * {@code SSH_MCP_KEY} names (in that order), with the passphrase and, when the profile says {@code cert = true}, the certificate ({@code <prefix>_CERT} or
- * {@code <key file without .pub>-cert.pub} next to the key); {@code keychain} is {@link CredentialLookup.Unsupported}. 2.x collected every source whatever the method
- * was (EV-10); the result here carries only what the method uses. A key file that is missing, empty or unreadable is a {@link CredentialLookup.Missing} that names the
- * file (2.x skipped a missing file silently); an unreadable file is logged with its cause. A leading {@code ~} name of a key path is the home folder ({@code HOME}, else
+ * <p><b>What a profile gets follows its authentication method</b> (the sealed {@link SshCredential} has one variant per method): {@code password} gets the password;
+ * {@code key} gets the key text of the file that {@code keyRef}, {@code <prefix>_KEY} or {@code SSH_MCP_KEY} names (in that order), with the passphrase and, when the
+ * profile says {@code cert = true}, the certificate ({@code <prefix>_CERT} or {@code <key file without .pub>-cert.pub} next to the key); {@code keychain} is
+ * {@link CredentialLookup.Unsupported}. {@code agent}, which is also the method of a profile that names none, collects its sources like 2.x did (EV-10): the key
+ * (read as for {@code key}), else the password, else the agent when {@code SSH_AUTH_SOCK} is set, else a {@link CredentialLookup.Missing} that lists every place
+ * searched. A profile with an explicit method gets only what that method uses. A key file that is missing, empty or unreadable is a {@link CredentialLookup.Missing}
+ * that names the file (2.x skipped a missing file silently), and the lookup of an {@code agent} profile does not go on to the password then; an unreadable file is
+ * logged with its cause. A leading {@code ~} name of a key path is the home folder ({@code HOME}, else
  * {@code user.home}); a name that starts with {@code ~} and a user name is not expanded. Nothing is made of {@code SSH_MCP_SUDO_PASSWORD}: 2.x never read it (EV-03).
  *
  * <p>The secrets are {@link SecretValue}s from the moment they are read, and nothing here logs, prints or puts them in a message: a {@link CredentialMiss} names the
@@ -86,30 +89,57 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
         Objects.requireNonNull(profile, "profile");
         CredentialPrefix prefix = CredentialPrefix.of(alias.value());
         return switch (profile.auth()) {
-            case AGENT -> agent();
+            case AGENT -> agent(alias, prefix, profile);
             case PASSWORD -> password(prefix);
             case KEY -> privateKey(alias, prefix, profile);
             case KEYCHAIN -> new CredentialLookup.Unsupported(AuthMethod.KEYCHAIN);
         };
     }
 
-    private CredentialLookup agent() {
-        return text(AGENT_SOCKET).<CredentialLookup>map(socket -> new CredentialLookup.Resolved(new SshCredential.Agent()))
-            .orElseGet(() -> missing(CredentialPart.PRIVATE_KEY, AGENT_SOCKET));
+    /** The agent method: a named key, else a password, else the agent socket. A key that is named but cannot be used is a miss; it does not fall through to the password. */
+    private CredentialLookup agent(ProfileAlias alias, CredentialPrefix prefix, ConnectionProfile profile) {
+        Optional<String> keyText = namedKey(profile, prefix);
+        if (keyText.isPresent()) {
+            return privateKeyAt(keyText.get(), alias, prefix);
+        }
+        Optional<SecretValue> password = ownOrGlobalPassword(prefix);
+        if (password.isPresent()) {
+            return new CredentialLookup.Resolved(new SshCredential.Password(password.get()));
+        }
+        if (text(AGENT_SOCKET).isPresent()) {
+            return new CredentialLookup.Resolved(new SshCredential.Agent());
+        }
+        List<CredentialMiss> misses = new ArrayList<>(keyMisses(prefix));
+        misses.addAll(passwordMisses(prefix));
+        misses.add(new CredentialMiss(CredentialPart.PRIVATE_KEY, AGENT_SOCKET));
+        return new CredentialLookup.Missing(misses);
     }
 
     private CredentialLookup password(CredentialPrefix prefix) {
-        String own = prefix.variable("PASSWORD");
-        return secret(own).or(() -> secret(GLOBAL_PASSWORD)).<CredentialLookup>map(password -> new CredentialLookup.Resolved(new SshCredential.Password(password)))
-            .orElseGet(() -> new CredentialLookup.Missing(List.of(new CredentialMiss(CredentialPart.PASSWORD, own), new CredentialMiss(CredentialPart.PASSWORD, GLOBAL_PASSWORD))));
+        return ownOrGlobalPassword(prefix).<CredentialLookup>map(password -> new CredentialLookup.Resolved(new SshCredential.Password(password)))
+            .orElseGet(() -> new CredentialLookup.Missing(passwordMisses(prefix)));
     }
 
     private CredentialLookup privateKey(ProfileAlias alias, CredentialPrefix prefix, ConnectionProfile profile) {
-        String ownKey = prefix.variable("KEY");
-        return keyReference(profile).or(() -> text(ownKey)).or(() -> text(GLOBAL_KEY))
-            .map(keyText -> privateKeyAt(keyText, alias, prefix))
-            .orElseGet(() -> new CredentialLookup.Missing(List.of(new CredentialMiss(CredentialPart.KEY_REFERENCE, "keyRef of the profile"),
-                new CredentialMiss(CredentialPart.PRIVATE_KEY, ownKey), new CredentialMiss(CredentialPart.PRIVATE_KEY, GLOBAL_KEY))));
+        return namedKey(profile, prefix).map(keyText -> privateKeyAt(keyText, alias, prefix)).orElseGet(() -> new CredentialLookup.Missing(keyMisses(prefix)));
+    }
+
+    /** The key a profile names: its keyRef, else {@code <prefix>_KEY}, else {@code SSH_MCP_KEY}. */
+    private Optional<String> namedKey(ConnectionProfile profile, CredentialPrefix prefix) {
+        return keyReference(profile).or(() -> text(prefix.variable("KEY"))).or(() -> text(GLOBAL_KEY));
+    }
+
+    private Optional<SecretValue> ownOrGlobalPassword(CredentialPrefix prefix) {
+        return secret(prefix.variable("PASSWORD")).or(() -> secret(GLOBAL_PASSWORD));
+    }
+
+    private List<CredentialMiss> keyMisses(CredentialPrefix prefix) {
+        return List.of(new CredentialMiss(CredentialPart.KEY_REFERENCE, "keyRef of the profile"), new CredentialMiss(CredentialPart.PRIVATE_KEY, prefix.variable("KEY")),
+            new CredentialMiss(CredentialPart.PRIVATE_KEY, GLOBAL_KEY));
+    }
+
+    private List<CredentialMiss> passwordMisses(CredentialPrefix prefix) {
+        return List.of(new CredentialMiss(CredentialPart.PASSWORD, prefix.variable("PASSWORD")), new CredentialMiss(CredentialPart.PASSWORD, GLOBAL_PASSWORD));
     }
 
     private CredentialLookup privateKeyAt(String keyText, ProfileAlias alias, CredentialPrefix prefix) {

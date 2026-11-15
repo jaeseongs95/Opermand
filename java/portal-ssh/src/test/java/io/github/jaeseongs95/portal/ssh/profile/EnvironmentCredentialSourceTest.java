@@ -20,7 +20,10 @@ import org.springframework.core.env.StandardEnvironment;
 import io.github.jaeseongs95.portal.app.remote.CredentialLookup;
 import io.github.jaeseongs95.portal.app.remote.CredentialMiss;
 import io.github.jaeseongs95.portal.app.remote.CredentialPart;
+import io.github.jaeseongs95.portal.app.remote.ProfileLookup;
 import io.github.jaeseongs95.portal.app.remote.SecretValue;
+import io.github.jaeseongs95.portal.ssh.session.JumpResolution;
+import io.github.jaeseongs95.portal.ssh.session.ProxyJumpResolver;
 import io.github.jaeseongs95.portal.app.remote.SshCredential;
 import io.github.jaeseongs95.portal.domain.target.AuthMethod;
 import io.github.jaeseongs95.portal.domain.target.Setting;
@@ -326,9 +329,82 @@ class EnvironmentCredentialSourceTest {
     }
 
     @Test
-    @DisplayName("VR-400 (2.x와 다름: 2.x fell back to a password in the environment when there was no agent; an agent profile with no agent is a miss, not a fallback to a weaker method): an agent profile without SSH_AUTH_SOCK gets a miss that names SSH_AUTH_SOCK")
-    void aMissingAgentNamesTheSocketVariable() throws IOException {
-        assertThat(missesOf(resolve("aws-local", "auth = \"agent\"", Map.of("SSH_MCP_PASSWORD", "p")))).containsExactly(new CredentialMiss(CredentialPart.PRIVATE_KEY, "SSH_AUTH_SOCK"));
+    @DisplayName("VR-400: an agent profile with no key, no password and no SSH_AUTH_SOCK gets a miss for every place that was searched")
+    void aMissingAgentNamesEveryPlace() throws IOException {
+        assertThat(missesOf(resolve("aws-local", "auth = \"agent\"", Map.of()))).extracting(CredentialMiss::place).containsExactly("keyRef of the profile",
+            "SSH_MCP_AWS_LOCAL_KEY", "SSH_MCP_KEY", "SSH_MCP_AWS_LOCAL_PASSWORD", "SSH_MCP_PASSWORD", "SSH_AUTH_SOCK");
+    }
+
+    @Test
+    @DisplayName("S-D0137-01: a profile without auth (the agent method) with SSH_MCP_<PROFILE>_KEY gets the key, as in 2.x (EV-10)")
+    void aProfileWithoutAuthGetsTheKey() throws IOException {
+        Path key = file("keys/id", "the key\n");
+
+        CredentialLookup lookup = resolve("aws-local", "", Map.of("SSH_MCP_AWS_LOCAL_KEY", key.toString()));
+
+        assertThat(revealed(keyOf(lookup).pem())).isEqualTo("the key\n");
+    }
+
+    @Test
+    @DisplayName("S-D0137-02: a profile without auth with only SSH_MCP_PASSWORD gets the password")
+    void aProfileWithoutAuthGetsThePassword() throws IOException {
+        assertThat(revealed(passwordOf(resolve("aws-local", "", Map.of("SSH_MCP_PASSWORD", "p"))).password())).isEqualTo("p");
+    }
+
+    @Test
+    @DisplayName("S-D0137-03: an agent profile with a key and a password gets the key, with its passphrase (the keyRef wins over the variables)")
+    void theKeyComesBeforeThePassword() throws IOException {
+        Path a = file("keys/a", "key a\n");
+        Path b = file("keys/b", "key b\n");
+
+        SshCredential.PrivateKey byVariable = keyOf(resolve("aws-local", "", Map.of("SSH_MCP_KEY", b.toString(), "SSH_MCP_PASSWORD", "p", "SSH_MCP_PASSPHRASE", "f")));
+        SshCredential.PrivateKey byReference = keyOf(resolve("aws-local", "auth = \"agent\"\nkeyRef = " + literal(a), Map.of("SSH_MCP_KEY", b.toString(), "SSH_MCP_PASSWORD", "p")));
+
+        assertThat(revealed(byVariable.pem())).isEqualTo("key b\n");
+        assertThat(byVariable.passphrase()).isEqualTo(Setting.given(SecretValue.of("f")));
+        assertThat(revealed(byReference.pem())).isEqualTo("key a\n");
+    }
+
+    @Test
+    @DisplayName("S-D0137-04: an agent profile with only SSH_AUTH_SOCK still gets the agent, and a password takes its place when there is one")
+    void theSocketIsTheLastResort() throws IOException {
+        assertThat(resolve("aws-local", "", Map.of("SSH_AUTH_SOCK", "/run/agent.sock"))).isEqualTo(new CredentialLookup.Resolved(new SshCredential.Agent()));
+        assertThat(revealed(passwordOf(resolve("aws-local", "", Map.of("SSH_AUTH_SOCK", "/run/agent.sock", "SSH_MCP_PASSWORD", "p"))).password())).isEqualTo("p");
+    }
+
+    @Test
+    @DisplayName("S-D0137-05 (2.x보다 엄격: 2.x skipped a named key file that did not exist and went on; a named key that is not there is a miss that names the file, never a quiet fallback to the password): an agent profile whose named key file does not exist gets a miss that names the file")
+    void aNamedKeyFileThatIsMissingIsAMiss() throws IOException {
+        Path missing = directory.resolve("no-such-key");
+
+        CredentialLookup lookup = resolve("aws-local", "", Map.of("SSH_MCP_AWS_LOCAL_KEY", missing.toString(), "SSH_MCP_PASSWORD", "p", "SSH_AUTH_SOCK", "/run/agent.sock"));
+
+        assertThat(missesOf(lookup)).singleElement().satisfies(miss -> assertThat(miss.place()).contains(missing.toString()).contains("does not exist"));
+    }
+
+    @Test
+    @DisplayName("S-D0137-06: a profile with auth = \"password\" and only a key variable gets a miss for the password variables (an explicit method is not widened)")
+    void anExplicitPasswordProfileIgnoresTheKey() throws IOException {
+        Path key = file("keys/id", "the key\n");
+
+        assertThat(missesOf(resolve("aws-local", "auth = \"password\"", Map.of("SSH_MCP_KEY", key.toString())))).extracting(CredentialMiss::place)
+            .containsExactly("SSH_MCP_AWS_LOCAL_PASSWORD", "SSH_MCP_PASSWORD");
+    }
+
+    @Test
+    @DisplayName("S-D0137-07: a profile without auth and with a key variable goes through the jump resolver as Resolved with the key (not AGENT_UNSUPPORTED or CREDENTIAL_MISSING)")
+    void aProfileWithoutAuthIsResolvedByTheJumpResolver() throws IOException {
+        Path key = file("keys/id", "the key\n");
+        Path config = Files.writeString(directory.resolve("config-jump.toml"), "[[profiles]]\nname = \"aws-local\"\nhost = \"h\"\nuser = \"u\"\n");
+        ProfileCatalog catalog = loader.load(config);
+        ProfileEntry entry = catalog.entries().get(0);
+        ProxyJumpResolver resolver = new ProxyJumpResolver(alias -> new ProfileLookup.Found(entry.connection()),
+            new EnvironmentCredentialSource(environment(Map.of("SSH_MCP_AWS_LOCAL_KEY", key.toString())), catalog));
+
+        JumpResolution resolution = resolver.resolve(entry.alias());
+
+        assertThat(resolution).isInstanceOf(JumpResolution.Resolved.class);
+        assertThat(((JumpResolution.Resolved) resolution).hops()).singleElement().satisfies(hop -> assertThat(hop.credential()).isInstanceOf(SshCredential.PrivateKey.class));
     }
 
     @Test
