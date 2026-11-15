@@ -14,7 +14,7 @@ rem   3. generates an ed25519 client key pair (in %RUNNER_TEMP%\portal-openssh-c
 rem      by SYSTEM and Administrators only, as sshd requires; the account must also be able to reach authorized_keys, which is why the server side is not in the runner temp);
 rem   4. writes an sshd_config for a random loopback port and a second one, the idle port, with a "Match LocalPort <idle port>" block that sets "UnusedConnectionTimeout 3"
 rem      for the connections to the idle port only (the server closes a connection that has no open channel for 3 s; case S-D0038-01 uses it), prints the OpenSSH version
-rem      and what "sshd -T -C" resolves for both ports (3 on the idle port, 0 on the other, or the script fails), and starts that sshd as SYSTEM in a scheduled task;
+rem      and what "sshd -T -C" resolves for both ports (3 on the idle port, none, the default, on the other, or the script fails), and starts that sshd as SYSTEM in a scheduled task;
 rem      the system sshd service is not touched;
 rem   5. writes known_hosts with the host public key only (for both ports), so that host key checking stays on in the tests;
 rem   6. appends the connection values (no secret: the key is named by its path) to %GITHUB_ENV% for the next workflow step:
@@ -147,7 +147,7 @@ if errorlevel 1 (
     exit /b 1
 )
 "%SSHCLIENT%" -V
-call :checkidle %PORT% 0
+call :checkidle %PORT% none
 if errorlevel 1 exit /b 1
 call :checkidle %IDLE_PORT% 3
 if errorlevel 1 exit /b 1

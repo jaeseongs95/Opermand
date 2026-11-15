@@ -15,7 +15,7 @@
 #      later: the server closes a connection that has had no open channel for that long). Case S-D0038-01 connects to the idle port, so a real server closes its session
 #      by itself and no other test is affected;
 #   5. a known_hosts file that holds only the host public key of that sshd, for both ports (host key checking stays on in the tests).
-# It prints the OpenSSH version and what "sshd -T -C" resolves for both ports (the keyword must be 3 s on the idle port and 0 on the other: the script fails otherwise).
+# It prints the OpenSSH version and what "sshd -T -C" resolves for both ports (the keyword must be 3 s on the idle port and "none", the default, on the other: the script fails otherwise).
 # It then writes the connection values (no secret: the key is named by its path) to $GITHUB_ENV for the next workflow step:
 #   PORTAL_OPENSSH_PORT, PORTAL_OPENSSH_IDLE_PORT, PORTAL_OPENSSH_USER, PORTAL_OPENSSH_KEY_FILE, PORTAL_OPENSSH_KNOWN_HOSTS
 #
@@ -134,7 +134,7 @@ ssh -V
 for lport in "$PORT" "$IDLE_PORT"; do
     resolved="$(sudo /usr/sbin/sshd -T -f "$FIX/sshd_config" -C "user=$CI_USER,host=localhost,addr=127.0.0.1,laddr=127.0.0.1,lport=$lport" | grep -i '^unusedconnectiontimeout ')"
     echo "sshd -T, local port $lport: $resolved"
-    if [ "$lport" = "$PORT" ]; then expected="unusedconnectiontimeout 0"; else expected="unusedconnectiontimeout 3"; fi
+    if [ "$lport" = "$PORT" ]; then expected="unusedconnectiontimeout none"; else expected="unusedconnectiontimeout 3"; fi
     if [ "$resolved" != "$expected" ]; then
         echo "sshd resolves '$resolved' for local port $lport, expected '$expected'." >&2
         exit 1
