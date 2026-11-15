@@ -139,6 +139,7 @@ final class ScriptedTransfer implements RemoteFileTransfer {
     /** The file is read to the end into the sink and confirmed. */
     DownloadBehavior fetches(byte[] content) {
         return (request, sink) -> {
+            sink.expect(content.length);
             sink.append(content);
             return new DownloadResult.Fetched(content.length, new Sha256Digester().digest(content));
         };

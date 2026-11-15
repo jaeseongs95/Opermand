@@ -60,6 +60,34 @@ class JdbcArtifactRegistryBudgetTest {
     }
 
     @Test
+    @DisplayName("S-D0012-11 (store half): a row in DELETING charges nothing, so a file that cannot be deleted does not refuse new transfers; the same reservation is refused while the row is live")
+    void aRowBeingDeletedChargesNothing() {
+        ArtifactId dying = fixtures.reservedId(registry.reserve(fixtures.upload(64), fixtures.at()));
+        fixtures.reservedId(registry.reserve(fixtures.upload(32), fixtures.at()));
+        assertThat(registry.reserve(fixtures.upload(64), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(64, 96, 128));
+
+        registry.beginDelete(dying);
+
+        assertThat(registry.budget().chargedBytes()).isEqualTo(32);
+        assertThat(registry.reserve(fixtures.upload(64), fixtures.at())).isInstanceOf(ArtifactReservation.Reserved.class);
+        assertThat(registry.deleting()).extracting(ArtifactRecord::id).containsExactly(dying);
+    }
+
+    @Test
+    @DisplayName("S-D0012-14 (store half): the announced size of a download is judged by the budget without the download's own charge: a 1 KB-like small file fits where the largest file would not, a size that does not fit is BudgetExceeded and changes nothing")
+    void anAnnouncedSizeIsJudgedByTheBudget() {
+        ArtifactId download = fixtures.reservedId(registry.reserve(fixtures.download(0), fixtures.at()));
+        fixtures.reservedId(registry.reserve(fixtures.upload(60), fixtures.at()));
+        fixtures.reservedId(registry.reserve(fixtures.upload(40), fixtures.at()));
+
+        assertThat(registry.sizeDownload(download, 28)).as("100 + 28 = 128 fits, although a whole file (64) would not").isEqualTo(new ArtifactReservation.Reserved(download));
+        assertThat(registry.budget().chargedBytes()).isEqualTo(128);
+        assertThat(registry.sizeDownload(download, 29)).as("the own charge of 28 is not counted twice; 29 does not fit").isEqualTo(new ArtifactReservation.BudgetExceeded(29, 100, 128));
+        assertThat(registry.find(download).orElseThrow().spec().sizeBytes()).as("a refusal changes nothing").isEqualTo(28L);
+        assertThat(registry.budget().chargedBytes()).isEqualTo(128);
+    }
+
+    @Test
     @DisplayName("RC-B-063 (budget half): two 64 byte files fill a 128 byte budget across targets, the third is refused, a release lets it in, releasing all returns the budget to zero")
     void theBudgetIsGlobalAcrossTargets() {
         ArtifactId alpha = fixtures.reservedId(registry.reserve(fixtures.upload(64, new PosixRemotePath("/tmp/a.bin"), new TargetId("alpha")), fixtures.at()));

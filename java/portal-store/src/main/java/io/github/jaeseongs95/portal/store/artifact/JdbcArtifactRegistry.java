@@ -206,22 +206,39 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
     }
 
     /**
-     * One conditional UPDATE, so this method sets no transaction boundary of its own (Principles 4.4) and the winner is told by the rows changed. When no row changed the artifact is read once to
-     * say why; nothing is written again and nothing is retried.
+     * The checks of {@link #reserve} for the announced size: the file limit, the budget without this row's own charge, the disk. The disk is read before the transaction opens (Principles 4.4,
+     * as in {@link #reserve}, which is why this method drives a {@link TransactionTemplate}); the row is changed by one conditional UPDATE, so a download that changed meanwhile is refused.
      */
     @Override
-    public void narrowReservation(ArtifactId id, long sizeBytes) {
+    public ArtifactReservation sizeDownload(ArtifactId id, long sizeBytes) {
         if (sizeBytes < 0) {
             throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
         }
-        if (artifacts.narrowDownload(id.value(), sizeBytes) == 1) {
-            return;
+        if (sizeBytes > limits.maxFileBytes()) {
+            return new ArtifactReservation.FileTooLarge(sizeBytes, limits.maxFileBytes());
         }
+        DiskReading disk = readDisk();
+        return Objects.requireNonNull(transaction.execute(status -> sizeRows(id, sizeBytes, disk)), "reservation");
+    }
+
+    private ArtifactReservation sizeRows(ArtifactId id, long sizeBytes, DiskReading disk) {
         ArtifactRow row = require(id);
         if (row.direction() != ArtifactDirection.DOWNLOAD || row.state() != ArtifactState.STAGING || row.receivedBytes() != 0L) {
             throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
         }
-        throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
+        long own = row.sizeBytes() < 1 ? 1L : row.sizeBytes();
+        long others = artifacts.chargedBytes() - own;
+        if (others > limits.budgetBytes() - Math.max(1L, sizeBytes)) {
+            return new ArtifactReservation.BudgetExceeded(sizeBytes, others, limits.budgetBytes());
+        }
+        long usable = disk.usableBytes();
+        if (usable - sizeBytes < limits.diskMarginBytes()) {
+            return new ArtifactReservation.DiskSpaceInsufficient(sizeBytes, usable, limits.diskMarginBytes());
+        }
+        if (artifacts.resizeDownload(id.value(), sizeBytes) != 1) {
+            throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_CHANGED);
+        }
+        return new ArtifactReservation.Reserved(id);
     }
 
     @Override
@@ -249,6 +266,12 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
         Objects.requireNonNull(now, "now");
         return artifacts.findByRetentionAndStateInAndExpiresAtLessThanEqualOrderByExpiresAtAscIdAsc(ArtifactRetention.RELEASABLE, RELEASABLE_STATES, now).stream()
             .map(mapper::toRecord).toList();
+    }
+
+    /** One read of one query, like {@link #deleting()}: it opens no transaction of its own. */
+    @Override
+    public List<ArtifactRecord> consuming() {
+        return artifacts.findByStateOrderByIdAsc(ArtifactState.CONSUMING).stream().map(mapper::toRecord).toList();
     }
 
     /** One read of one query: it joins the caller's transaction when there is one and opens none (Principles 4.4: the store adds no transaction boundary of its own). */

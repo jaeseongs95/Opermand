@@ -32,20 +32,19 @@ public interface ArtifactRegistry {
     ArtifactRecord markReady(ArtifactId id, Digest sha256);
 
     /**
-     * {@code STAGING} to {@code READY} for a download, whose size was not known when the budget was reserved (the reservation holds the largest file a transfer may
-     * carry, design 5.2, until {@link #narrowReservation} shrinks it): the declared size becomes the bytes received, so the charge is the real one. Only a {@code DOWNLOAD} that is
+     * {@code STAGING} to {@code READY} for a download, whose size was not known when the budget was reserved (the reservation holds no bytes, design 5.2, until {@link #sizeDownload} sets it): the declared size becomes the bytes received, so the charge is the real one. Only a {@code DOWNLOAD} that is
      * {@code STAGING} can be completed this way; any other artifact throws {@code ARTIFACT_NOT_WRITABLE}. Repeating it with the same digest answers the same record.
      */
     ArtifactRecord completeDownload(ArtifactId id, Digest sha256);
 
     /**
-     * Shrinks the reservation of a download to {@code sizeBytes}, the size the target announced before the first byte is read (defect D-0012): the charge falls from the
-     * largest file a transfer carries to the real size, so a download no longer holds more of the budget than its file needs. It is one conditional update, so it opens no
-     * transaction and the loser of a race is told by the number of rows it changed. Only a {@code DOWNLOAD} that is {@code STAGING} and has received no byte can shrink,
-     * and only to a size not above what it holds; any other artifact throws {@code ARTIFACT_NOT_WRITABLE}, a size above the reservation {@code ARTIFACT_SEQUENCE_OR_SIZE}
-     * and an unknown id {@code ARTIFACT_NOT_FOUND}. The same size again is accepted: the charge stays, but the row is updated, so its {@code version} rises by one.
+     * Sets the reservation of a download to {@code sizeBytes}, the size the target announced before the first byte is read (defect D-0012). A download is reserved with no
+     * bytes, because its size is not known before the target is looked at; this call checks the announced size against the file limit, the budget (what the other rows charge)
+     * and the disk, in that order, as {@link #reserve} does, and answers the refusal as the same {@link ArtifactReservation} variants. On {@link ArtifactReservation.Reserved} the
+     * row holds that size; on a refusal it is unchanged and the caller discards the artifact. Only a {@code DOWNLOAD} that is {@code STAGING} and has received no byte can be sized;
+     * any other artifact throws {@code ARTIFACT_NOT_WRITABLE}, a negative size {@code ARTIFACT_SEQUENCE_OR_SIZE} and an unknown id {@code ARTIFACT_NOT_FOUND}.
      */
-    void narrowReservation(ArtifactId id, long sizeBytes);
+    ArtifactReservation sizeDownload(ArtifactId id, long sizeBytes);
 
     /** {@code Optional} here has the one meaning "no such artifact". */
     Optional<ArtifactRecord> find(ArtifactId id);
@@ -92,6 +91,9 @@ public interface ArtifactRegistry {
 
     /** {@code CONSUMING} to {@code CONSUMED}; the row stays and charges one byte. The reason must be the one {@link #beginConsume} recorded. */
     ArtifactRecord completeConsume(ArtifactId id, ConsumeReason reason);
+
+    /** The rows whose use as a moved or removed file began and did not finish ({@link ConsumeState.Consuming}), in the order of their ids; the reap and the start-up check finish them. */
+    List<ArtifactRecord> consuming();
 
     /** Marks the row {@code DELETING} before the bytes are deleted; the row is removed by {@link #release}. */
     ArtifactRecord beginDelete(ArtifactId id);

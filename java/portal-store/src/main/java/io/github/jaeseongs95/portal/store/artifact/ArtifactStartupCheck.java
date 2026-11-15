@@ -16,6 +16,7 @@ import io.github.jaeseongs95.portal.app.artifact.ArtifactPayloadStore;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRecord;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRegistry;
 import io.github.jaeseongs95.portal.app.artifact.ChunkDigest;
+import io.github.jaeseongs95.portal.app.artifact.ConsumeState;
 import io.github.jaeseongs95.portal.app.artifact.QuarantineNotice;
 import io.github.jaeseongs95.portal.app.artifact.ReleaseReason;
 import io.github.jaeseongs95.portal.app.storage.PayloadRead;
@@ -31,8 +32,8 @@ import io.github.jaeseongs95.portal.domain.id.Digester;
  *   <li>a payload shorter than {@code received_bytes}, or a chunk whose hash differs, refuses the start with {@link ArtifactStoreCorruptedException};</li>
  *   <li>a row in {@code DELETING} has its bytes deleted and the row released.</li>
  * </ol>
- * A row in {@code CONSUMING} is checked like the others when its file is there, and is reported, not changed: whether the file was moved or removed is the
- * use case's to know. The check does file I/O and several short registry calls and is not called inside a transaction (Principles 4.4); stage 3 calls
+ * A row in {@code CONSUMING} is finished: nothing is in use at a start, the file was moved or removed already or is as good as gone, so its bytes are deleted and the row becomes the
+ * tombstone for the reason it recorded (defect D-0012: it used to be only reported and kept its charge for good). The check does file I/O and several short registry calls and is not called inside a transaction (Principles 4.4); stage 3 calls
  * {@link #reconcile()} once at start-up. A refusal in the middle leaves the repairs already made in place; they are idempotent, so a second run continues.
  */
 @Component
@@ -61,7 +62,7 @@ public class ArtifactStartupCheck {
         List<ArtifactId> quarantined = new ArrayList<>();
         List<ArtifactId> truncated = new ArrayList<>();
         List<ArtifactId> deleted = new ArrayList<>();
-        List<ArtifactId> unfinishedConsumptions = new ArrayList<>();
+        List<ArtifactId> finishedConsumptions = new ArrayList<>();
 
         for (ArtifactId id : stored) {
             if (!rows.containsKey(id)) {
@@ -78,19 +79,21 @@ public class ArtifactStartupCheck {
                     deleted.add(record.id());
                 }
                 case CONSUMING -> {
-                    unfinishedConsumptions.add(record.id());
-                    if (stored.contains(record.id())) {
-                        checkPayload(record, stored, truncated);
+                    // Nothing is in use at a start, so a use that began and did not finish is finished now, for the reason it recorded (defect D-0012).
+                    if (record.consumption() instanceof ConsumeState.Consuming consuming) {
+                        payloads.delete(record.id());
+                        registry.completeConsume(record.id(), consuming.reason());
+                        finishedConsumptions.add(record.id());
                     }
                 }
                 case STAGING, READY -> checkPayload(record, stored, truncated);
                 case CONSUMED -> LOG.debug("A consumed artifact holds no bytes: {}", record.id().value());
             }
         }
-        LOG.info("Artifact start-up check: {} quarantined, {} truncated, {} deletions finished, {} consumptions open", quarantined.size(), truncated.size(),
-            deleted.size(), unfinishedConsumptions.size());
+        LOG.info("Artifact start-up check: {} quarantined, {} truncated, {} deletions finished, {} consumptions finished", quarantined.size(), truncated.size(),
+            deleted.size(), finishedConsumptions.size());
         quarantine.log();
-        return new ArtifactReconciliation(quarantined, truncated, deleted, unfinishedConsumptions);
+        return new ArtifactReconciliation(quarantined, truncated, deleted, finishedConsumptions);
     }
 
     private void checkPayload(ArtifactRecord record, Set<ArtifactId> stored, List<ArtifactId> truncated) {

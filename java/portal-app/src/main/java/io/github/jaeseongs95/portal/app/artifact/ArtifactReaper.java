@@ -18,7 +18,7 @@ import io.github.jaeseongs95.portal.app.storage.ReapReport;
  * maintenance reservation (RC-A-173) and a failing guard of the file stores (RC-B-004) hold the whole run back: nothing is deleted and nothing is un-charged until they are
  * gone. An artifact that is pinned by a submitted operation is never listed by the registry; a consumed one has no bytes and loses only its row.
  *
- * <p>The order for the others is the registry's: the row goes to {@code DELETING} first, then the bytes are deleted, then the row is released, so a crash in the middle
+ * <p>A row that stayed {@code CONSUMING} is finished too (defect D-0012: a failed settlement used to charge the file for good). The order for the others is the registry's: the row goes to {@code DELETING} first, then the bytes are deleted, then the row is released, so a crash in the middle
  * leaves a row that the next run, or the start-up check, finishes: a row in {@code DELETING} is removed again whatever its expiry (defect D-0012: a failed discard of a download
  * used to leave its charge in the budget until the next start). One artifact that cannot be removed is counted and kept for the next run; it does not stop the run. A row that
  * another use case removed meanwhile (a discard that finished after the list was taken) counts as removed. A row in {@code DELETING} is released as {@code ABANDONED}, not as
@@ -52,6 +52,8 @@ public class ArtifactReaper {
         int failed = 0;
         // The rows that a removal left in DELETING come first, whatever their expiry: they hold a charge for bytes nobody uses (defect D-0012).
         List<ArtifactRecord> due = new ArrayList<>(registry.deleting());
+        // The uses that began and did not finish (a settlement that failed after the move, a crash) hold a charge for a file that is as good as gone: they are finished with their own reason.
+        due.addAll(registry.consuming());
         due.addAll(registry.expired(clock.instant()));
         for (ArtifactRecord artifact : due) {
             try {
@@ -74,7 +76,8 @@ public class ArtifactReaper {
     }
 
     /**
-     * Removes one listed artifact. A row that is {@code DELETING} did not expire: a removal began and did not finish, so it is released as {@link ReleaseReason#ABANDONED}
+     * Removes one listed artifact. A row that is {@code CONSUMING} is finished: the bytes are deleted (they may be gone already) and the row becomes the tombstone for the reason it recorded; the move or the removal that began it is already
+     * past the point where the file was needed, and both steps repeat without harm if the use that began it is still finishing. A row that is {@code DELETING} did not expire: a removal began and did not finish, so it is released as {@link ReleaseReason#ABANDONED}
      * (the reason the start-up check gives it); only a row that was listed because its expiry passed is released as {@link ReleaseReason#EXPIRED}.
      *
      * <p>The row may be gone between the list and the start of the removal: the discard that left it {@code DELETING} can still be running and finish first. That is the
@@ -83,6 +86,11 @@ public class ArtifactReaper {
      * its cause.
      */
     private void remove(ArtifactRecord due) {
+        if (due.state() == ArtifactState.CONSUMING && due.consumption() instanceof ConsumeState.Consuming consuming) {
+            payloads.delete(due.id());
+            registry.completeConsume(due.id(), consuming.reason());
+            return;
+        }
         ReleaseReason reason = due.state() == ArtifactState.DELETING ? ReleaseReason.ABANDONED : ReleaseReason.EXPIRED;
         if (due.state() != ArtifactState.CONSUMED) {
             if (!registry.beginDeleteIfPresent(due.id())) {
