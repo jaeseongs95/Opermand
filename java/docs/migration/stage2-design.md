@@ -200,8 +200,8 @@ wire 값은 `public-contract.mjs:15` 순서다. Java 상수 이름은 대문자,
 - `final class Operation`(불변). 상태·버전·시각·결과를 모두 보관하고, 전이마다 새 인스턴스를 돌려준다. 바깥 `static` 판정은 두지 않는다. 필드마다 null을 쓰지 않도록 아래를 sealed·enum으로 모델링한다.
   - 식별·계약(불변): `OperationId id`, `RequestKey requestKey`, `OwnerId owner`, `TargetId targetId`, `TargetRevision targetRevision`, `OperationKind kind`(`COMMAND, SOURCE, UPLOAD, DOWNLOAD`), `OperationInput input`(sealed: `CommandInput`·`SourceInput`·`UploadInput`·`DownloadInput`), `Digest contractDigest`, `Instant createdAt`, `Deadline expiry`(sealed: `NoDeadline`·`DeadlineAt(Instant)`), `ConflictKey conflictKey`(sealed: `NoConflictKey`·`ConflictKeyOf(String)`).
   - 가변(전이로만 변경): `OperationState state`, `long version`, `Instant updatedAt`, `ApprovalMode approvalMode`(`OWNER`·`AUTOMATIC`·`NOT_DECIDED` enum — null 대신), `DecisionRecord decision`(sealed: `NoDecision`·`Decided(...)`), `Settlement settlement`(sealed: `Unsettled`·`Settled(ExecutionResult result, OutcomeCertainty certainty, Reconciliation reconciliation, Instant finishedAt)`), `RecoveryReason recovery`(`NONE`·`BRIDGE_RESTART`·`LEGACY_IMPORT`), `Instant cancellationRequestedAt`(sealed 대신 `CancellationRequest`: `NotRequested`·`RequestedAt`).
-- 메서드 시그니처(구현 담당이 이름·인자를 그대로 쓴다): `static Operation accept(NewOperation spec, OperationId id, Instant at)`, `Operation beginEvaluation(Instant at)`, `Operation awaitOwnerDecision(Instant at)`, `Operation recordDecision(DecisionRecord decision, Instant at)`, `Operation enqueue(StartAuthority authority, Instant at)`, `Operation deny(Instant at)`, `Operation expire(Instant at)`, `Operation claim(Instant at)`, `Operation markRunning(Instant at)`, `Operation requestCancel(Instant at)`, `Operation refuseBeforeDispatch(DispatchFailure failure, Instant at)`, `Operation settle(ExecutionOutcome outcome, Instant at)`, `Operation recoverAfterRestart(Instant at)`, `Operation reconcile(ReconciliationEvidence evidence, Instant at)`. 잘못된 전이는 `InvalidOperationTransitionException`(코드 `INVALID_OPERATION_TRANSITION`).
-- `[제안]` `OperationState`의 전이 표는 `OperationState#canMoveTo(OperationState)`(enum 인스턴스 메서드, 표는 2.3절의 데이터)가 한 곳에서 갖고, `Operation` 메서드가 그 표와 추가 조건을 같이 본다. 표는 시험이 2.3·2.4절을 전수 열거로 확인한다(13×13 = 169 조합).
+- 메서드 시그니처(구현 담당이 이름·인자를 그대로 쓴다): `static Operation admit(NewOperation spec, OperationId id, Instant at, Admission admission)`(D-0119: 첫 저장 상태가 판정 결과. `beginEvaluation`·`awaitOwnerDecision`·`recordDecision`·`abortEvaluation`은 삭제), `Operation enqueue(StartAuthority authority, Instant at)`, `Operation deny(Instant at)`, `Operation expire(Instant at)`, `Operation claim(Instant at)`, `Operation markRunning(Instant at)`, `Operation requestCancel(Instant at)`, `Operation refuseBeforeDispatch(DispatchFailure failure, Instant at)`, `Operation settle(ExecutionOutcome outcome, Instant at)`, `Operation recoverAfterRestart(Instant at)`, `Operation reconcile(ReconciliationEvidence evidence, Instant at)`. 잘못된 전이는 `InvalidOperationTransitionException`(코드 `INVALID_OPERATION_TRANSITION`).
+- `[제안]` `OperationState`의 전이 표는 `OperationState#canMoveTo(OperationState)`(enum 인스턴스 메서드, 표는 2.3절의 데이터)가 한 곳에서 갖고, `Operation` 메서드가 그 표와 추가 조건을 같이 본다. 표는 시험이 2.3·2.4절을 전수 열거로 확인한다(11×11 = 121 조합. D-0119로 `ACCEPTED`·`EVALUATING` 제외).
 
 ---
 
@@ -672,7 +672,7 @@ CREATE TABLE operation (
     CONSTRAINT pk_operation PRIMARY KEY (id),
     CONSTRAINT uq_operation_request_key UNIQUE (request_key),
     CONSTRAINT ck_operation_kind CHECK (kind IN ('COMMAND','SOURCE','UPLOAD','DOWNLOAD','AGENT_CLI')),
-    CONSTRAINT ck_operation_state CHECK (state IN ('ACCEPTED','PENDING','EVALUATING','QUEUED','STARTING','RUNNING','TERMINATING','COMPLETED','FAILED','CANCELLED','DENIED','EXPIRED','UNKNOWN')),
+    CONSTRAINT ck_operation_state CHECK (state IN ('PENDING','QUEUED','STARTING','RUNNING','TERMINATING','COMPLETED','FAILED','CANCELLED','DENIED','EXPIRED','UNKNOWN')),
     CONSTRAINT ck_operation_approval CHECK (approval_mode IN ('OWNER','AUTOMATIC','NOT_DECIDED')),
     CONSTRAINT ck_operation_class CHECK (command_class IN ('READ_ONLY','SAFE','PRIVILEGED','UNKNOWN')),
     CONSTRAINT ck_operation_certainty CHECK (outcome_certainty IS NULL OR outcome_certainty IN ('NOT_DISPATCHED','EXITED','UNKNOWN')),
@@ -695,7 +695,7 @@ CREATE TABLE operation_event (
     CONSTRAINT pk_operation_event PRIMARY KEY (event_sequence),
     CONSTRAINT uq_operation_event_version UNIQUE (operation_id, version),
     CONSTRAINT fk_operation_event_op FOREIGN KEY (operation_id) REFERENCES operation (id),
-    CONSTRAINT ck_operation_event_state CHECK (state IN ('ACCEPTED','PENDING','EVALUATING','QUEUED','STARTING','RUNNING','TERMINATING','COMPLETED','FAILED','CANCELLED','DENIED','EXPIRED','UNKNOWN'))
+    CONSTRAINT ck_operation_event_state CHECK (state IN ('PENDING','QUEUED','STARTING','RUNNING','TERMINATING','COMPLETED','FAILED','CANCELLED','DENIED','EXPIRED','UNKNOWN'))
 );
 
 -- 종류별 입력(1:1). 2.x 는 body JSON 안의 operation 필드였다(approval-queue.mjs:58, command-automation.mjs:111-114, files.mjs:42-46).
@@ -1401,7 +1401,7 @@ A-228, A-249, A-460(브라우저·UI 입력, 4단계 portal-web), B-466(MCP subm
 |---|---|---|---|
 | 값 타입의 `Pattern` 상수 | 상수 | `OperationId`·`RequestKey`·`TargetId`·`Digest`·`ArtifactUuid`·`PosixRemotePath`·`WindowsRemotePath`·`UploadHostPattern`·`AdminOrigin`·`SemanticVersion`·`CommandText`(숨은 문자)·`CallerContext`(자격 증거) | 정규식은 한 번 컴파일(개발원칙 5.1) |
 | 소유 타입의 상수 | 상수 | `CommandText.MAX_BYTES 32768`, `SourceText.MAX_BYTES 16384`, `CallerContext.MAX_CHARS 8192`, `AssessmentContext.MAX_CHARS 12288`, `ApprovalPolicy.VALIDITY`, `ArtifactRetention.UPLOAD_TTL`, `OutputRetention.TTL/MAX_BYTES/BUDGET/MAX_COUNT`, `ArtifactLimits.MAX_BYTES/CHUNK_BYTES`, `ConcurrencyLimits.DEFAULT_*`, `AdmissionLimits.DEFAULT_*`, `ErrorData` 정규식 | 한도는 소유 타입에 둔다. 한곳에 모은 `Limits` 클래스는 만들지 않는다(안티패턴 T5) |
-| 정적 생성 | 정적 생성 | `Operation.accept`, `Digest.of(byte[])`, `Capacity.parse`, `RemotePath.parse`, `PosixRemotePath.of`, `WindowsRemotePath.of`, `UploadHostPatterns.parse`, `OperationData.from`·`TargetData.from`·`ExecutionData.from`(계약 변환), `Envelope.success`·`Envelope.failure`, `DispatchFailure.refused`·`stepFailed` | 새 값을 만드는 자리. 구성요소 검증은 compact constructor |
+| 정적 생성 | 정적 생성 | `Operation.admit`, `Digest.of(byte[])`, `Capacity.parse`, `RemotePath.parse`, `PosixRemotePath.of`, `WindowsRemotePath.of`, `UploadHostPatterns.parse`, `OperationData.from`·`TargetData.from`·`ExecutionData.from`(계약 변환), `Envelope.success`·`Envelope.failure`, `DispatchFailure.refused`·`stepFailed` | 새 값을 만드는 자리. 구성요소 검증은 compact constructor |
 | 순수 값 변환 | 순수 변환 | `Digest.toHex()`(인스턴스), `SemanticVersion.compareTo`(인스턴스) | 인스턴스 메서드이므로 `static`이 아님 |
 
 예상 정적 메서드 수: 정적 생성 약 15개. 허용 목록(`UTILITY_ALLOWED`)에 넣을 클래스는 0개(정적 메서드만 가진 클래스가 없으므로).
