@@ -144,14 +144,14 @@ class JdbcClaimStoreConcurrencyTest {
         }
     }
 
-/** The answer of an insert or a write that lost its place: nothing was stored, nothing was attempted, and sending it again is safe (S-D0119-18, -19, -20). */
-private static void assertRetryableConflict(io.github.jaeseongs95.portal.domain.error.RequestRefusedException refused) {
-    assertThat(refused.code()).isEqualTo(io.github.jaeseongs95.portal.domain.error.OperationErrorCode.OPERATION_VERSION_CONFLICT);
-    assertThat(refused.retryable()).as("a client that does not resend what it cannot place would lose the request").isTrue();
-    assertThat(refused.attempt()).isEqualTo(io.github.jaeseongs95.portal.domain.error.ExecutionAttempt.NOT_ATTEMPTED);
-}
+    /** The answer of an insert or a write that lost its place: nothing was stored, nothing was attempted, and sending it again is safe (S-D0119-18, -19, -20). */
+    private static void assertRetryableConflict(io.github.jaeseongs95.portal.domain.error.RequestRefusedException refused) {
+        assertThat(refused.code()).isEqualTo(io.github.jaeseongs95.portal.domain.error.OperationErrorCode.OPERATION_VERSION_CONFLICT);
+        assertThat(refused.retryable()).as("a client that does not resend what it cannot place would lose the request").isTrue();
+        assertThat(refused.attempt()).isEqualTo(io.github.jaeseongs95.portal.domain.error.ExecutionAttempt.NOT_ATTEMPTED);
+    }
 
-private long queuedRows() {
+    private long queuedRows() {
         return jdbc.queryForObject("SELECT COUNT(*) FROM operation WHERE state = 'QUEUED'", Long.class);
     }
 
