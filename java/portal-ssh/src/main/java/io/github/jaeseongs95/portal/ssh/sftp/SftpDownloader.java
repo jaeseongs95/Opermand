@@ -13,6 +13,8 @@ import java.util.Arrays;
 import java.util.Objects;
 import java.util.Optional;
 import org.apache.sshd.sftp.client.SftpClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
@@ -26,11 +28,13 @@ import org.springframework.stereotype.Component;
  * compared the inode and the change time, which SFTP attributes do not carry). A sink that fails ends the read at once.
  *
  * <p>What the failures come to: a status the server answered with (permission denied, no such file) is {@code Refused} with its own code; a lost connection is
- * {@code Failed(TRANSPORT_LOST)}; the time limit and the cancel are {@code Failed(DEADLINE)} and {@code Failed(CANCELLED)}. The adapter never reads the file again.
+ * {@code Failed(TRANSPORT_LOST)}; the time limit and the cancel are {@code Failed(DEADLINE)} and {@code Failed(CANCELLED)}. The adapter never reads the file again. A failure of {@code close()} on the read stream is only logged: it comes after the
+ * last byte and does not change what was read (size and SHA-256) or what the second look at the file found.
  */
 @Component
 public class SftpDownloader {
 
+    private static final Logger LOG = LoggerFactory.getLogger(SftpDownloader.class);
     private static final int BLOCK_BYTES = 64 * 1024;
 
     private final RemotePathChecker checker;
@@ -80,24 +84,21 @@ public class SftpDownloader {
             return new DownloadResult.Failed(stopped.orElseThrow());
         }
         StreamDigest digest = StreamDigest.sha256();
-        byte[] block = new byte[BLOCK_BYTES];
-        try (InputStream in = client.read(location.file())) {
-            int read;
-            while ((read = in.read(block)) >= 0) {
-                stopped = watch.stopRequested();
-                if (stopped.isPresent()) {
-                    return new DownloadResult.Failed(stopped.orElseThrow());
-                }
-                digest.update(block, 0, read);
-                if (digest.count() > announced.size()) {
-                    return changed(); // the file grew while it was read
-                }
-                if (sink.append(Arrays.copyOf(block, read)) instanceof SinkResult.Failed) {
-                    return new DownloadResult.Failed(TransferFailureCause.LOCAL_IO_FAILED);
-                }
+        DownloadResult ended;
+        try {
+            // The stream is closed by closeQuietly and not by try-with-resources: an exception of close() would replace what the read came to, a verified Fetched
+            // included (defect D-0013, case S-D0013-01). What the bytes are is known from the read itself and from the second look at the file below.
+            InputStream in = client.read(location.file());
+            try {
+                ended = pump(in, watch, announced, sink, digest);
+            } finally {
+                closeQuietly(in);
             }
         } catch (IOException e) {
             return failedReading(lease, watch, e);
+        }
+        if (ended != null) {
+            return ended;
         }
         if (digest.count() != announced.size()) {
             return changed();
@@ -114,6 +115,39 @@ public class SftpDownloader {
                 yield new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST);
             }
         };
+    }
+
+    /**
+     * Reads the stream to its end into the sink and the digest.
+     *
+     * @return the result when the read ended before the end of the file (a stop, a changed file, a failing sink), or {@code null} when the whole stream was read
+     * @throws IOException when a read of the stream fails
+     */
+    private DownloadResult pump(InputStream in, TransferWatch watch, LeafState announced, PayloadSink sink, StreamDigest digest) throws IOException {
+        byte[] block = new byte[BLOCK_BYTES];
+        int read;
+        while ((read = in.read(block)) >= 0) {
+            Optional<TransferFailureCause> stopped = watch.stopRequested();
+            if (stopped.isPresent()) {
+                return new DownloadResult.Failed(stopped.orElseThrow());
+            }
+            digest.update(block, 0, read);
+            if (digest.count() > announced.size()) {
+                return changed(); // the file grew while it was read
+            }
+            if (sink.append(Arrays.copyOf(block, read)) instanceof SinkResult.Failed) {
+                return new DownloadResult.Failed(TransferFailureCause.LOCAL_IO_FAILED);
+            }
+        }
+        return null;
+    }
+
+    private static void closeQuietly(InputStream in) {
+        try {
+            in.close();
+        } catch (IOException e) {
+            LOG.debug("The read stream could not be closed cleanly; the result of the read stands", e);
+        }
     }
 
     private DownloadResult failedReading(SessionLease lease, TransferWatch watch, IOException cause) {

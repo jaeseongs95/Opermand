@@ -49,6 +49,19 @@ final class SftpDoubles {
         });
     }
 
+    /**
+     * A client that hands out the file's bytes as they are, but whose read stream throws an {@link IOException} from {@code close()} (the real stream is closed first):
+     * what a channel that goes away right after the last block would do. Only a read of a path that ends with the suffix is changed.
+     */
+    SftpClient failingToCloseWhenReading(SftpClient real, String pathSuffix) {
+        return proxy(real, (method, arguments) -> {
+            if ("read".equals(method.getName()) && arguments != null && arguments.length == 1 && arguments[0] instanceof String path && path.endsWith(pathSuffix)) {
+                return new FailingClose(real.read(path));
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
     /** A client whose server offers {@code fsync@openssh.com} (or does not, as chosen) and whose flush always fails; the counter says how often it was tried. */
     SftpClient refusingToFlush(SftpClient real, boolean offered, FlushCounter counter) {
         return proxy(real, (method, arguments) -> {
@@ -93,6 +106,19 @@ final class SftpDoubles {
             return method.invoke(real, arguments);
         } catch (InvocationTargetException e) {
             throw e.getCause();
+        }
+    }
+
+    /** Every byte is given as it is; closing the stream closes the real one and then fails. */
+    private static final class FailingClose extends FilterInputStream {
+        FailingClose(InputStream in) {
+            super(in);
+        }
+
+        @Override
+        public void close() throws IOException {
+            super.close();
+            throw new IOException("injected: the channel went away while the stream was closed");
         }
     }
 

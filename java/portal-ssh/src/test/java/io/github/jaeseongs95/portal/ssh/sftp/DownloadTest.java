@@ -6,6 +6,7 @@ import io.github.jaeseongs95.portal.app.remote.CancelSource;
 import io.github.jaeseongs95.portal.app.remote.DownloadRequest;
 import io.github.jaeseongs95.portal.app.remote.DownloadResult;
 import io.github.jaeseongs95.portal.app.remote.FileDiagnostic;
+import io.github.jaeseongs95.portal.app.remote.PathPolicyDecision;
 import io.github.jaeseongs95.portal.app.remote.SinkResult;
 import io.github.jaeseongs95.portal.app.remote.TransferFailureCause;
 import io.github.jaeseongs95.portal.app.remote.TransferLimits;
@@ -18,6 +19,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import org.apache.sshd.client.session.ClientSession;
+import org.apache.sshd.sftp.client.SftpClient;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -157,6 +160,36 @@ class DownloadTest {
         assertThat(result).isEqualTo(new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST));
         assertThat(testBed.sessions().discards()).isEqualTo(1);
         assertThat(testBed.sessions().leases()).as("no automatic second read").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("S-D0013-01 D-0013 a file read to its last byte, with its size and SHA-256 right, is Fetched when closing the read stream then fails: a close error does not turn a verified read into TRANSPORT_LOST")
+    void closeFailureAfterACompleteReadKeepsTheFetchedResult() throws IOException {
+        TransferBed testBed = TransferBed.start(root, true, new CloseFailingChannels(), ScriptedExecutor.everythingSucceeds(), (target, path) -> new PathPolicyDecision.NotApplicable());
+        bed = testBed;
+        byte[] content = pattern(850);
+        Files.write(root.resolve("small.bin"), content);
+        TransferBed.Collecting sink = new TransferBed.Collecting();
+
+        DownloadResult result = testBed.transfer().download(testBed.download("/small.bin"), sink, testBed.control());
+
+        assertThat(result).as("the 850 bytes arrived and match; only closing the stream failed: %s", result).isInstanceOf(DownloadResult.Fetched.class);
+        DownloadResult.Fetched fetched = (DownloadResult.Fetched) result;
+        assertThat(fetched.size()).isEqualTo(850);
+        assertThat(fetched.sha256()).isEqualTo(testBed.sha256(content));
+        assertThat(sink.bytes()).isEqualTo(content);
+        assertThat(testBed.sessions().discards()).as("the connection is fine: the session is kept").isZero();
+        assertThat(entriesInRoot()).as("a download creates nothing on the target").isEqualTo(1);
+    }
+
+    /** Opens a client whose read streams fail when they are closed. */
+    private static final class CloseFailingChannels extends SftpChannels {
+        private final SftpDoubles doubles = new SftpDoubles();
+
+        @Override
+        public SftpClient open(ClientSession session) throws IOException {
+            return doubles.failingToCloseWhenReading(super.open(session), ".bin");
+        }
     }
 
     @Test
