@@ -839,6 +839,12 @@
 | RC-B-946 | 동시 구성 변경은 감지해 maintenance를 유지하고 실패 | update 도중 환경 파일에 줄 추가(env-change 주입) | 종료 코드 0이 아님, stderr에 `Compose configuration changed; maintenance retained.`, 서비스 health maintenance `true` | 종료 코드, stderr 문구, health | packaging | test/compose-update-ci.sh:261, test/compose-update-ci.sh:265 | D-0047(후보) |
 | RC-B-947 | 정상 갱신: 내구 이미지 교체·재시작 비교·release 성공 | 신뢰 기록·구성이 모두 정상인 후보로 update | 출력에 `"commandRequestsChecked":1`, 새 인스턴스 ID가 이전과 다름, 이미지 == candidate, 서비스 delivery-runtime 점검 통과, maintenance 해제 후 PASS 요약 `Actual Compose durable image replacement, restart comparison and release` | 출력 문자열, 인스턴스 ID, 이미지 ID | packaging | test/compose-update-ci.sh:270 | - |
 
+### S 사례 (3.0에서 새로 정한 행동. RC 사례 수에 넣지 않음)
+
+| 사례 ID | 대상 기능 | 입력·조건 | 기대 결과 | 판정 방법 | 3.0 모듈 | 원 시험 | 연결 결함 |
+|---|---|---|---|---|---|---|---|
+| S-D0012-02 | 정리 실패로 `DELETING`에 남은 artifact 행을 주기 정리가 다시 지워 예산을 회복(D-0012: 정리 실패 행이 기동 시까지 예산을 점유하던 경로. `ARTIFACT_QUOTA`의 retryable은 Contract 2.0 공개 계약이므로 `false`로 유지) | 대상 `DownloadService`, `ArtifactReaper`, 실제 artifact 저장소(H2·실제 파일). 바이트를 지울 수 없는 payload 저장소로 만든 `DownloadService`가 원격 거절(`PERMISSION_DENIED`)을 받아 `discard`가 실패 | 다운로드는 `NotStored`이고 행은 `DELETING`으로 남아 예산을 점유. 다음 `ArtifactReaper.reap()`는 만료 전이어도 그 행을 지우고 `Reaped(1, 0)`을 반환하며 예산 점유는 0 | `execution` 종류, `registry.holding()`의 상태 `[DELETING]`, `registry.budget().chargedBytes()`, `reap()` 보고서, 정리 뒤 `holding()` 비어 있음과 점유 0 | portal-app, portal-store | (2.x 시험 없음) | SSH_PORTAL-D-0012 |
+
 ## 3. 삭제 표
 
 3.0에 옮기지 않는 원 시험이다. 사유는 「Node 런타임 고유」「Python helper 언어 고유 세부」「Windows helper 언어 고유 세부」「cloudflared 실행」「agentapi·codex queue CLI 깨우기」「vendor ssh-mcp/ssh2」「기존 install.sh·compose 셸 시험」 중 하나와 근거 한 줄이다. 삭제가 없는 묶음은 「없음」으로 적는다.

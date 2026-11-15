@@ -165,14 +165,14 @@ public class DownloadService {
         }
     }
 
-    /** Removes the bytes and the row, and so the charge. A failure here is logged: the row is {@code DELETING}, and the start-up check finishes the removal. */
+    /** Removes the bytes and the row, and so the charge. A failure here is logged: the row is {@code DELETING}, and the next reap (or the start-up check) finishes the removal. */
     private void discard(ArtifactId id) {
         try {
             registry.beginDelete(id);
             payloads.delete(id);
             registry.release(id, ReleaseReason.REFUSED);
         } catch (RuntimeException e) {
-            LOG.warn("The download artifact " + id.value() + " could not be discarded; the start-up check removes it", e);
+            LOG.warn("The download artifact " + id.value() + " could not be discarded; the next reap removes it", e);
         }
     }
 }

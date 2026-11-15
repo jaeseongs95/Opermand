@@ -33,6 +33,9 @@ interface ArtifactRowRepository extends CrudRepository<ArtifactRow, String> {
     List<ArtifactRow> findByRetentionAndStateInAndExpiresAtLessThanEqualOrderByExpiresAtAscIdAsc(ArtifactRetention retention, Collection<ArtifactState> states,
                                                                                                   Instant now);
 
+    /** The rows whose removal began and did not finish, in the order of their ids. */
+    List<ArtifactRow> findByStateOrderByIdAsc(ArtifactState state);
+
     /** Every row except the consumed ones (their bytes are gone). */
     List<ArtifactRow> findByStateNot(ArtifactState state);
 }

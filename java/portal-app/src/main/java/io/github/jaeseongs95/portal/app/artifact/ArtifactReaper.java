@@ -1,6 +1,8 @@
 package io.github.jaeseongs95.portal.app.artifact;
 
 import java.time.Clock;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,7 +19,8 @@ import io.github.jaeseongs95.portal.app.storage.ReapReport;
  * gone. An artifact that is pinned by a submitted operation is never listed by the registry; a consumed one has no bytes and loses only its row.
  *
  * <p>The order for the others is the registry's: the row goes to {@code DELETING} first, then the bytes are deleted, then the row is released, so a crash in the middle
- * leaves a row that the start-up check finishes. One artifact that cannot be removed is counted and kept for the next run; it does not stop the run.
+ * leaves a row that the next run, or the start-up check, finishes: a row in {@code DELETING} is removed again whatever its expiry (defect D-0012: a failed discard of a download
+ * used to leave its charge in the budget until the next start). One artifact that cannot be removed is counted and kept for the next run; it does not stop the run.
  */
 @Component
 public class ArtifactReaper {
@@ -43,14 +46,17 @@ public class ArtifactReaper {
         }
         int removed = 0;
         int failed = 0;
-        for (ArtifactRecord expired : registry.expired(clock.instant())) {
+        // The rows that a removal left in DELETING come first, whatever their expiry: they hold a charge for bytes nobody uses (defect D-0012).
+        List<ArtifactRecord> due = new ArrayList<>(registry.deleting());
+        due.addAll(registry.expired(clock.instant()));
+        for (ArtifactRecord artifact : due) {
             try {
-                remove(expired);
+                remove(artifact);
                 removed++;
             } catch (RuntimeException e) {
                 // One artifact that cannot be removed (a locked file, a conflicting writer) must not stop the others; it is listed again by the next run.
                 failed++;
-                LOG.warn("The expired artifact " + expired.id().value() + " could not be removed and stays until the next run", e);
+                LOG.warn("The artifact " + artifact.id().value() + " could not be removed and stays until the next run", e);
             }
         }
         return new ReapReport.Reaped(removed, failed);

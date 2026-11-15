@@ -57,8 +57,14 @@ public interface ArtifactRegistry {
 
     ArtifactBudget budget();
 
-    /** Releasable artifacts whose expiry is not after {@code now}; pinned ones are never listed. */
+    /** Releasable artifacts whose expiry is not after {@code now}; pinned ones are never listed, and neither are rows in {@code DELETING} (see {@link #deleting()}). */
     List<ArtifactRecord> expired(Instant now);
+
+    /**
+     * The artifacts whose removal began and did not finish: the row is {@code DELETING}, and the bytes may or may not be gone yet (a use case that failed to delete them
+     * logged the failure and left the row, defect D-0012). The removal is due at once, whatever the expiry, so the reap lists them with {@link #expired} and finishes them.
+     */
+    List<ArtifactRecord> deleting();
 
     /** Records that an operation was made from the artifact. */
     ArtifactRecord submit(ArtifactId id, OperationId operationId);

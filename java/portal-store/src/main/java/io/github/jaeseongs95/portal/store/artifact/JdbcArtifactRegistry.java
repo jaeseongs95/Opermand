@@ -59,7 +59,7 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
 
     private static final Logger LOG = LoggerFactory.getLogger(JdbcArtifactRegistry.class);
 
-    /** The states in which an expired, unpinned artifact is released: not {@code CONSUMING} (in use) and not {@code DELETING} (being removed). */
+    /** The states in which an expired, unpinned artifact is released: not {@code CONSUMING} (in use) and not {@code DELETING} (being removed; {@link #deleting()} lists those). */
     private static final List<ArtifactState> RELEASABLE_STATES = List.of(ArtifactState.STAGING, ArtifactState.READY, ArtifactState.CONSUMED);
 
     private final ArtifactRowRepository artifacts;
@@ -231,6 +231,12 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
         Objects.requireNonNull(now, "now");
         return artifacts.findByRetentionAndStateInAndExpiresAtLessThanEqualOrderByExpiresAtAscIdAsc(ArtifactRetention.RELEASABLE, RELEASABLE_STATES, now).stream()
             .map(mapper::toRecord).toList();
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public List<ArtifactRecord> deleting() {
+        return artifacts.findByStateOrderByIdAsc(ArtifactState.DELETING).stream().map(mapper::toRecord).toList();
     }
 
     /**
