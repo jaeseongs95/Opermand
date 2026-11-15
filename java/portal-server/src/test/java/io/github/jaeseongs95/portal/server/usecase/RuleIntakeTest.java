@@ -380,4 +380,46 @@ class RuleIntakeTest {
         assertThat(audit.actionsOf(id.get())).containsExactly(AuditAction.SUBMITTED);
         assertThat(executor.requestsSent()).isZero();
     }
+
+    @Test
+    @DisplayName("S-D0119-22 an approval whose queue room is gone at the write is refused with OPERATION_QUEUE_FULL, the operation stays pending and the lines end with not-stored: the check of the write is really connected")
+    void anApprovalThatLosesTheRoomAtTheWriteStaysPending() throws Exception {
+        rule(List.of("touch"), List.of());
+        Operation waiting = intake.submit(kit.command("uname waits-for-the-owner"));
+        assertThat(waiting.state()).isEqualTo(OperationState.PENDING);
+        CountDownLatch release = new CountDownLatch(1);
+        executor.when("hold", executor.blocksUntil(release));
+        List<Operation> held = new ArrayList<>();
+        try {
+            for (int number = 0; number < 2; number++) {
+                held.add(intake.submit(kit.command("touch hold running " + number)));
+            }
+            for (Operation running : held) {
+                kit.await(running.id(), operation -> operation.state() == OperationState.RUNNING);
+            }
+            for (int number = 0; number < 31; number++) {
+                held.add(intake.submit(kit.command("touch hold queued " + number)));
+            }
+            java.util.concurrent.atomic.AtomicBoolean filled = new java.util.concurrent.atomic.AtomicBoolean();
+            // The first check of the approval finds room (31 of 32). While its audit line is written, another intake takes the last place: only the check inside the write sees it.
+            audit.whenWritten(event -> {
+                if (event.action() == AuditAction.EXECUTION_QUEUED && event.operationId().equals(waiting.id()) && filled.compareAndSet(false, true)) {
+                    held.add(intake.submit(kit.command("touch hold filler")));
+                }
+            });
+
+            assertThatThrownBy(() -> intake.approve(waiting.id())).isInstanceOfSatisfying(RequestRefusedException.class,
+                e -> assertThat(e.code()).isEqualTo(OperationErrorCode.OPERATION_QUEUE_FULL));
+
+            assertThat(kit.find(waiting.id()).state()).isEqualTo(OperationState.PENDING);
+            assertThat(audit.actionsOf(waiting.id())).containsExactly(AuditAction.SUBMITTED, AuditAction.EXECUTION_QUEUED, AuditAction.NOT_STORED);
+        } finally {
+            release.countDown();
+            audit.failNothing();
+        }
+        for (Operation operation : held) {
+            kit.awaitTerminal(operation.id());
+        }
+        intake.deny(waiting.id());
+    }
 }

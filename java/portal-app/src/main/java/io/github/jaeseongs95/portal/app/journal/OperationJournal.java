@@ -30,7 +30,8 @@ public interface OperationJournal {
      * can be dispatched is never stored without its audit). A key that is already stored answers {@link JournalInsert.Existing} before anything else, so {@code beforeInsert}
      * runs only for a new operation, inside the transaction of the insert and before it: the check that has to hold at the moment of the insert (the room in the queue) goes
      * there, and what it throws stops the insert. Two operations queued in the same instant meet at the ready position; the one that loses throws
-     * {@code RequestRefusedException(OPERATION_VERSION_CONFLICT)}, as a transition into queued does, and the caller decides again.
+     * {@code RequestRefusedException(OPERATION_VERSION_CONFLICT)} that is retryable and not attempted (nothing was stored, so the same key may be sent again), as a transition
+     * into queued does, and the caller decides again.
      */
     JournalInsert accept(NewOperation spec, Admission admission, OperationId id, Instant at, Runnable beforeInsert);
 

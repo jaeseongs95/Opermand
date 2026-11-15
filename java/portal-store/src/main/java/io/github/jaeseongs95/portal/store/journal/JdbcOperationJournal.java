@@ -126,7 +126,10 @@ public class JdbcOperationJournal implements OperationJournal {
             return storage.persist(before, next, expectedVersion, place);
         } catch (DuplicateKeyException e) {
             // Two operations were queued in the same instant and took the same ready position; the row is as it was and nothing was attempted, so this one is told to read
-            // again and decide again (a retry is safe).
+            // again and decide again (a retry is safe). A duplicate key without a place is not that case and keeps the default of the code.
+            if (place == null) {
+                throw new RequestRefusedException(OperationErrorCode.OPERATION_VERSION_CONFLICT, e);
+            }
             throw new RequestRefusedException(OperationErrorCode.OPERATION_VERSION_CONFLICT, true, ExecutionAttempt.NOT_ATTEMPTED, e);
         }
     }

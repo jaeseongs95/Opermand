@@ -936,4 +936,4 @@ Java 판에 같은 행동이 없다. 각 묶음의 대체 사례는 8.5절에서
 ### 11.7 접수 판정과 감사의 개정(SSH_PORTAL-D-0119)
 - 접수는 규칙 판정으로 첫 저장 상태(`QUEUED`·`DENIED`·`PENDING`)를 정하고, 새 작업의 감사 줄(`submitted`, 이어서 `execution-queued` 또는 `denied`)은 행을 저장하기 전에 쓴다(결정 D3-14의 fail-closed를 접수에도 적용). 감사가 실패하면 아무것도 저장하지 않고 `DispatchRefusedException(DECISION_AUDIT, AUDIT_FAILED)`로 거절한다.
 - 동작 변화: 검토 판정(`PENDING`)에서도 감사가 실패하면 거절하므로, 업로드 배치(`UploadAdmission.admit`)도 거절된다. 이 거절은 `RequestRefusedException`이 아니라 `DispatchRefusedException`이다.
-- 감사 로그를 읽는 쪽의 규칙: 작업의 정본은 저널이다. 감사 로그에만 있고 저널에 행이 없는 id는 저장되지 않은 작업이다. 행을 저장하지 못한 줄에는 `not-stored` 줄(`AuditAction.NOT_STORED`)을 한 번 시도해 결말을 남기며, 커밋 결과를 알 수 없을 때 남은 `not-stored` 줄도 저널이 이긴다. 코드는 바꾸지 않으며 재시작 때 고아 id를 정리하는 기능은 없다.
+- 감사 로그를 읽는 쪽의 규칙: 작업의 정본은 저널이다. 감사 로그에만 있고 저널에 행이 없는 id는 저장되지 않은 작업이다. 행을 저장하지 못한 줄에는 `not-stored` 줄(`AuditAction.NOT_STORED`)을 한 번 시도해 결말을 남기며, 커밋 결과를 알 수 없을 때 남은 `not-stored` 줄도 저널이 이긴다. 코드는 바꾸지 않으며 재시작 때 고아 id를 정리하는 기능은 없다. 행이 있는 작업도 같다: 승인의 `execution-queued` 줄 뒤에 `not-stored` 줄이 오거나 줄이 중간에 끊겨도 작업의 상태는 저널 상태이다(소유자 승인이 용량 재확인에서 거절되면 작업은 `pending`으로 남고 줄은 `not-stored`로 끝난다).
