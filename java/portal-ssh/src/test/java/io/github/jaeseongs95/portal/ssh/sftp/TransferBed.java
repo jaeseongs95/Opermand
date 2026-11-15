@@ -27,6 +27,7 @@ import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
 import io.github.jaeseongs95.portal.domain.target.TargetLookup;
 import io.github.jaeseongs95.portal.domain.target.TargetRevision;
 import io.github.jaeseongs95.portal.ssh.testkit.EmbeddedSshServer;
+import io.github.jaeseongs95.portal.ssh.testkit.ScriptedCommand;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -78,7 +79,11 @@ final class TransferBed implements AutoCloseable {
         /** The program is there and {@code sudo -n} does not start it (the command fails at once, as for an account that needs a password). */
         DENIED,
         /** The program is there and {@code sudo -n} starts an SFTP server (here the server of the test target itself). */
-        WORKS
+        WORKS,
+        /** The program is there and the command of {@code sudo -n} starts and never answers the SFTP version request (a {@code sudo} that waits for something). */
+        HANGS,
+        /** The program is there and the command of {@code sudo -n} closes the channel before it answers the SFTP version request. */
+        CLOSES
     }
 
     private TransferBed(Path root, boolean posixRename, SftpChannels channels, RemoteExecutor executor, FilePathPolicy policy, Sudo sudo, List<HiddenLinkProbe> linkProbes,
@@ -95,6 +100,12 @@ final class TransferBed implements AutoCloseable {
                 SftpSubsystemFactory subsystem = new SftpSubsystemFactory.Builder().build();
                 sshd.setCommandFactory((channel, command) -> SUDO_COMMAND.equals(command) ? subsystem.createSubsystem(channel) : original.createCommand(channel, command));
             });
+        }
+        if (sudo == Sudo.HANGS) {
+            builder.script(SUDO_COMMAND, ScriptedCommand.hangs());
+        }
+        if (sudo == Sudo.CLOSES) {
+            builder.script(SUDO_COMMAND, ScriptedCommand.closesChannel());
         }
         builder.customize(serverFault);
         this.server = builder.start();
