@@ -14,7 +14,8 @@ import java.util.Objects;
  *   <li>The rule denies what the request would run, and the test server switch is off: refused ({@link DecisionReason#POLICY_DENIED}). The deny list applies to read-only
  *       commands too.</li>
  *   <li>The test server switch is on: runs ({@link DecisionReason#TEST_SERVER_BYPASS}).</li>
- *   <li>The command is read-only: runs under the read authority ({@link DecisionReason#READ_ONLY}).</li>
+ *   <li>The command is read-only and runs on the read profile: runs under the read authority ({@link DecisionReason#READ_ONLY}). On the write profile, which may be a
+ *       privileged account, a read-only command is judged like any other (it could print secrets, or run a program an automatic upload put in a repository).</li>
  *   <li>The kind's own screening of the rule (sudo switch, approved names, the source conditions): a command whose names are all approved runs
  *       ({@link DecisionReason#COMMAND_SET}); a screening that stops it names its reason and leaves it to the owner.</li>
  *   <li>Otherwise: the owner decides ({@link DecisionReason#NO_MATCHING_RULE}). Submitted source never runs by rule alone, since no model judges it any more.</li>
@@ -26,13 +27,14 @@ public final class RuleApprovalPolicy {
     /**
      * A command line or a submitted source.
      *
-     * @param readOnly whether the target's platform classifies the command as read-only (always false for submitted source)
+     * @param denied whether the owner's deny list forbids what the request runs, as the target's platform reads names (false without a rule)
+     * @param readOnly whether the command is read-only and runs on the read profile, the only place a read runs without a rule (always false for submitted source)
      */
-    public DecisionReason decideCommand(RuleLookup lookup, ApprovalSubject subject, boolean readOnly) {
+    public DecisionReason decideCommand(RuleLookup lookup, ApprovalSubject subject, boolean denied, boolean readOnly) {
         Objects.requireNonNull(lookup, "lookup");
         Objects.requireNonNull(subject, "subject");
         if (lookup instanceof RuleLookup.Rule found) {
-            if (!found.rule().testServer().isOn() && subject.deniedBy(found.rule())) {
+            if (!found.rule().testServer().isOn() && denied) {
                 return DecisionReason.POLICY_DENIED;
             }
             if (found.rule().testServer().isOn()) {

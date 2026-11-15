@@ -97,7 +97,7 @@
 - `[사실]` 2.x는 상태를 두 곳에서 관리한다. 내구 저널은 11종(`operation-store.mjs:6`): `accepted, queued, starting, running, terminating, completed, failed, cancelled, expired, denied, unknown`. 메모리 승인 job은 `pending, evaluating, queued, running`에 종료 6종(`approval-queue.mjs:12`: `completed, failed, denied, expired, cancelled, unknown`)을 더한다. 관찰 응답은 `accepted`를 job 상태 또는 `pending`으로 바꿔 보여 준다(`operations.mjs:15-19`: `state: record.state === 'accepted' ? job?.state ?? 'pending' : record.state`). 공개 enum은 합집합 13종이다(`public-contract.mjs:15`).
 - `[사실]` 두 층이 어긋나면 D-0004 같은 결함(승인된 요청이 대기열 대신 `busy_check`에서 즉시 실패)이 생겼다. `syncOperation`(`approval-queue.mjs:235-244`)이 두 층을 손으로 맞춘다.
 - `[제안]` 3.0은 `Operation` 하나가 상태를 모두 갖는다. 메모리 job을 두지 않는다. 재시작해도 DB 행이 진실이다.
-- `[개정 D-0119]` 상태는 11개다. 사용자 결정 「규칙 자동 승인 기본」(2026-11-16)에 따라 접수 즉시 소유자의 규칙으로 판정하고, 첫 저장 상태가 판정 결과다(`QUEUED`·`DENIED`·`PENDING`). 판정 앞에 저장되는 상태가 없으므로 `ACCEPTED`가 필요 없고, 판정은 동기라서 기다리는 평가 단계가 없으므로 `EVALUATING`도 필요 없다. 아래 2.2~2.4절의 `ACCEPTED`·`EVALUATING` 서술(표 행, T1~T3, T5~T7, T21, T23, 금지 전이)은 2.x 근거를 보존한 것이고, 3.0.0은 그 행을 쓰지 않는다. `T1`은 `Operation.admit(spec, id, at, Admission)`이 첫 상태를 정하는 것으로 바뀌었고, `T2`·`T3`·`T21`·`T23`은 없다.
+- `[개정 D-0119]` 상태는 11개다. 사용자 결정 「규칙 자동 승인 기본」(2026-11-16)에 따라 접수 즉시 소유자의 규칙으로 판정하고, 첫 저장 상태가 판정 결과다(`QUEUED`·`DENIED`·`PENDING`). 판정 앞에 저장되는 상태가 없으므로 `ACCEPTED`가 필요 없고, 판정은 동기라서 기다리는 평가 단계가 없으므로 `EVALUATING`도 필요 없다. 아래 2.2~2.4절의 `ACCEPTED`·`EVALUATING` 서술(표 행, T1~T3, T5~T7, T21, T23, 금지 전이)은 2.x 근거를 보존한 것이고, 3.0.0은 그 행을 쓰지 않는다. `T1`은 `Operation.admit(spec, id, at, Admission)`이 첫 상태를 정하는 것으로 바뀌었고, `T2`·`T3`·`T21`·`T23`은 없다. 읽기 전용 명령의 자동 실행은 읽기 프로필(읽기 도구 경로)에서만이고, 쓰기 프로필로 접수한 읽기 전용 명령은 읽기 전용 단계를 건너뛰어 금지 목록, 허용 목록, 소유자 검토 순으로 판정한다(S-D0119-05).
 
 ### 2.2 `OperationState` enum (2.x 원값 그대로)
 

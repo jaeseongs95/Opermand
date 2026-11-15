@@ -38,7 +38,7 @@ class RuleApprovalPolicyTest {
     @DisplayName("S-D0119-03 a command no rule covers, and a target without a rule, is the owner's: nothing is pre-approved and nothing is refused")
     void noRuleIsReview() {
         assertThat(command(RuleFixture.rule().commands("ls").build(), "uname -a", complete("uname"), false)).isEqualTo(DecisionReason.NO_MATCHING_RULE);
-        assertThat(policy.decideCommand(new RuleLookup.NoRule(), shell("uname -a", complete("uname")), false)).isEqualTo(DecisionReason.NO_MATCHING_RULE);
+        assertThat(decide(new RuleLookup.NoRule(), shell("uname -a", complete("uname")), false)).isEqualTo(DecisionReason.NO_MATCHING_RULE);
         assertThat(DecisionReason.NO_MATCHING_RULE.kind()).isEqualTo(DecisionKind.REVIEW);
     }
 
@@ -54,7 +54,7 @@ class RuleApprovalPolicyTest {
     @Test
     @DisplayName("S-D0119-05 the order is deny list, read-only, allow list, the owner's: a read-only command runs without a rule, the deny list also stops a read-only command")
     void readOnlyComesAfterTheDenyList() {
-        assertThat(policy.decideCommand(new RuleLookup.NoRule(), shell("cat /etc/os-release", complete("cat")), true)).isEqualTo(DecisionReason.READ_ONLY);
+        assertThat(decide(new RuleLookup.NoRule(), shell("cat /etc/os-release", complete("cat")), true)).isEqualTo(DecisionReason.READ_ONLY);
         assertThat(command(RuleFixture.rule().denied("cat").build(), "cat /etc/os-release", complete("cat"), true)).isEqualTo(DecisionReason.POLICY_DENIED);
         assertThat(command(RuleFixture.rule().commands("cat").build(), "cat /etc/os-release", complete("cat"), true)).as("read-only is asked before the allow list").isEqualTo(DecisionReason.READ_ONLY);
         assertThat(command(RuleFixture.rule().build(), "touch x", complete("touch"), false)).isEqualTo(DecisionReason.NO_MATCHING_RULE);
@@ -77,15 +77,15 @@ class RuleApprovalPolicyTest {
     void submittedSource() {
         ApprovalSubject source = new ApprovalSubject.SubmittedSource(new CommandText("python3 -I -"), complete("python3"), "python3 -I -\nprint(1)\n[]",
             ApprovalSubject.EvidenceSize.WITHIN_LIMIT);
-        assertThat(policy.decideCommand(new RuleLookup.Rule(RuleFixture.rule().pythonSource().sudo().build()), source, false)).isEqualTo(DecisionReason.NO_MATCHING_RULE);
-        assertThat(policy.decideCommand(new RuleLookup.Rule(RuleFixture.rule().build()), source, false)).isEqualTo(DecisionReason.SOURCE_EXECUTION_NOT_ENABLED);
-        assertThat(policy.decideCommand(new RuleLookup.NoRule(), source, false)).isEqualTo(DecisionReason.SOURCE_EXECUTION_NOT_ENABLED);
-        assertThat(policy.decideCommand(new RuleLookup.Rule(RuleFixture.rule().pythonSource().build()), source, false)).isEqualTo(DecisionReason.SOURCE_PRIVILEGE_POLICY_REVIEW);
+        assertThat(decide(new RuleLookup.Rule(RuleFixture.rule().pythonSource().sudo().build()), source, false)).isEqualTo(DecisionReason.NO_MATCHING_RULE);
+        assertThat(decide(new RuleLookup.Rule(RuleFixture.rule().build()), source, false)).isEqualTo(DecisionReason.SOURCE_EXECUTION_NOT_ENABLED);
+        assertThat(decide(new RuleLookup.NoRule(), source, false)).isEqualTo(DecisionReason.SOURCE_EXECUTION_NOT_ENABLED);
+        assertThat(decide(new RuleLookup.Rule(RuleFixture.rule().pythonSource().build()), source, false)).isEqualTo(DecisionReason.SOURCE_PRIVILEGE_POLICY_REVIEW);
         ApprovalSubject withDenied = new ApprovalSubject.SubmittedSource(new CommandText("python3 -I -"), complete("python3"), "python3 -I -\nos.system(\"rm x\")\n[]",
             ApprovalSubject.EvidenceSize.WITHIN_LIMIT);
-        assertThat(policy.decideCommand(new RuleLookup.Rule(RuleFixture.rule().pythonSource().sudo().denied("rm").build()), withDenied, false)).isEqualTo(DecisionReason.POLICY_DENIED);
-        assertThat(policy.decideCommand(new RuleLookup.Rule(RuleFixture.rule().pythonSource().sudo().denied("rm").build()), source, false)).isEqualTo(DecisionReason.SOURCE_COMMAND_POLICY_REVIEW);
-        assertThat(policy.decideCommand(new RuleLookup.Rule(RuleFixture.rule().testServer().build()), source, false)).isEqualTo(DecisionReason.TEST_SERVER_BYPASS);
+        assertThat(decide(new RuleLookup.Rule(RuleFixture.rule().pythonSource().sudo().denied("rm").build()), withDenied, false)).isEqualTo(DecisionReason.POLICY_DENIED);
+        assertThat(decide(new RuleLookup.Rule(RuleFixture.rule().pythonSource().sudo().denied("rm").build()), source, false)).isEqualTo(DecisionReason.SOURCE_COMMAND_POLICY_REVIEW);
+        assertThat(decide(new RuleLookup.Rule(RuleFixture.rule().testServer().build()), source, false)).isEqualTo(DecisionReason.TEST_SERVER_BYPASS);
     }
 
     @Test
@@ -112,7 +112,13 @@ class RuleApprovalPolicyTest {
     }
 
     private DecisionReason command(TargetRule rule, String text, CommandLineAnalysis analysis, boolean readOnly) {
-        return policy.decideCommand(new RuleLookup.Rule(rule), shell(text, analysis), readOnly);
+        return decide(new RuleLookup.Rule(rule), shell(text, analysis), readOnly);
+    }
+
+    /** The judge asks the target platform whether the deny list forbids the line; the tests ask the rule, which is what a Linux target does. */
+    private DecisionReason decide(RuleLookup lookup, ApprovalSubject subject, boolean readOnly) {
+        boolean denied = lookup instanceof RuleLookup.Rule found && subject.deniedBy(found.rule());
+        return policy.decideCommand(lookup, subject, denied, readOnly);
     }
 
     private static ApprovalSubject shell(String text, CommandLineAnalysis analysis) {

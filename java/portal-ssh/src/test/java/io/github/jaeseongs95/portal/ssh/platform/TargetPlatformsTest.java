@@ -16,6 +16,17 @@ import io.github.jaeseongs95.portal.app.target.TargetPlatformRegistry;
 import io.github.jaeseongs95.portal.domain.classify.CommandClass;
 import io.github.jaeseongs95.portal.domain.classify.CommandClassification;
 import io.github.jaeseongs95.portal.domain.classify.CommandClassifier;
+import io.github.jaeseongs95.portal.domain.command.CommandNames;
+import io.github.jaeseongs95.portal.domain.command.Fallback;
+import io.github.jaeseongs95.portal.domain.command.LinuxPolicyName;
+import io.github.jaeseongs95.portal.domain.command.SourceContract;
+import io.github.jaeseongs95.portal.domain.command.TargetRule;
+import io.github.jaeseongs95.portal.domain.command.Thresholds;
+import io.github.jaeseongs95.portal.domain.command.WindowsPolicyName;
+import io.github.jaeseongs95.portal.domain.id.TargetId;
+import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
+import io.github.jaeseongs95.portal.domain.target.TargetRevision;
+import io.github.jaeseongs95.portal.domain.target.Toggle;
 import io.github.jaeseongs95.portal.domain.error.RequestErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.Sha256Digester;
@@ -162,5 +173,21 @@ class TargetPlatformsTest {
     void execReply() {
         assertThat(linux.execReply()).isEqualTo(ExecReply.AWAITED);
         assertThat(windows.execReply()).isEqualTo(ExecReply.AWAITED);
+    }
+
+    @Test
+    @DisplayName("S-D0119-05 D5 a Windows target reads a denied name as the last path segment in lower case; a Linux target finds a denied name among the words of the line")
+    void deniesName() {
+        TargetRule windowsRule = new TargetRule(new TargetId("win"), TargetRevision.of("a".repeat(64)), new ProfileAlias("writer"), TargetOs.WINDOWS, CommandNames.none(),
+            new CommandNames(List.of(new WindowsPolicyName("Microsoft.PowerShell.Management\\Remove-Item"))), Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF,
+            SourceContract.NONE, Fallback.NONE, Thresholds.none());
+        assertThat(windows.deniesName(windowsRule, new CommandText("remove-item C:\\x"))).isTrue();
+        assertThat(windows.deniesName(windowsRule, new CommandText("REMOVE-ITEM C:\\x"))).isTrue();
+        assertThat(windows.deniesName(windowsRule, new CommandText("Get-Date"))).isFalse();
+        TargetRule linuxRule = new TargetRule(new TargetId("lin"), TargetRevision.of("a".repeat(64)), new ProfileAlias("writer"), TargetOs.LINUX, CommandNames.none(),
+            new CommandNames(List.of(new LinuxPolicyName("rm"))), Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, SourceContract.NONE, Fallback.NONE,
+            Thresholds.none());
+        assertThat(linux.deniesName(linuxRule, new CommandText("sudo /bin/rm /tmp/x"))).isTrue();
+        assertThat(linux.deniesName(linuxRule, new CommandText("ls /tmp"))).isFalse();
     }
 }

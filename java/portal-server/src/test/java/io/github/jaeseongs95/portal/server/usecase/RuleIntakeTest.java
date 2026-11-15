@@ -15,6 +15,8 @@ import org.junit.jupiter.api.Test;
 
 import io.github.jaeseongs95.portal.app.audit.AuditAction;
 import io.github.jaeseongs95.portal.app.journal.OperationJournal;
+import io.github.jaeseongs95.portal.app.operation.ReadCommandRequest;
+import io.github.jaeseongs95.portal.app.operation.ReadCommandService;
 import io.github.jaeseongs95.portal.app.operation.OperationIntake;
 import io.github.jaeseongs95.portal.app.policy.CommandPolicyStore;
 import io.github.jaeseongs95.portal.domain.command.CommandNames;
@@ -30,8 +32,12 @@ import io.github.jaeseongs95.portal.domain.error.DispatchReason;
 import io.github.jaeseongs95.portal.domain.error.DispatchRefusedException;
 import io.github.jaeseongs95.portal.domain.error.DispatchStage;
 import io.github.jaeseongs95.portal.domain.error.OperationErrorCode;
+import io.github.jaeseongs95.portal.domain.error.RequestErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
+import io.github.jaeseongs95.portal.domain.id.OwnerId;
+import io.github.jaeseongs95.portal.domain.id.RequestKey;
 import io.github.jaeseongs95.portal.domain.operation.ApprovalMode;
+import io.github.jaeseongs95.portal.domain.operation.Deadline;
 import io.github.jaeseongs95.portal.domain.operation.DecisionKind;
 import io.github.jaeseongs95.portal.domain.operation.DecisionReason;
 import io.github.jaeseongs95.portal.domain.operation.DecisionRecord;
@@ -41,15 +47,18 @@ import io.github.jaeseongs95.portal.domain.operation.OperationEvent;
 import io.github.jaeseongs95.portal.domain.operation.OperationState;
 import io.github.jaeseongs95.portal.domain.target.TargetOs;
 import io.github.jaeseongs95.portal.domain.target.Toggle;
+import io.github.jaeseongs95.portal.domain.text.CommandText;
+import io.github.jaeseongs95.portal.domain.text.Utf8Text;
 
 /**
- * The rule judgement at intake with the real journal (defect D-0119, cases S-D0119-01 to -03, -05, -10 to -12): the first stored state is the judgement, a full queue
- * stores nothing, and the owner's button works on a pending operation only.
+ * The rule judgement at intake with the real journal (defect D-0119, cases S-D0119-01 to -03, -05, -10 to -12): the first stored state is the judgement, a read-only
+ * command runs by rule on the read profile only (and the deny list stops it there), a full queue stores nothing, and the owner's button works on a pending operation only.
  */
 @UseCaseTest
 class RuleIntakeTest {
 
     private final OperationIntake intake;
+    private final ReadCommandService reads;
     private final OperationJournal journal;
     private final CommandPolicyStore policies;
     private final ScriptedExecutor executor;
@@ -57,9 +66,10 @@ class RuleIntakeTest {
     private final FixedTargets targets;
     private final UseCaseKit kit;
 
-    RuleIntakeTest(OperationIntake intake, OperationJournal journal, CommandPolicyStore policies, ScriptedExecutor executor, RecordingAudit audit, FixedTargets targets,
+    RuleIntakeTest(OperationIntake intake, ReadCommandService reads, OperationJournal journal, CommandPolicyStore policies, ScriptedExecutor executor, RecordingAudit audit, FixedTargets targets,
                    UseCaseKit kit) {
         this.intake = intake;
+        this.reads = reads;
         this.journal = journal;
         this.policies = policies;
         this.executor = executor;
@@ -199,5 +209,34 @@ class RuleIntakeTest {
         } finally {
             release.countDown();
         }
+    }
+
+    @Test
+    @DisplayName("S-D0119-05 a read-only command runs by rule on the read profile only; on the write profile it waits for the owner like any other command")
+    void aReadOnlyCommandRunsByRuleOnTheReadProfileOnly() throws Exception {
+        Operation read = intake.submit(kit.command(kit.newKey(), "cat /tmp/a", FixedTargets.READ_PROFILE, new Deadline.None()));
+        assertThat(read.approvalMode()).isEqualTo(ApprovalMode.AUTOMATIC);
+        assertThat(read.decision()).isInstanceOfSatisfying(DecisionRecord.Decided.class, decided -> assertThat(decided.reason()).isEqualTo(DecisionReason.READ_ONLY));
+        assertThat(kit.awaitTerminal(read.id()).state()).isEqualTo(OperationState.COMPLETED);
+
+        Operation write = intake.submit(kit.command("cat /tmp/b"));
+        assertThat(write.state()).isEqualTo(OperationState.PENDING);
+        assertThat(write.decision()).isInstanceOfSatisfying(DecisionRecord.Decided.class, decided -> assertThat(decided.reason()).isEqualTo(DecisionReason.NO_MATCHING_RULE));
+        intake.deny(write.id());
+        assertThat(executor.sentLines()).containsExactly("cat /tmp/a");
+    }
+
+    @Test
+    @DisplayName("S-D0119-05 the deny list stops a read-only command on the read tool: READ_COMMAND_NOT_STARTED, the operation is stored as denied and nothing runs (the rule is found by the write profile)")
+    void theDenyListStopsTheReadTool() {
+        rule(List.of(), List.of("cat"));
+        RequestKey key = kit.newKey();
+        ReadCommandRequest request = new ReadCommandRequest(key, new OwnerId("owner"), FixedTargets.ID, new CommandText("cat /tmp/a"), new Utf8Text(""), new Utf8Text(""),
+            Duration.ofSeconds(5));
+
+        assertThatThrownBy(() -> reads.run(request)).isInstanceOfSatisfying(RequestRefusedException.class,
+            e -> assertThat(e.code()).isEqualTo(RequestErrorCode.READ_COMMAND_NOT_STARTED));
+        assertThat(journal.findByRequestKey(key).orElseThrow().state()).isEqualTo(OperationState.DENIED);
+        assertThat(executor.requestsSent()).isZero();
     }
 }
