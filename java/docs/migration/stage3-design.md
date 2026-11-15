@@ -647,7 +647,7 @@ Java 판에 같은 행동이 없다. 각 묶음의 대체 사례는 8.5절에서
 | S3-UC-08 | 서버 빈 조립 | `portal-server` 최소 조립 | `StorageRoots`·`ArtifactLimits`·`OutputLimits`·`AuditFileLocation`이 설정값으로 만들어지고 `ApplicationContext`가 올라옴, 외부 DBMS(H2)에서 파일 I/O가 트랜잭션 밖(4.4) |
 | S3-RO-01 | exec 응답(RO) `[구현: OpenSshExecPilotTest, P3-1]` | 응답을 요구한 exec 요청 | 실제 서버가 SUCCESS로 답하고 출력과 종료 상태가 뒤따른다 |
 | S3-RO-02 | 없는 명령의 exec(RO) `[구현: OpenSshExecPilotTest, P3-1]` | 존재하지 않는 명령의 exec 요청 | 실제 서버는 먼저 SUCCESS로 답하고 0이 아닌 종료 상태가 뒤따른다(거절이 아님) |
-| S3-RO-03 | `signal` 요청(RO) `[구현: OpenSshExecPilotTest, P3-3]` | 실행 중인 명령에 `signal`(INT) 요청 | Linux는 `exit-signal INT`로 끝낸다. Windows는 서버가 무엇을 하든 채널을 닫을 수 있다 |
+| S3-RO-03 | `signal` 요청(RO) `[구현: OpenSshExecPilotTest, P3-3]` | 실행 중인 명령에 `signal`(INT) 요청 | Linux는 `exit-signal INT`로 끝낸다. Windows는 서버가 신호에 따르든(신호로 종료) 따르지 않든(명령이 15초 뒤 스스로 종료) 명령이 끝난 뒤에 채널이 닫힌다. 시험은 명령이 도는 동안 채널을 닫지 않으며, 클라이언트가 채널을 닫아도 원격 명령이 남는 경로는 이 사례 밖이고 SSH_PORTAL-D-0091로 추적한다 |
 | S3-RO-04 | rename·posix-rename(RO) `[구현: RealSftpTest]` | 대상 있음/없음 | 일반 rename은 대상이 있으면 실패하고, posix-rename은(광고될 때) 대체한다. 어댑터는 광고된 것을 쓴다. 왕복(S3-RW-03)과 한 시험에 묶었다 |
 | S3-RO-05 | 세션 한도·heartbeat(RO) `[구현: OpenSshSessionPilotTest]` | `MaxSessions` 초과, 연결을 끊은 뒤의 생존 확인 | 한도를 넘은 채널은 열기 실패로 거절되고 세션은 계속 쓸 수 있다. 생존 확인은 성공이든 실패든 살아 있음을 증명하고, 연결을 끊은 뒤에는 I/O 오류로 실패한다. 한 사례의 두 확인이며 시험 메서드 둘이 같은 ID를 쓴다(아래 설명) |
 | S3-RO-06 | 에이전트 CLI 설치(RO) `[구현: RealAgentCliTest, P3-6]` | 실제 tgz | 실제 서버에서 tgz를 풀고(`tar`), 버전을 읽고, `current`를 전환해 다시 읽는다. 이어 상태 질의가 그 버전을 보인다. S3-AG-01·05의 실제 서버판. 결과: **Linux·Windows 통과**(run 43187733400) |
