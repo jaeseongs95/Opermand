@@ -18,9 +18,8 @@ import com.zaxxer.hikari.HikariDataSource;
 import io.github.jaeseongs95.portal.store.sql.DatabaseProductException.Reason;
 
 /**
- * S-SQLB-01, 02, 05, 07, 08, 09, 21 (docs/migration/sqlbuilder-cases.md). Ported from AGS {@code SqlBuilderTest} (sennard-source int-6d37-m3, commit 1ad1b8e7): the four
- * dialects of the personal edition render a bound limit; a complete statement keeps its parameter; an unknown database is refused; the default embedded database is H2.
- * Oracle, Db2 and SQL Server are not part of the personal edition and are refused (S-SQLB-21).
+ * S-SQLB-01, 02, 05, 07, 08, 09 (docs/migration/sqlbuilder-cases.md). Ported from AGS {@code SqlBuilderTest} (sennard-source int-6d37-m3, commit 1ad1b8e7): the seven
+ * dialects render a bound limit; a complete statement keeps its parameter; an unknown database is refused; the default embedded database is H2.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
 class SqlBuilderTest {
@@ -77,27 +76,15 @@ class SqlBuilderTest {
     }
 
     @Test
-    @DisplayName("S-SQLB-01: each of the four products renders its own row limit")
+    @DisplayName("S-SQLB-01: each of the seven products renders its own row limit")
     void rendersEachDialect() {
-        for (SqlBuilder.Database db : new SqlBuilder.Database[] {SqlBuilder.Database.H2, SqlBuilder.Database.POSTGRESQL}) {
+        for (SqlBuilder.Database db : new SqlBuilder.Database[] {SqlBuilder.Database.H2, SqlBuilder.Database.POSTGRESQL, SqlBuilder.Database.ORACLE, SqlBuilder.Database.DB2}) {
             assertThat(SqlBuilder.generateLimit(db, ":count")).as(db.name()).isEqualTo("FETCH FIRST :count ROWS ONLY");
         }
-        assertThat(SqlBuilder.generateLimit(SqlBuilder.Database.MARIADB, ":count")).isEqualTo("OFFSET 0 ROWS FETCH NEXT :count ROWS ONLY");
+        for (SqlBuilder.Database db : new SqlBuilder.Database[] {SqlBuilder.Database.SQLSERVER, SqlBuilder.Database.MARIADB}) {
+            assertThat(SqlBuilder.generateLimit(db, ":count")).as(db.name()).isEqualTo("OFFSET 0 ROWS FETCH NEXT :count ROWS ONLY");
+        }
         assertThat(SqlBuilder.generateLimit(SqlBuilder.Database.MYSQL, ":count")).isEqualTo("LIMIT :count");
-        assertThat(SqlBuilder.Database.values()).containsExactly(SqlBuilder.Database.H2, SqlBuilder.Database.POSTGRESQL, SqlBuilder.Database.MARIADB, SqlBuilder.Database.MYSQL);
-    }
-
-    @Test
-    @DisplayName("S-SQLB-21: the product names and URLs of Oracle, Db2 and SQL Server are refused with UNSUPPORTED_DATABASE_PRODUCT")
-    void refusesTheCommercialProducts() {
-        for (String product : new String[] {"Oracle", "DB2/NT64", "Microsoft SQL Server"}) {
-            assertThatThrownBy(() -> SqlBuilder.ofProductName(product)).as(product).isInstanceOfSatisfying(DatabaseProductException.class,
-                    failure -> assertThat(failure.reason()).isEqualTo(Reason.UNSUPPORTED_DATABASE_PRODUCT));
-        }
-        for (String url : new String[] {"jdbc:oracle:thin:@localhost:1521/db", "jdbc:db2://localhost/db", "jdbc:sqlserver://localhost"}) {
-            assertThatThrownBy(() -> SqlBuilder.ofJdbcUrl(url)).as(url).isInstanceOfSatisfying(DatabaseProductException.class,
-                    failure -> assertThat(failure.reason()).isEqualTo(Reason.UNSUPPORTED_DATABASE_PRODUCT));
-        }
     }
 
     @Test
@@ -125,6 +112,9 @@ class SqlBuilderTest {
     void selectsTheDialectFromTheConfiguredUrl() {
         assertThat(SqlBuilder.ofJdbcUrl("jdbc:h2:mem:db")).isEqualTo(SqlBuilder.Database.H2);
         assertThat(SqlBuilder.ofJdbcUrl("jdbc:postgresql://localhost/db")).isEqualTo(SqlBuilder.Database.POSTGRESQL);
+        assertThat(SqlBuilder.ofJdbcUrl("jdbc:oracle:thin:@localhost:1521/db")).isEqualTo(SqlBuilder.Database.ORACLE);
+        assertThat(SqlBuilder.ofJdbcUrl("jdbc:db2://localhost/db")).isEqualTo(SqlBuilder.Database.DB2);
+        assertThat(SqlBuilder.ofJdbcUrl("jdbc:sqlserver://localhost")).isEqualTo(SqlBuilder.Database.SQLSERVER);
         assertThat(SqlBuilder.ofJdbcUrl("jdbc:mariadb://localhost/db")).isEqualTo(SqlBuilder.Database.MARIADB);
         assertThat(SqlBuilder.ofJdbcUrl("jdbc:mysql://localhost/db")).isEqualTo(SqlBuilder.Database.MYSQL);
         assertThat(SqlBuilder.ofProductName("PostgreSQL")).isEqualTo(SqlBuilder.Database.POSTGRESQL);
