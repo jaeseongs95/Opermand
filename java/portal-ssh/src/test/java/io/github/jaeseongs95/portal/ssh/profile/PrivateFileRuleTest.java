@@ -21,7 +21,9 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * What the product creates for itself (the file of known hosts and its folder) is private to its owner, and what exists is left as it is (decision D-0117; 2.x PF-04 and PF-05
  * refused a profile file that others could use, and 3.0 does not). The tests go through the file system of the machine they run on, whichever kind it is: the rule is chosen
- * by what the file store offers, so a volume with permission bits and an NTFS volume with an access control list are served by the same calls and no test is skipped.
+ * by what the file store offers, so a volume with permission bits and an NTFS volume with an access control list are served by the same calls. The creation tests run on both
+ * kinds; the tests that need one kind (the read-back of permission bits, the denial of an access control list) say so with {@code TestFiles#requireOrSkip}: without the property
+ * {@code portal.test.require} they are skipped where the ability is missing, and a run that requires the ability (the Linux CI: {@code posix,links}) fails instead (case S-D0117-09).
  */
 class PrivateFileRuleTest {
 
