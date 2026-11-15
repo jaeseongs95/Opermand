@@ -99,7 +99,7 @@ SSH의 사정에 따른 차이:
 
 - 다시 쓴 것(지우지 않음): `SchemaMigrationTest`(4개), `DbmsPortabilityTest`의 S2-DB-15(1개, Flyway의 적용 목록 대신 이력 표로), `NoInListInChecksTest`(새 폴더), `StoreTest`·`UseCaseTest`(Flyway 자동 설정 대신 적용기). 시험 수는 줄지 않았다.
 - `SqlBuilderStoreTest`의 javadoc과 `portal-ssh/build.gradle.kts`(`realOpenSshTest` 설명이 `externalDbmsTest`를 예로 듦) 주석의 외부 DBMS 언급은 고쳤다.
-- 이 문서가 닿지 않은 곳: `stage2-design.md` 13.3a와 `sqlbuilder-cases.md`는 2026-11-12 시점의 기록이라 `externalDbmsTest`·Flyway를 그대로 적고 있다(과거 사실의 기록). sqlbuilder 단위가 develop에 병합된 뒤 리드가 그 문서의 해당 문장을 정리한다.
+- `sqlbuilder-cases.md`의 S-SQLB-10 행과 7·6절의 `externalDbmsTest`·DBMS별 폴더 문장은 이 단위에서 고쳤다. `stage2-design.md` 13.3a와 `stage3-design.md`는 2026-11-12 시점의 설계 기록이라 `externalDbmsTest`·Flyway를 그대로 적고 있다(과거 사실의 기록으로 두었다).
 
 ## 시험 방식(공통 시험)
 

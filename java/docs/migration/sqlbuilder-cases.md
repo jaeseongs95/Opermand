@@ -27,7 +27,7 @@
 | S-SQLB-07 | 제품 불일치 거부 | 설정 URL `jdbc:postgresql://…`와 연결 제품 `PostgreSQL`(일치)·`H2`(불일치)·지원 밖 URL | 일치는 통과; 불일치는 `DATABASE_PRODUCT_MISMATCH`이고 메시지에 `POSTGRESQL`과 `H2` 둘 다; 지원 밖 URL은 `UNSUPPORTED_DATABASE_PRODUCT` | `Reason`, 메시지 | `SqlBuilderTest#checksTheConnectedProduct` |
 | S-SQLB-08 | 인스턴스 `requireSame(productName)` | 실제 `DataSource`(H2)에 `H2`·`PostgreSQL` | `H2`는 통과, `PostgreSQL`은 `DATABASE_PRODUCT_MISMATCH` | `Reason` | `SqlBuilderTest#recognizesTheEmbeddedH2Database` |
 | S-SQLB-09 | URL로 제품 선택(`ofJdbcUrl`) | `h2`·`postgresql`·`oracle`·`db2`·`sqlserver`·`mariadb`·`mysql` URL과 제품 이름 `PostgreSQL` | 각각 대응 `Database` | 값 일치 | `SqlBuilderTest#selectsTheDialectFromTheConfiguredUrl` |
-| S-SQLB-10 | 실제 DBMS에서 행 수 제한 실행(`SqlBuilderStoreTest`, `@StoreTest`) | 슬라이스의 실제 `DataSource`에 행 5개를 넣고 `query("SELECT …").orderBy(…).limit(:limit)`에 3 | 3행만 읽고 그 행은 정렬 앞쪽 3행. 같은 슬라이스에서 연결이 알리는 URL과 제품 이름으로 `requireSame(url, product)`·`requireSame(product)`가 통과한다. 기본 실행은 H2, `externalDbmsTest`는 PostgreSQL에서 같은 시험이 돈다 | 읽은 행 목록, 예외 없음 | `SqlBuilderStoreTest#theLimitRunsOnTheActualDatabase`, `#theConfiguredUrlMatchesTheConnectedProduct` |
+| S-SQLB-10 | 실제 DBMS에서 행 수 제한 실행(`SqlBuilderStoreTest`, `@StoreTest`) | 슬라이스의 실제 `DataSource`에 행 5개를 넣고 `query("SELECT …").orderBy(…).limit(:limit)`에 3 | 3행만 읽고 그 행은 정렬 앞쪽 3행. 같은 슬라이스에서 연결이 알리는 URL과 제품 이름으로 `requireSame(url, product)`·`requireSame(product)`가 통과한다. 시험은 H2에서만 돈다(다른 DBMS 시험은 개발원칙 7.3에 따라 하지 않는다. `externalDbmsTest`는 D-0103으로 지웠다) | 읽은 행 목록, 예외 없음 | `SqlBuilderStoreTest#theLimitRunsOnTheActualDatabase`, `#theConfiguredUrlMatchesTheConnectedProduct` |
 | S-SQLB-21 | 제품 이름으로 제품 선택(`ofProductName`, `requireSame(url, product)`) | 연결 없이 제품 이름 문자열만: `H2`, `PostgreSQL`, `Oracle`, `DB2/NT64`, `Microsoft SQL Server`, `MariaDB`, `MySQL` | 각각 `H2`·`POSTGRESQL`·`ORACLE`·`DB2`·`SQLSERVER`·`MARIADB`·`MYSQL`; Oracle·Db2·SQL Server·MariaDB·MySQL은 같은 제품의 URL과 짝지으면 `requireSame`이 통과한다(PostgreSQL 짝은 S-SQLB-07, H2 짝은 S-SQLB-10이 맡는다) | 값 일치 | `SqlBuilderTest#selectsTheDialectFromEachProductName` |
 
 ## 3. AgentCliHistoryReader (자리 1)
@@ -61,7 +61,7 @@
 
 ## 6. 건드리지 않는 것
 
-- Flyway DBMS별 폴더(장부 D-0088)는 이번 범위가 아니다.
+- Flyway DBMS별 폴더(장부 D-0088)는 이번 범위가 아니었고, D-0109 단위에서 Flyway와 함께 없앴다(`migration-runner.md`).
 - 저장소에 `@Transactional`·`TransactionTemplate`을 새로 두지 않는다. `SqlBuilder`는 트랜잭션을 열지 않는다.
 
 ## 7. 실 DBMS 확인과 증명 수단
@@ -71,7 +71,7 @@
   - H2: 실제 연결로 증명한다(S-SQLB-03·04·05·06·08, 그리고 S-SQLB-10·11~15는 `@StoreTest` 슬라이스의 실제 H2 `DataSource`).
   - 나머지 6개 제품(Oracle, Db2, SQL Server, MariaDB, MySQL, PostgreSQL): 연결 없이 문자열 시험으로 증명한다. 행 수 제한 구문은 S-SQLB-01, URL로 제품 선택은 S-SQLB-09, 제품 이름으로 제품 선택은 S-SQLB-21이 문자열을 단언한다. 구문의 근거는 `SqlBuilder`의 제품별 공식 문서 링크 주석이다.
 - 범위 밖: 실제 Oracle, Db2, SQL Server, MariaDB, MySQL, PostgreSQL에서 그 구문이 받아들여지는지는 이 작업이 확인하지 않는다(드라이버와 DBMS는 사용자 몫).
-- 이 브랜치에 남은 `SqlBuilderStoreTest`의 PostgreSQL 문구와 `externalDbmsTest`는 D-0109 브랜치가 지운다.
+- `SqlBuilderStoreTest`의 PostgreSQL 문구와 `externalDbmsTest`는 지웠다(장부 D-0103, `migration-runner.md`의 「지운 시험」).
 
 ## 8. 시험 절차
 
