@@ -31,16 +31,15 @@ import org.springframework.jdbc.support.SQLErrorCodeSQLExceptionTranslator;
 import org.springframework.jdbc.support.SQLExceptionTranslator;
 
 import io.github.jaeseongs95.portal.store.migration.MigrationException.Reason;
-import io.github.jaeseongs95.portal.store.sql.SqlBuilder;
 
 /**
  * The migration runner: the scripts of the jar ({@code V<number>__<description>.sql}) applied in number order, once each, with plain JDBC and Spring's script reader
  * ({@link ResourceDatabasePopulator}, which splits a script at its semicolons and knows quoted text and comments). What it needs from the database is the SQL standard: a history
- * table of ANSI types, {@code CREATE SCHEMA}, and the type name the driver reports for a long text ({@link LongTextType}). The only knowledge of a DBMS is {@link ScriptDialect},
- * keyed by {@link SqlBuilder.Database}, and it is two spellings.
+ * table of ANSI types, {@code CREATE SCHEMA}, and the type name the driver reports for a long text ({@link LongTextType}). It keeps no list of DBMS and does not ask for the name of
+ * one: the history table is plain ANSI SQL and a script is changed in one place only, {@code ${long_text}}.
  *
  * <p><b>Why Flyway is not used.</b> The product runs on H2 by default and on the user's own JDBC driver (PostgreSQL, MariaDB, MySQL, Oracle, Db2, SQL Server); the differences of the
- * databases are absorbed by ANSI SQL and {@link SqlBuilder}. Flyway keeps a list of the databases it knows and, from version 10, ships the support of each database as a module of
+ * databases are absorbed by ANSI SQL and {@code SqlBuilder}. Flyway keeps a list of the databases it knows and, from version 10, ships the support of each database as a module of
  * its own ({@code flyway-database-postgresql}, {@code flyway-mysql} ...), so the product would carry a module for every database a user may choose, and a database without one
  * cannot be migrated: that ties the product to the vendors it lists. A runner of this size over the standard needs no such list. The same runner, with the same history table and
  * the same rules, is used by the other two products of the owner (common format, edition 2); this class follows the structure and the names of the AGS (Agent Governance Suite)
@@ -124,8 +123,7 @@ final class MigrationRunner {
             connection.setAutoCommit(false);
             // Text is UTF-8 from end to end, and a script may hold Korean text: a database in another encoding is refused here, before a script fails half way with an encoding error.
             verifyEncoding(connection);
-            ScriptDialect dialect = ScriptDialect.of(SqlBuilder.ofProductName(connection.getMetaData().getDatabaseProductName()));
-            ensureHistory(connection, phase, dialect);
+            ensureHistory(connection, phase);
             // The history is read once: it decides which scripts are pending and also the attempt of each, so that a peer that committed a number after this read is met as a duplicate key.
             List<HistoryRow> history = readHistory(connection, phase);
             List<MigrationScript> pending = pending(scripts, history, phase);
@@ -134,7 +132,7 @@ final class MigrationRunner {
             SQLExceptionTranslator translator = new SQLErrorCodeSQLExceptionTranslator(dataSource);
             int applied = 0;
             for (MigrationScript script : pending) {
-                if (apply(connection, translator, phase, script, nextAttempt(history, script), longText, dialect)) {
+                if (apply(connection, translator, phase, script, nextAttempt(history, script), longText)) {
                     applied++;
                 }
             }
@@ -171,16 +169,16 @@ final class MigrationRunner {
     // ------------------------------------------------------------------------------------------------------------ history
 
     /** Makes the schema and the history table when they are not there. */
-    private void ensureHistory(Connection connection, Phase phase, ScriptDialect dialect) throws SQLException {
+    private void ensureHistory(Connection connection, Phase phase) throws SQLException {
         if (!schemaExists(connection)) {
             create(connection, "CREATE SCHEMA " + Migrations.SCHEMA, () -> schemaExists(connection));
         }
         if (!tableExists(connection, phase)) {
             // The CHECK lists the two values with CASE and not with IN: H2 2.4.240 keeps the session that created a constraint with an IN list of constants, so the first insert after the
             // migration connection is closed would fail (see NoInListInChecksTest). CASE is standard SQL and means the same on every database.
-            create(connection, dialect.translate("CREATE TABLE " + phase.table() + " (version BIGINT NOT NULL, attempt INTEGER NOT NULL, script VARCHAR(255) NOT NULL, digest CHAR(64) NOT NULL, "
+            create(connection, "CREATE TABLE " + phase.table() + " (version BIGINT NOT NULL, attempt INTEGER NOT NULL, script VARCHAR(255) NOT NULL, digest CHAR(64) NOT NULL, "
                     + "applied_at TIMESTAMP NOT NULL, outcome VARCHAR(10) NOT NULL, PRIMARY KEY (version, attempt), "
-                    + "CONSTRAINT " + phase.tableName() + "_outcome CHECK (CASE WHEN outcome = 'SUCCEEDED' THEN 1 WHEN outcome = 'FAILED' THEN 1 ELSE 0 END = 1))"),
+                    + "CONSTRAINT " + phase.tableName() + "_outcome CHECK (CASE WHEN outcome = 'SUCCEEDED' THEN 1 WHEN outcome = 'FAILED' THEN 1 ELSE 0 END = 1))",
                     () -> tableExists(connection, phase));
         }
     }
@@ -304,12 +302,11 @@ final class MigrationRunner {
      * last statement of the transaction (the row of this attempt only). A database whose DDL is not transactional (MariaDB, MySQL, H2: each DDL statement commits what came before it, the
      * claim included) so never shows a half-applied script as SUCCEEDED: what it has committed of it says FAILED until the whole script has run.
      */
-    private boolean apply(Connection connection, SQLExceptionTranslator translator, Phase phase, MigrationScript script, int attempt, String longText, ScriptDialect dialect)
-            throws SQLException {
+    private boolean apply(Connection connection, SQLExceptionTranslator translator, Phase phase, MigrationScript script, int attempt, String longText) throws SQLException {
         try {
             record(connection, translator, phase, script, attempt, Outcome.FAILED);
             ResourceDatabasePopulator populator = new ResourceDatabasePopulator(false, false, StandardCharsets.UTF_8.name(),
-                    new ByteArrayResource(script.text(longText, dialect).getBytes(StandardCharsets.UTF_8), script.file()));
+                    new ByteArrayResource(script.text(longText).getBytes(StandardCharsets.UTF_8), script.file()));
             populator.populate(connection);
             update(connection, "UPDATE " + phase.table() + " SET outcome = ? WHERE version = ? AND attempt = ?", Outcome.SUCCEEDED.name(), script.version(), attempt);
             connection.commit();
@@ -318,10 +315,20 @@ final class MigrationRunner {
             connection.rollback();
             LOG.debug("Another runner has taken the migration {} ({}), attempt {}.", script.file(), phase, attempt, taken);
             return settleAfterPeer(connection, phase, script);
-        } catch (ScriptException failure) {
-            connection.rollback();
-            recordFailure(connection, translator, phase, script, attempt, failure);
+        } catch (ScriptException | SQLException failure) {
+            // A statement of the script, or the driver on the claim, the last statement (the UPDATE) or the commit, failed: the transaction is rolled back and the attempt is recorded as
+            // FAILED in a transaction of its own, the same for each of them. If that recording fails too (the connection is gone), its error is kept on the failure that is thrown.
+            failAndRecord(connection, translator, phase, script, attempt, failure);
             throw new MigrationException(Reason.MIGRATION_FAILED, "The migration " + script.file() + " did not apply (" + phase.location() + ").", failure);
+        }
+    }
+
+    private void failAndRecord(Connection connection, SQLExceptionTranslator translator, Phase phase, MigrationScript script, int attempt, Exception cause) {
+        try {
+            connection.rollback();
+            recordFailure(connection, translator, phase, script, attempt, cause);
+        } catch (SQLException recording) {
+            cause.addSuppressed(recording);
         }
     }
 
@@ -372,7 +379,7 @@ final class MigrationRunner {
      * The attempt of a script that failed stays in the history, in a transaction of its own (the script's was rolled back). The row is there already when the database committed
      * the claim with the script's first DDL statement (it says FAILED), or when another runner took the number; either way no row is added.
      */
-    private void recordFailure(Connection connection, SQLExceptionTranslator translator, Phase phase, MigrationScript script, int attempt, ScriptException cause) throws SQLException {
+    private void recordFailure(Connection connection, SQLExceptionTranslator translator, Phase phase, MigrationScript script, int attempt, Exception cause) throws SQLException {
         try {
             record(connection, translator, phase, script, attempt, Outcome.FAILED);
             connection.commit();

@@ -30,9 +30,9 @@ record MigrationScript(long version, String file, byte[] bytes, String digest) {
         return new MigrationScript(version, file, bytes, new Sha256Digester().digest(bytes).hex());
     }
 
-    /** The text of the script as the database takes it: the long text type of the database for {@code ${long_text}}, and the product's spelling of the phrases it spells otherwise ({@link ScriptDialect}). */
-    String text(String longTextType, ScriptDialect dialect) {
-        return dialect.translate(new String(bytes, StandardCharsets.UTF_8).replace(LONG_TEXT, longTextType));
+    /** The text of the script as the database takes it: the long text type of the database for {@code ${long_text}}; nothing else is rewritten. */
+    String text(String longTextType) {
+        return new String(bytes, StandardCharsets.UTF_8).replace(LONG_TEXT, longTextType);
     }
 
     /** Every script under {@code location} (a folder of the classpath and its subfolders), in number order. A number used twice is a failure. */

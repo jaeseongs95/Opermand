@@ -24,7 +24,9 @@ class MigrationDocumentTest {
     @DisplayName("S-D0109-23: the document has the sections on Flyway, the differences, the correspondence, the expand choice and the removed tests, and the runner's javadoc says why Flyway is not used")
     void theReasonsAreWrittenDown() throws IOException {
         String document = Files.readString(DOCUMENT, StandardCharsets.UTF_8);
-        assertThat(document).contains("## Flyway를 쓰지 않는 이유", "## 차이 목록", "## 대응표", "## expand 실행 방식 선택", "## 지운 시험", "## 긴 텍스트 열");
+        assertThat(document).contains("## Flyway를 쓰지 않는 이유", "## 차이 목록", "## 대응표", "## expand 실행 방식 선택", "## 한계와 운영자 복구", "## 지운 시험", "## 긴 텍스트 열");
+        assertThat(document).as("no progress notes of the work in a public document").doesNotContain("리드", "기다리는 중", "전달)", "진단 프로그램");
+        assertThat(document).as("no local path").doesNotContain("D:/", "D:\\", "C:\\", "C:/");
 
         String javadoc = Files.readString(RUNNER, StandardCharsets.UTF_8);
         assertThat(javadoc).contains("Flyway").contains("flyway-database");

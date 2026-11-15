@@ -44,4 +44,23 @@ class MigrationRunnerSourceTest {
         }
         assertThat(offenders).isEmpty();
     }
+
+    private static final Pattern DBMS_SPECIFIC = Pattern.compile("\\bScriptDialect\\b|getDatabaseProductName|\\bofProductName\\b|\\bSqlBuilder\\b|\\bDatabase\\.");
+
+    @Test
+    @DisplayName("S-D0109-14: the sources of the migration package have no DBMS-specific branch: no ScriptDialect, no product name, no SqlBuilder")
+    void noDbmsSpecificBranch() throws IOException {
+        assertThat(SOURCES.resolve("ScriptDialect.java")).as("ScriptDialect is not ported").doesNotExist();
+        List<String> offenders = new ArrayList<>();
+        try (Stream<Path> found = Files.list(SOURCES)) {
+            for (Path file : found.filter(path -> path.toString().endsWith(".java")).toList()) {
+                String text = Files.readString(file, StandardCharsets.UTF_8);
+                String code = LINE_COMMENT.matcher(BLOCK_COMMENT.matcher(text).replaceAll("")).replaceAll("");
+                if (DBMS_SPECIFIC.matcher(code).find()) {
+                    offenders.add(file.getFileName().toString());
+                }
+            }
+        }
+        assertThat(offenders).isEmpty();
+    }
 }
