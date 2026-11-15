@@ -322,6 +322,20 @@ class EnvironmentCredentialSourceTest {
     }
 
     @Test
+    @DisplayName("S-D0117-05: an empty certificate file is a miss that says it is empty, like an empty key file (it is not used as no certificate)")
+    void anEmptyCertificateFileIsAMiss() throws IOException {
+        Path key = file("keys/id", "the key\n");
+        Path certificate = file("keys/id-cert.pub", "");
+
+        CredentialLookup lookup = resolve("aws-local", "auth = \"key\"\ncert = true\nkeyRef = " + literal(key), Map.of());
+
+        assertThat(missesOf(lookup)).singleElement().satisfies(miss -> {
+            assertThat(miss.part()).isEqualTo(CredentialPart.CERTIFICATE);
+            assertThat(miss.place()).contains(certificate.toString()).contains("is empty");
+        });
+    }
+
+    @Test
     @DisplayName("VR-394: an agent profile gets the agent when SSH_AUTH_SOCK is set")
     void anAgentProfileGetsTheAgent() throws IOException {
         CredentialLookup lookup = resolve("aws-local", "auth = \"agent\"", Map.of("SSH_AUTH_SOCK", "/run/agent.sock"));

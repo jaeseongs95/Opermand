@@ -148,6 +148,7 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
             return missing(CredentialPart.CERTIFICATE, "the certificate file cannot be read");
         }
         return switch (read(certFile)) {
+            case FileRead.Text certificate when certificate.text().isEmpty() -> missing(CredentialPart.CERTIFICATE, "the certificate file " + certFile + " is empty");
             case FileRead.Text certificate -> new CredentialLookup.Resolved(new SshCredential.PrivateKey(pem, passphrase, Setting.given(certificate.text())));
             case FileRead.Absent absent -> new CredentialLookup.Resolved(new SshCredential.PrivateKey(pem, passphrase, Setting.unset()));
             case FileRead.NotRegular notRegular -> missing(CredentialPart.CERTIFICATE, "the certificate file " + certFile + " is not a regular file");
