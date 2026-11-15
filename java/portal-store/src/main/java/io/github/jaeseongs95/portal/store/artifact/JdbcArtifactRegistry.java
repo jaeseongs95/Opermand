@@ -27,7 +27,6 @@ import io.github.jaeseongs95.portal.app.artifact.ArtifactState;
 import io.github.jaeseongs95.portal.app.artifact.ChunkDigest;
 import io.github.jaeseongs95.portal.app.artifact.ConsumeReason;
 import io.github.jaeseongs95.portal.app.artifact.ReleaseReason;
-import io.github.jaeseongs95.portal.app.artifact.ReservedSplit;
 import io.github.jaeseongs95.portal.app.artifact.StagedAction;
 import io.github.jaeseongs95.portal.app.artifact.StagedActionState;
 import io.github.jaeseongs95.portal.app.artifact.UnpinReason;
@@ -100,10 +99,9 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
         if (spec.sizeBytes() > limits.maxFileBytes()) {
             return new ArtifactReservation.FileTooLarge(spec.sizeBytes(), limits.maxFileBytes());
         }
-        // File-system reads, outside the transaction (Principles 4.4).
+        // The file-system read, outside the transaction (Principles 4.4). The quarantine is not read: its bytes never decide a reservation (defect D-0012).
         DiskReading disk = readDisk();
-        long quarantined = retained.retainedBytes();
-        return Objects.requireNonNull(transaction.execute(status -> reserveRows(spec, at, disk, quarantined)), "reservation");
+        return Objects.requireNonNull(transaction.execute(status -> reserveRows(spec, at, disk)), "reservation");
     }
 
     private DiskReading readDisk() {
@@ -115,13 +113,14 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
     }
 
     /**
-     * The budget is the reserved bytes of the rows plus the bytes in quarantine: both are on the disk of the staging folder (design 13.6, RC-A-170). A refusal tells
-     * the two parts apart (defect D-0012), the rows as {@code liveBytes} and the quarantine as {@code holdingBytes}.
+     * The budget is the reserved bytes of the rows. The bytes in quarantine are not in it: nothing deletes them, so counting them would let a payload that no transfer owns
+     * refuse every new transfer for good (defect D-0012, which replaces design 13.6 and RC-A-169, RC-A-170); {@link #budget()} shows them apart. The disk check still sees
+     * them, because they use the disk's space.
      */
-    private ArtifactReservation reserveRows(ArtifactSpec spec, Instant at, DiskReading disk, long quarantined) {
-        ReservedSplit reserved = new ReservedSplit(artifacts.chargedBytes(), quarantined);
-        if (reserved.totalBytes() > limits.budgetBytes() - Math.max(1L, spec.sizeBytes())) {
-            return new ArtifactReservation.BudgetExceeded(spec.sizeBytes(), reserved, limits.budgetBytes());
+    private ArtifactReservation reserveRows(ArtifactSpec spec, Instant at, DiskReading disk) {
+        long live = artifacts.chargedBytes();
+        if (live > limits.budgetBytes() - Math.max(1L, spec.sizeBytes())) {
+            return new ArtifactReservation.BudgetExceeded(spec.sizeBytes(), live, limits.budgetBytes());
         }
         long usable = disk.usableBytes();
         if (usable - spec.sizeBytes() < limits.diskMarginBytes()) {
@@ -218,11 +217,11 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
         return artifacts.findByPublicUuid(publicUuid.text()).map(mapper::toRecord);
     }
 
-    /** Not {@code @Transactional}: the bytes in quarantine are read from the disk first (Principles 4.4), then the rows are summed. */
+    /** Not {@code @Transactional}: the bytes in quarantine are read from the disk first (Principles 4.4), then the rows are summed; the two figures stay apart (defect D-0012). */
     @Override
     public ArtifactBudget budget() {
         long quarantined = retained.retainedBytes();
-        return new ArtifactBudget(limits.budgetBytes(), artifacts.chargedBytes() + quarantined);
+        return new ArtifactBudget(limits.budgetBytes(), artifacts.chargedBytes(), quarantined);
     }
 
     @Override

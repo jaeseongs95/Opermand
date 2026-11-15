@@ -843,6 +843,7 @@
 
 | 사례 ID | 대상 기능 | 입력·조건 | 기대 결과 | 판정 방법 | 3.0 모듈 | 원 시험 | 연결 결함 |
 |---|---|---|---|---|---|---|---|
+| S-D0012-03 | 격리(quarantine) 바이트는 새 전송 예산과 따로 집계하고, 새 전송을 막지 않으며, 지우지 않음(D-0012 리드 판정 D: 정리 명령은 만들지 않음. RC-A-169·170, S3-AR-05의 「격리 바이트를 예산에 합산」을 대체) | 대상 `JdbcArtifactRegistry`, `ArtifactReaper`, `DownloadService`, 실제 artifact 저장소. 예산 100,000바이트, 격리 폴더(`orphans/`)에 150,000바이트 파일(예산보다 큼) | 1090바이트 업로드 예약은 `Reserved`(`ARTIFACT_QUOTA` 없음), 다운로드(850바이트)는 `Stored`, 예산 점유는 둘의 합(1,940)이고 격리 바이트는 `ArtifactBudget.retainedBytes`로 따로 보임. `ArtifactReaper.reap()` 뒤에도 격리 파일 내용이 그대로 | 예약 반환 종류, 다운로드 종류, `registry.budget().chargedBytes()`, `retainedBytes()`, 격리 파일 바이트 비교 | portal-store, portal-app | (2.x 시험 없음. RC-A-169·170 대체) | SSH_PORTAL-D-0012 |
 | S-D0012-02 | 정리 실패로 `DELETING`에 남은 artifact 행을 주기 정리가 다시 지워 예산을 회복(D-0012: 정리 실패 행이 기동 시까지 예산을 점유하던 경로. `ARTIFACT_QUOTA`의 retryable은 Contract 2.0 공개 계약이므로 `false`로 유지) | 대상 `DownloadService`, `ArtifactReaper`, 실제 artifact 저장소(H2·실제 파일). 바이트를 지울 수 없는 payload 저장소로 만든 `DownloadService`가 원격 거절(`PERMISSION_DENIED`)을 받아 `discard`가 실패 | 다운로드는 `NotStored`이고 행은 `DELETING`으로 남아 예산을 점유. 다음 `ArtifactReaper.reap()`는 만료 전이어도 그 행을 지우고 `Reaped(1, 0)`을 반환하며 예산 점유는 0 | `execution` 종류, `registry.holding()`의 상태 `[DELETING]`, `registry.budget().chargedBytes()`, `reap()` 보고서, 정리 뒤 `holding()` 비어 있음과 점유 0 | portal-app, portal-store | (2.x 시험 없음) | SSH_PORTAL-D-0012 |
 
 ## 3. 삭제 표

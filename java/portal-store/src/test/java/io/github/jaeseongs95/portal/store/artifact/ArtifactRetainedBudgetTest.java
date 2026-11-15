@@ -27,14 +27,13 @@ import io.github.jaeseongs95.portal.app.artifact.ArtifactRecord;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRegistry;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactReservation;
 import io.github.jaeseongs95.portal.app.artifact.ReleaseReason;
-import io.github.jaeseongs95.portal.app.artifact.ReservedSplit;
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
 import io.github.jaeseongs95.portal.store.StorageRoots;
 import io.github.jaeseongs95.portal.store.StoreTest;
 
 /**
- * The staging budget with bytes in quarantine (design 13.6: the held bytes of recovered legacy payloads count in the shared staging budget, because they use the
- * disk of the same storage root). The budget is 32 bytes. The start-up check is not called inside a transaction, so the class runs without the slice's rollback and
+ * The staging budget with bytes in quarantine (defect D-0012: the held bytes of recovered legacy payloads are shown apart and are not charged to the staging budget,
+ * because nothing deletes them; design 13.6 counted them and is replaced). The budget is 32 bytes. The start-up check is not called inside a transaction, so the class runs without the slice's rollback and
  * each test removes its rows and its files.
  *
  * <p>What 2.x reported and 3.0 does not have: the recovery status object ({@code recoveryStatus.reservedBytes}, {@code liveReservedBytes}, {@code unsafeEntries}, a
@@ -95,26 +94,28 @@ class ArtifactRetainedBudgetTest {
     }
 
     @Test
-    @DisplayName("RC-A-170: a recovered legacy payload over the budget is counted in full: reserved 33, nothing live, a 1 byte begin is refused as a budget refusal, a reap and a second start keep the bytes and the 33")
-    void quarantinedBytesOverTheBudgetAreEnforced() throws IOException {
+    @DisplayName("S-D0012-03 (replaces RC-A-170): a recovered legacy payload over the budget is shown as 33 retained bytes and charges nothing: a 1 byte begin is accepted, a reap and a second start keep the bytes")
+    void quarantinedBytesOverTheBudgetAreShownAndDoNotBlock() throws IOException {
         ArtifactId legacy = new ArtifactId("1".repeat(48));
         byte[] bytes = fixtures.bytes(33, 'L');
         payloads.append(legacy, 0, bytes);
 
         assertThat(startup.reconcile().quarantined()).containsExactly(legacy);
 
-        assertThat(registry.budget().chargedBytes()).as("reserved").isEqualTo(33);
+        assertThat(registry.budget().retainedBytes()).as("retained").isEqualTo(33);
+        assertThat(registry.budget().chargedBytes()).as("not charged").isZero();
         assertThat(registry.holding()).as("nothing live is reserved").isEmpty();
-        assertThat(registry.reserve(fixtures.upload(1), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(1, new ReservedSplit(0, 33), 32));
+        ArtifactId live = fixtures.reservedId(registry.reserve(fixtures.upload(1), fixtures.at()));
+        assertThat(registry.budget().chargedBytes()).as("only the new transfer is charged").isEqualTo(1);
+        registry.release(live, ReleaseReason.REFUSED);
         assertThat(registry.expired(ArtifactFixtures.T0.plus(Duration.ofHours(2)))).isEmpty();
         assertThat(Files.readAllBytes(orphans().resolve(legacy.value() + ".part"))).as("the reap does not touch the bytes").isEqualTo(bytes);
         assertThat(startup.reconcile().quarantined()).as("a second start finds nothing new").isEmpty();
-        assertThat(registry.budget().chargedBytes()).as("and still reserves 33").isEqualTo(33);
-        assertThat(registry.reserve(fixtures.upload(1), fixtures.at())).isInstanceOf(ArtifactReservation.BudgetExceeded.class);
+        assertThat(registry.budget().retainedBytes()).as("and still holds 33").isEqualTo(33);
     }
 
     @Test
-    @DisplayName("RC-A-169: eight one byte legacy payloads reserve 8, a live begin of 16 makes 24 of 32, a begin over the budget is refused, and a second start, a release and a reap leave the 8 and the files as they were")
+    @DisplayName("S-D0012-03 (replaces RC-A-169): eight one byte legacy payloads are 8 retained bytes and charge nothing: two live begins of 16 fill the budget of 32, a third is refused with the live 32 only, and a second start, a release and a reap leave the 8 and the files as they were")
     void quarantinedBytesAreChargedWithTheLiveReservationAndNotRewritten() throws IOException {
         List<ArtifactId> legacy = new ArrayList<>();
         for (int i = 1; i <= 8; i++) {
@@ -128,21 +129,24 @@ class ArtifactRetainedBudgetTest {
             modified.add(Files.getLastModifiedTime(orphans().resolve(id.value() + ".part")));
         }
 
-        assertThat(registry.budget().chargedBytes()).as("reserved").isEqualTo(8);
+        assertThat(registry.budget().retainedBytes()).as("retained").isEqualTo(8);
+        assertThat(registry.budget().chargedBytes()).as("not charged").isZero();
         assertThat(registry.holding()).as("live reserved 0").isEmpty();
         ArtifactId live = fixtures.reservedId(registry.reserve(fixtures.upload(16), fixtures.at()));
-        assertThat(registry.budget().chargedBytes()).as("8 held and 16 live").isEqualTo(24);
-        assertThat(registry.budget().remainingBytes()).isEqualTo(8);
-        assertThat(registry.reserve(fixtures.upload(9), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(9, new ReservedSplit(16, 8), 32));
+        ArtifactId second = fixtures.reservedId(registry.reserve(fixtures.upload(16), fixtures.at()));
+        assertThat(registry.budget().chargedBytes()).as("16 and 16 live fill the budget, the 8 held do not count").isEqualTo(32);
+        assertThat(registry.budget().remainingBytes()).isZero();
+        assertThat(registry.reserve(fixtures.upload(1), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(1, 32, 32));
         assertThat(startup.reconcile().quarantined()).as("the second start").isEmpty();
-        assertThat(registry.budget().chargedBytes()).isEqualTo(24);
-        assertThat(registry.reserve(fixtures.upload(16), fixtures.at())).as("a begin that was refused is not accepted by asking again").isInstanceOf(ArtifactReservation.BudgetExceeded.class);
+        assertThat(registry.budget().chargedBytes()).isEqualTo(32);
+        assertThat(registry.budget().retainedBytes()).isEqualTo(8);
 
         registry.release(live, ReleaseReason.REFUSED);
-        assertThat(registry.budget().chargedBytes()).as("after the live one is removed").isEqualTo(8);
+        registry.release(second, ReleaseReason.REFUSED);
+        assertThat(registry.budget().chargedBytes()).as("after the live ones are removed").isZero();
         List<ArtifactRecord> expired = registry.expired(ArtifactFixtures.T0.plus(Duration.ofHours(2)));
         assertThat(expired).isEmpty();
-        assertThat(registry.budget().chargedBytes()).as("a reap keeps the held bytes").isEqualTo(8);
+        assertThat(registry.budget().retainedBytes()).as("a reap keeps the held bytes").isEqualTo(8);
         for (int i = 0; i < legacy.size(); i++) {
             Path file = orphans().resolve(legacy.get(i).value() + ".part");
             assertThat(Files.readAllBytes(file)).isEqualTo(new byte[] {(byte) (i + 1)});

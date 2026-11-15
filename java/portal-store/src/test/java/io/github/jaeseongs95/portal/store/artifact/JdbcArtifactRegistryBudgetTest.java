@@ -16,7 +16,6 @@ import io.github.jaeseongs95.portal.app.artifact.ArtifactRecord;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRegistry;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactReservation;
 import io.github.jaeseongs95.portal.app.artifact.ReleaseReason;
-import io.github.jaeseongs95.portal.app.artifact.ReservedSplit;
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
 import io.github.jaeseongs95.portal.domain.id.TargetId;
 import io.github.jaeseongs95.portal.domain.path.PosixRemotePath;
@@ -46,7 +45,7 @@ class JdbcArtifactRegistryBudgetTest {
     }
 
     @Test
-    @DisplayName("RC-A-160 / S3-AR-02 (store half): when the budget is used up even a 1 byte file is refused as BudgetExceeded, with the numbers (the live rows and nothing held), and no row is created")
+    @DisplayName("RC-A-160 / S3-AR-02 (store half): when the budget is used up even a 1 byte file is refused as BudgetExceeded, with the numbers (the live rows), and no row is created")
     void aSmallFileIsRefusedByTheBudgetAndNothingIsStored() {
         for (int i = 0; i < 4; i++) {
             fixtures.reservedId(registry.reserve(fixtures.upload(32), fixtures.at()));
@@ -55,7 +54,7 @@ class JdbcArtifactRegistryBudgetTest {
 
         ArtifactReservation refused = registry.reserve(fixtures.upload(1), fixtures.at());
 
-        assertThat(refused).isEqualTo(new ArtifactReservation.BudgetExceeded(1, new ReservedSplit(128, 0), 128));
+        assertThat(refused).isEqualTo(new ArtifactReservation.BudgetExceeded(1, 128, 128));
         assertThat(registry.holding()).containsExactlyInAnyOrderElementsOf(before);
         assertThat(registry.budget().chargedBytes()).isEqualTo(128);
     }
@@ -67,7 +66,7 @@ class JdbcArtifactRegistryBudgetTest {
         ArtifactId beta = fixtures.reservedId(registry.reserve(fixtures.upload(64, new PosixRemotePath("/tmp/b.bin"), new TargetId("beta")), fixtures.at()));
 
         assertThat(registry.reserve(fixtures.upload(64, new PosixRemotePath("/tmp/c.bin"), new TargetId("gamma")), fixtures.at()))
-            .isEqualTo(new ArtifactReservation.BudgetExceeded(64, new ReservedSplit(128, 0), 128));
+            .isEqualTo(new ArtifactReservation.BudgetExceeded(64, 128, 128));
         assertThat(registry.holding()).hasSize(2);
 
         registry.release(alpha, ReleaseReason.REFUSED);
@@ -103,7 +102,7 @@ class JdbcArtifactRegistryBudgetTest {
 
         assertThat(ids).hasSize(128);
         assertThat(registry.budget().chargedBytes()).isEqualTo(128);
-        assertThat(registry.reserve(fixtures.upload(0), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(0, new ReservedSplit(128, 0), 128));
+        assertThat(registry.reserve(fixtures.upload(0), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(0, 128, 128));
     }
 
     @Test

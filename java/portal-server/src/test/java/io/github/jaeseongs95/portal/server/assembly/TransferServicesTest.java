@@ -296,7 +296,7 @@ class TransferServicesTest {
         ExecutionOutcome outcome = execution.outcome();
         assertThat(execution).isInstanceOf(DownloadExecution.NotStored.class);
         assertThat(outcome.failure()).isEqualTo(new ExecutionFailure.Classified(ExecutionStage.OPERATION, ExecutionErrorCode.ARTIFACT_QUOTA, RemoteOutcome.NOT_STARTED));
-        assertThat(outcome.texts().get(0)).contains("requestedBytes=10000", "liveBytes=95000", "holdingBytes=0", "budgetBytes=100000");
+        assertThat(outcome.texts().get(0)).contains("requestedBytes=10000", "liveBytes=95000", "budgetBytes=100000");
         assertThat(outcome.verdict()).isEqualTo(OperationState.FAILED);
         assertThat(remote.downloads).as("the target was not asked").isEmpty();
     }

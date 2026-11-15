@@ -28,7 +28,6 @@ import io.github.jaeseongs95.portal.app.artifact.ConsumeReason;
 import io.github.jaeseongs95.portal.app.artifact.ConsumeState;
 import io.github.jaeseongs95.portal.app.artifact.ContentDigest;
 import io.github.jaeseongs95.portal.app.artifact.ReleaseReason;
-import io.github.jaeseongs95.portal.app.artifact.ReservedSplit;
 import io.github.jaeseongs95.portal.app.artifact.StagedAction;
 import io.github.jaeseongs95.portal.app.artifact.StagedActionKind;
 import io.github.jaeseongs95.portal.app.artifact.StagedActionState;
@@ -93,7 +92,7 @@ class JdbcArtifactRegistryTest {
         assertThat(registry.budget().budgetBytes()).isEqualTo(536_870_912L);
         assertThat(registry.budget().chargedBytes()).isEqualTo(536_870_912L);
         assertThat(registry.budget().remainingBytes()).isZero();
-        assertThat(registry.reserve(fixtures.upload(MAX_FILE), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(MAX_FILE, new ReservedSplit(536_870_912L, 0), 536_870_912L));
+        assertThat(registry.reserve(fixtures.upload(MAX_FILE), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(MAX_FILE, 536_870_912L, 536_870_912L));
         assertThat(registry.holding()).hasSize(8);
 
         ids.forEach(id -> registry.release(id, ReleaseReason.REFUSED));

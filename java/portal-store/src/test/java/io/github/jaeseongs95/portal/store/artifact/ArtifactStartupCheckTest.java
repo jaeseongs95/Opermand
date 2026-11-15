@@ -171,7 +171,7 @@ class ArtifactStartupCheckTest {
     }
 
     @Test
-    @DisplayName("RC-A-167 / RC-A-169: a payload without metadata is quarantined with its bytes and does not stop the start; the next run finds nothing; its bytes count in the staging budget (design 13.6)")
+    @DisplayName("RC-A-167 / RC-A-169: a payload without metadata is quarantined with its bytes and does not stop the start; the next run finds nothing; its bytes are shown apart from the staging budget (D-0012)")
     void aPayloadWithoutMetadataIsQuarantined() throws IOException {
         ArtifactId legacy = new ArtifactId("f".repeat(48));
         byte[] bytes = fixtures.bytes(48, 'f');
@@ -183,7 +183,8 @@ class ArtifactStartupCheckTest {
         assertThat(payloads.stored()).isEmpty();
         assertThat(Files.readAllBytes(roots.artifacts().resolve("orphans").resolve(legacy.value() + ".part"))).isEqualTo(bytes);
         assertThat(startup.reconcile().quarantined()).isEmpty();
-        assertThat(registry.budget().chargedBytes()).as("the quarantined bytes use the disk of the staging folder, so they are charged (RC-A-170)").isEqualTo(48);
+        assertThat(registry.budget().retainedBytes()).as("the quarantined bytes are shown to the owner").isEqualTo(48);
+        assertThat(registry.budget().chargedBytes()).as("and are not charged to the staging budget (D-0012)").isZero();
     }
 
     @Test

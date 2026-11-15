@@ -12,7 +12,6 @@ import org.junit.jupiter.params.provider.EnumSource;
 
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRefusal;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactReservation;
-import io.github.jaeseongs95.portal.app.artifact.ReservedSplit;
 import io.github.jaeseongs95.portal.app.remote.DownloadResult;
 import io.github.jaeseongs95.portal.app.remote.FileDiagnostic;
 import io.github.jaeseongs95.portal.app.remote.TransferFailureCause;
@@ -38,12 +37,13 @@ class TransferOutcomesTest {
     @Test
     @DisplayName("S3-AR-02 / S3-AR-03 / D-0012: the three reservation refusals are three codes with their own numbers, at stage OPERATION and NOT_STARTED, FAILED and never unknown")
     void eachReservationRefusalHasItsOwnCodeAndNumbers() {
-        ExecutionOutcome budget = outcomes.reservationRefused(ArtifactRefusal.of(new ArtifactReservation.BudgetExceeded(1090, new ReservedSplit(6000, 3500), 10_000)));
+        ExecutionOutcome budget = outcomes.reservationRefused(ArtifactRefusal.of(new ArtifactReservation.BudgetExceeded(1090, 9500, 10_000)));
         ExecutionOutcome disk = outcomes.reservationRefused(ArtifactRefusal.of(new ArtifactReservation.DiskSpaceInsufficient(1090, 1500, 1000)));
         ExecutionOutcome size = outcomes.reservationRefused(ArtifactRefusal.of(new ArtifactReservation.FileTooLarge(20_000, 10_000)));
 
         assertThat(budget.failure()).isEqualTo(new ExecutionFailure.Classified(ExecutionStage.OPERATION, ExecutionErrorCode.ARTIFACT_QUOTA, RemoteOutcome.NOT_STARTED));
-        assertThat(budget.texts().get(0)).contains("requestedBytes=1090", "liveBytes=6000", "holdingBytes=3500", "budgetBytes=10000");
+        assertThat(budget.texts().get(0)).contains("requestedBytes=1090", "liveBytes=9500", "budgetBytes=10000");
+        assertThat(budget.texts().get(0)).as("the quarantine is no part of the refusal (D-0012)").doesNotContain("holdingBytes");
         assertThat(disk.failure()).isEqualTo(new ExecutionFailure.Classified(ExecutionStage.OPERATION, ExecutionErrorCode.ARTIFACT_STORAGE_FULL, RemoteOutcome.NOT_STARTED));
         assertThat(disk.texts().get(0)).contains("requestedBytes=1090", "usableBytes=1500", "marginBytes=1000");
         assertThat(size.failure()).isEqualTo(new ExecutionFailure.Classified(ExecutionStage.OPERATION, ExecutionErrorCode.OPERATION_FAILED, RemoteOutcome.NOT_STARTED));
@@ -52,7 +52,7 @@ class TransferOutcomesTest {
             assertThat(outcome.verdict()).isEqualTo(OperationState.FAILED);
             assertThat(outcome.remoteState()).isEqualTo(RemoteState.NOT_DISPATCHED);
         }
-        assertThat(ArtifactRefusal.of(new ArtifactReservation.BudgetExceeded(1, new ReservedSplit(0, 0), 1)).code()).isEqualTo(ExecutionErrorCode.ARTIFACT_QUOTA);
+        assertThat(ArtifactRefusal.of(new ArtifactReservation.BudgetExceeded(1, 0, 1)).code()).isEqualTo(ExecutionErrorCode.ARTIFACT_QUOTA);
         assertThat(ArtifactRefusal.of(new ArtifactReservation.FileTooLarge(2, 1)).code()).isEqualTo(ArtifactErrorCode.FILE_TOO_LARGE);
     }
 

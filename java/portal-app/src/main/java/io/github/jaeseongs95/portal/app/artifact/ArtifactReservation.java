@@ -9,7 +9,8 @@ import io.github.jaeseongs95.portal.domain.id.ArtifactId;
  * (defect D-0012: a small file was refused as over quota while the disk had room). Each refusal is its own variant now and carries the numbers behind it, and the
  * checks run in one fixed order: the size of the file against the per-file limit, then the budget, then the disk. The verdict of an earlier check never depends on a
  * later one: whether the budget refuses a file is decided by the budget alone, and a file that fits the budget is refused for the disk only when the disk's usable
- * space minus the file is below the margin. A disk that cannot be read is not a refusal at all: the registry throws {@code ARTIFACT_STORAGE_IO_ERROR}.
+ * space minus the file is below the margin. A disk that cannot be read is not a refusal at all: the registry throws {@code ARTIFACT_STORAGE_IO_ERROR}. Payloads in
+ * quarantine are not looked at: they never refuse a file (see {@link ArtifactBudget}).
  */
 public sealed interface ArtifactReservation permits ArtifactReservation.Reserved, ArtifactReservation.BudgetExceeded, ArtifactReservation.DiskSpaceInsufficient,
     ArtifactReservation.FileTooLarge {
@@ -26,13 +27,15 @@ public sealed interface ArtifactReservation permits ArtifactReservation.Reserved
      * The application's staging budget cannot take the file.
      *
      * @param requestedBytes the declared size of the file
-     * @param reserved what the budget already holds, split into the live rows and the bytes in quarantine
+     * @param liveBytes what the rows of the artifacts charge (reservations in flight, staged and consumed files); the bytes in quarantine are not part of it (defect D-0012)
      * @param budgetBytes the budget
      */
-    record BudgetExceeded(long requestedBytes, ReservedSplit reserved, long budgetBytes) implements ArtifactReservation {
+    record BudgetExceeded(long requestedBytes, long liveBytes, long budgetBytes) implements ArtifactReservation {
 
         public BudgetExceeded {
-            Objects.requireNonNull(reserved, "reserved");
+            if (liveBytes < 0) {
+                throw new IllegalArgumentException("The live bytes must not be negative");
+            }
         }
     }
 

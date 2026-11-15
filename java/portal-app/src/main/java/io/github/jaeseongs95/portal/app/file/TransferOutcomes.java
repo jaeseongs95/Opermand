@@ -162,7 +162,7 @@ public class TransferOutcomes {
         return switch (refusal.detail()) {
             case ArtifactRefusal.Detail.Budget budget -> readOnlyFailure(ExecutionReason.INPUT_FAILED, new ExecutionFailure.Classified(ExecutionStage.OPERATION,
                 ExecutionErrorCode.ARTIFACT_QUOTA, RemoteOutcome.NOT_STARTED), List.of("ARTIFACT_QUOTA: The staging budget cannot take the file. requestedBytes="
-                + budget.requestedBytes() + " liveBytes=" + budget.liveBytes() + " holdingBytes=" + budget.holdingBytes() + " budgetBytes=" + budget.budgetBytes()));
+                + budget.requestedBytes() + " liveBytes=" + budget.liveBytes() + " budgetBytes=" + budget.budgetBytes()));
             case ArtifactRefusal.Detail.Disk disk -> readOnlyFailure(ExecutionReason.INPUT_FAILED, new ExecutionFailure.Classified(ExecutionStage.OPERATION,
                 ExecutionErrorCode.ARTIFACT_STORAGE_FULL, RemoteOutcome.NOT_STARTED), List.of("ARTIFACT_STORAGE_FULL: The disk cannot take the file. requestedBytes="
                 + disk.requestedBytes() + " usableBytes=" + disk.usableBytes() + " marginBytes=" + disk.marginBytes()));
