@@ -10,6 +10,7 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.AclEntry;
+import java.nio.file.attribute.AclEntryFlag;
 import java.nio.file.attribute.AclEntryPermission;
 import java.nio.file.attribute.AclEntryType;
 import java.nio.file.attribute.AclFileAttributeView;
@@ -28,6 +29,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
 
+import org.junit.jupiter.api.Assumptions;
+
 /**
  * What the file tests of the profile and host key packages need to stand in for the product's wiring: the {@link PrivateFiles} with both rules, a way to open a path to
  * other accounts (the product does not refuse what exists, decision D-0117, so the tests make wide paths on purpose), the check that a path that the product created is
@@ -43,6 +46,21 @@ public final class TestFiles {
         AclEntryPermission.WRITE_ACL, AclEntryPermission.WRITE_OWNER);
 
     private TestFiles() {
+    }
+
+    /**
+     * A test that needs an ability of the file system (case S-D0117-09): {@code posix} (permission bits), {@code links} (symbolic links) or {@code acl}. Without the property
+     * {@code portal.test.require} naming the ability, a machine that lacks it skips the test with the message; with the property the same test fails, so a run that states what
+     * its machine offers (the Linux CI step: {@code -Pportal.test.require=posix,links}) can never pass by skipping. The property is the Gradle one, handed to the test JVM by
+     * the build.
+     */
+    public static void requireOrSkip(String ability, boolean available, String skipMessage) {
+        String required = System.getProperty("portal.test.require", "");
+        if (List.of(required.split(",")).contains(ability)) {
+            assertThat(available).as("this run requires the ability '%s' of the file system, and the machine lacks it (%s)", ability, skipMessage).isTrue();
+        } else {
+            Assumptions.assumeTrue(available, skipMessage);
+        }
     }
 
     /** The creator with both rules, in the order of the product. */
@@ -81,6 +99,23 @@ public final class TestFiles {
                 .build());
             view.setAcl(acl);
         }
+    }
+
+    /**
+     * Makes the existing folder one whose inheritable entry denies the owner the right to change the access control list (the well-known owner-rights group, S-1-3-4), so that nothing
+     * made in it can be made private. Acl stores only.
+     */
+    public static void forbidChangingTheListOfWhatIsMadeIn(Path folder) throws IOException {
+        UserPrincipal ownerRights = folder.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName("OWNER RIGHTS");
+        AclFileAttributeView view = Files.getFileAttributeView(folder, AclFileAttributeView.class);
+        // The list is exactly two entries, so that what is made in the folder inherits the same two on every machine: the denial, and full control for the owner (which keeps the
+        // owner able to delete what a failed call must remove again; the owner-rights entry takes away only the implicit rights of the owner, not the entries of the list).
+        List<AclEntry> acl = List.of(
+            AclEntry.newBuilder().setType(AclEntryType.DENY).setPrincipal(ownerRights).setPermissions(AclEntryPermission.WRITE_ACL, AclEntryPermission.WRITE_OWNER)
+                .setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT).build(),
+            AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(view.getOwner()).setPermissions(EnumSet.allOf(AclEntryPermission.class))
+                .setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT).build());
+        view.setAcl(acl);
     }
 
     /**

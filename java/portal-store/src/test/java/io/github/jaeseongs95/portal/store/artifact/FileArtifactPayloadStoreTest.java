@@ -19,7 +19,6 @@ import java.util.List;
 import java.util.stream.Stream;
 
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -161,7 +160,7 @@ class FileArtifactPayloadStoreTest {
     void aSymbolicLinkAsRootIsFollowed(@TempDir Path dir) throws IOException {
         Path real = Files.createDirectory(dir.resolve("real"));
         Path root = dir.resolve("artifacts");
-        Assumptions.assumeTrue(canLink(dir, root, real), "the file store of the test folder does not allow symbolic links; runs on the Linux CI or the Windows CI (CI에서 실행)");
+        TestStorage.requireOrSkip("links", canLink(dir, root, real), "the file store or the account of the test cannot make symbolic links (a Windows user token); the Linux CI requires them (-Pportal.test.require=posix,links) and fails instead of skipping");
         FileArtifactPayloadStore store = storeIn(dir);
         ArtifactId id = ids.next();
 
@@ -180,7 +179,7 @@ class FileArtifactPayloadStoreTest {
         Path target = Files.write(dir.resolve("target.bin"), new byte[] {9, 9, 9}, StandardOpenOption.CREATE_NEW);
         ArtifactId id = ids.next();
         Path link = dir.resolve("artifacts").resolve(id.value() + ".part");
-        Assumptions.assumeTrue(canLink(dir, link, target), "the file store of the test folder does not allow symbolic links; runs on the Linux CI or the Windows CI (CI에서 실행)");
+        TestStorage.requireOrSkip("links", canLink(dir, link, target), "the file store or the account of the test cannot make symbolic links (a Windows user token); the Linux CI requires them (-Pportal.test.require=posix,links) and fails instead of skipping");
 
         assertThat(store.stored()).containsExactly(id);
         assertThat(store.length(id)).isEqualTo(3);
@@ -238,8 +237,8 @@ class FileArtifactPayloadStoreTest {
         store.stored();
         ArtifactId id = ids.next();
         Path dangling = dir.resolve("artifacts").resolve(id.value() + ".part");
-        Assumptions.assumeTrue(canLink(dir, dangling, dir.resolve("no-such-target.bin")),
-            "the file store of the test folder does not allow symbolic links; runs on the Linux CI or the Windows CI (CI에서 실행)");
+        TestStorage.requireOrSkip("links", canLink(dir, dangling, dir.resolve("no-such-target.bin")),
+            "the file store or the account of the test cannot make symbolic links (a Windows user token); the Linux CI requires them (-Pportal.test.require=posix,links) and fails instead of skipping");
 
         assertRefused(store::stored, ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);
         assertRefused(() -> store.length(id), ArtifactErrorCode.ARTIFACT_STORAGE_UNSAFE);

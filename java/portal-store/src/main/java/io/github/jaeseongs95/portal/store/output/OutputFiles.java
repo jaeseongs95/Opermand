@@ -126,7 +126,7 @@ public class OutputFiles {
         }
     }
 
-    /** The size of a safe file. */
+    /** The size of a regular file. */
     public long sizeOf(Path file) {
         requireRegular(file);
         try {

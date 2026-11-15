@@ -27,6 +27,8 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Stream;
 
+import org.junit.jupiter.api.Assumptions;
+
 import io.github.jaeseongs95.portal.store.storage.AclPrivateStorage;
 import io.github.jaeseongs95.portal.store.storage.PosixPrivateStorage;
 import io.github.jaeseongs95.portal.store.storage.PrivateStorages;
@@ -44,6 +46,21 @@ public final class TestStorage {
         AclEntryPermission.WRITE_ACL, AclEntryPermission.WRITE_OWNER);
 
     private TestStorage() {
+    }
+
+    /**
+     * A test that needs an ability of the file system (case S-D0117-09): {@code posix} (permission bits), {@code links} (symbolic links) or {@code acl}. Without the property
+     * {@code portal.test.require} naming the ability, a machine that lacks it skips the test with the message; with the property the same test fails, so a run that states what
+     * its machine offers (the Linux CI step: {@code -Pportal.test.require=posix,links}) can never pass by skipping. The property is the Gradle one, handed to the test JVM by
+     * the build.
+     */
+    public static void requireOrSkip(String ability, boolean available, String skipMessage) {
+        String required = System.getProperty("portal.test.require", "");
+        if (List.of(required.split(",")).contains(ability)) {
+            assertThat(available).as("this run requires the ability '%s' of the file system, and the machine lacks it (%s)", ability, skipMessage).isTrue();
+        } else {
+            Assumptions.assumeTrue(available, skipMessage);
+        }
     }
 
     /** Both rules, in the order of the product ({@code @Order}): permission bits first. */

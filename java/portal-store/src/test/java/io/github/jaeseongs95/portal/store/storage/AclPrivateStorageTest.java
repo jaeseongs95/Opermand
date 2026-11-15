@@ -1,6 +1,7 @@
 package io.github.jaeseongs95.portal.store.storage;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -11,14 +12,16 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.AclEntry;
+import java.nio.file.attribute.AclEntryFlag;
+import java.nio.file.attribute.AclEntryPermission;
 import java.nio.file.attribute.AclEntryType;
 import java.nio.file.attribute.AclFileAttributeView;
 import java.nio.file.attribute.UserPrincipal;
+import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -40,8 +43,8 @@ class AclPrivateStorageTest {
 
     @BeforeEach
     void onlyWhereTheFileStoreHasAnAcl() throws IOException {
-        Assumptions.assumeTrue(rule.supports(Files.getFileStore(directory)),
-            "the file store of the test folder has no acl view (it is a posix store); runs on the Windows CI (Windows CI에서 실행)");
+        TestStorage.requireOrSkip("acl", rule.supports(Files.getFileStore(directory)),
+            "the file store of the test folder has no acl view (it is a posix store); a run on a machine with ACLs states -Pportal.test.require=acl and fails instead of skipping");
     }
 
     private AclFileAttributeView view(Path path) {
@@ -145,6 +148,44 @@ class AclPrivateStorageTest {
         assertThat(allowedPrincipals(subfolder)).isSubsetOf(ownerAndSystem(subfolder));
         TestStorage.assertOwnerOnly(child);
         TestStorage.assertOwnerOnly(subfolder);
+    }
+
+    /** A folder whose inheritable entry denies the owner the right to change the access control list: what is made in it cannot be made private (the well-known owner-rights group, S-1-3-4). */
+    private Path folderThatForbidsChangingTheList() throws IOException {
+        Path parent = Files.createDirectory(directory.resolve("no-write-dac"));
+        UserPrincipal ownerRights = parent.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName("OWNER RIGHTS");
+        AclFileAttributeView view = view(parent);
+        // The list is exactly two entries, so that what is made in the folder inherits the same two on every machine: the denial, and full control for the owner (which keeps the
+        // owner able to delete what a failed call must remove again; the owner-rights entry takes away only the implicit rights of the owner, not the entries of the list).
+        List<AclEntry> acl = List.of(
+            AclEntry.newBuilder().setType(AclEntryType.DENY).setPrincipal(ownerRights).setPermissions(AclEntryPermission.WRITE_ACL, AclEntryPermission.WRITE_OWNER)
+                .setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT).build(),
+            AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(view.getOwner()).setPermissions(EnumSet.allOf(AclEntryPermission.class))
+                .setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT).build());
+        view.setAcl(acl);
+        return parent;
+    }
+
+    @Test
+    @DisplayName("S-D0117-07: when the list of a new folder cannot be set, every folder that the call created is removed and the answer is UnsafeStorageException (a real denial of the right to change the list)")
+    void aFolderWhoseListCannotBeSetIsRemoved() throws IOException {
+        Path parent = folderThatForbidsChangingTheList();
+        Path inner = parent.resolve("outer").resolve("inner");
+
+        assertThatThrownBy(() -> rule.createFolder(inner)).isInstanceOf(UnsafeStorageException.class).hasMessageContaining("could not be made private");
+
+        assertThat(Files.exists(parent.resolve("outer"), LinkOption.NOFOLLOW_LINKS)).isFalse();
+    }
+
+    @Test
+    @DisplayName("S-D0117-07: when the list of a new file cannot be set, the file is closed and removed and the answer is UnsafeStorageException (a real denial of the right to change the list)")
+    void aFileWhoseListCannotBeSetIsRemoved() throws IOException {
+        Path parent = folderThatForbidsChangingTheList();
+        Path file = parent.resolve("payload.part");
+
+        assertThatThrownBy(() -> rule.open(file, Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE))).isInstanceOf(UnsafeStorageException.class);
+
+        assertThat(Files.exists(file, LinkOption.NOFOLLOW_LINKS)).isFalse();
     }
 
     @Test

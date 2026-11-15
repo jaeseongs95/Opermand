@@ -15,7 +15,6 @@ import ch.qos.logback.core.read.ListAppender;
 
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
@@ -41,6 +40,7 @@ import io.github.jaeseongs95.portal.domain.id.ArtifactId;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
 import io.github.jaeseongs95.portal.store.StorageRoots;
 import io.github.jaeseongs95.portal.store.StoreTest;
+import io.github.jaeseongs95.portal.store.TestStorage;
 
 /**
  * The start-up reconciliation of payload files and metadata (design 8.5), on a real folder and the real tables. The check is not called inside a transaction, so the
@@ -300,7 +300,7 @@ class ArtifactStartupCheckTest {
         payloads.stored();
         Path target = Files.write(roots.artifacts().getParent().resolve("symlink-target.bin"), new byte[] {9, 9});
         ArtifactId id = new ArtifactId("e".repeat(48));
-        Assumptions.assumeTrue(canLink(roots.artifacts().resolve(id.value() + ".part"), target), "the file store of the test folder does not allow symbolic links; runs on the Linux CI or the Windows CI (CI에서 실행)");
+        TestStorage.requireOrSkip("links", canLink(roots.artifacts().resolve(id.value() + ".part"), target), "the file store or the account of the test cannot make symbolic links (a Windows user token); the Linux CI requires them (-Pportal.test.require=posix,links) and fails instead of skipping");
 
         ArtifactReconciliation report = startup.reconcile();
 

@@ -1,16 +1,19 @@
 package io.github.jaeseongs95.portal.store.storage;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 
-import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -18,8 +21,14 @@ import org.junit.jupiter.api.io.TempDir;
 
 import io.github.jaeseongs95.portal.store.TestStorage;
 
-/** What the rule makes on a file store with permission bits (a Linux or macOS volume), and that it leaves what exists as it is. */
+/**
+ * What the rule makes on a file store with permission bits (a Linux or macOS volume), that it leaves what exists as it is, and what it does when the file store ignores the
+ * modes (case S-D0117-07: the file store is a real one, and the read-back that it answers with is the value of the test, because a CI runner cannot mount a file system that
+ * ignores modes; the limit is written in the case).
+ */
 class PosixPrivateStorageTest {
+
+    private static final Set<PosixFilePermission> WIDE = PosixFilePermissions.fromString("rwxr-xr-x");
 
     private final PosixPrivateStorage rule = new PosixPrivateStorage();
 
@@ -28,8 +37,8 @@ class PosixPrivateStorageTest {
 
     @BeforeEach
     void onlyWhereTheFileStoreHasPermissionBits() throws IOException {
-        Assumptions.assumeTrue(rule.supports(Files.getFileStore(directory)),
-            "the file store of the test folder has no posix view (it is an NTFS volume); runs on the Linux CI (Linux CI에서 실행)");
+        TestStorage.requireOrSkip("posix", rule.supports(Files.getFileStore(directory)),
+            "the file store of the test folder has no posix view (it is an NTFS volume); the Linux CI requires it (-Pportal.test.require=posix) and fails instead of skipping");
     }
 
     @Test
@@ -64,5 +73,77 @@ class PosixPrivateStorageTest {
         assertThat(Files.getPosixFilePermissions(folder)).isEqualTo(PosixFilePermissions.fromString("rwxrwxr-x"));
         assertThat(Files.getPosixFilePermissions(file)).isEqualTo(PosixFilePermissions.fromString("rw-rw-r--"));
         assertThat(Files.readString(file)).isEqualTo("bytes");
+    }
+
+    @Test
+    @DisplayName("S-D0117-07: a file store that ignores the mode of a new folder: every folder that the call created is removed and the answer is UnsafeStorageException")
+    void aNewFolderWithWideRightsIsRemoved() {
+        PosixPrivateStorage ignoringModes = new PosixPrivateStorage(path -> WIDE);
+        Path folder = directory.resolve("outer").resolve("inner");
+
+        assertThatThrownBy(() -> ignoringModes.createFolder(folder)).isInstanceOf(UnsafeStorageException.class).hasMessageContaining("ignored the mode")
+            .hasMessageContaining("rwxr-xr-x");
+
+        assertThat(directory.resolve("outer")).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("S-D0117-07: when only the second folder that the call created has wide rights, the first one is removed too (nothing of this call is left behind)")
+    void aWideFolderTakesTheEarlierOnesOfTheCallWithIt() {
+        PosixPrivateStorage ignoringModes = new PosixPrivateStorage(path -> path.getFileName().toString().equals("inner") ? WIDE : PosixFilePermissions.fromString("rwx------"));
+        Path folder = directory.resolve("outer").resolve("inner");
+
+        assertThatThrownBy(() -> ignoringModes.createFolder(folder)).isInstanceOf(UnsafeStorageException.class);
+
+        assertThat(directory.resolve("outer")).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("S-D0117-07: a file store that ignores the mode of a new file: the file is closed and removed, and the answer is UnsafeStorageException")
+    void aNewFileWithWideRightsIsRemoved() {
+        PosixPrivateStorage ignoringModes = new PosixPrivateStorage(path -> WIDE);
+        Path file = directory.resolve("payload.part");
+
+        assertThatThrownBy(() -> ignoringModes.open(file, Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE))).isInstanceOf(UnsafeStorageException.class)
+            .hasMessageContaining("ignored the mode");
+
+        assertThat(file).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("S-D0117-07: a mode that cannot be read back is not shown to be private: what the call created is removed and the cause is kept")
+    void aModeThatCannotBeReadIsRefused() {
+        PosixPrivateStorage unreadable = new PosixPrivateStorage(path -> {
+            throw new IOException("no permissions to read");
+        });
+        Path folder = directory.resolve("outer");
+
+        assertThatThrownBy(() -> unreadable.createFolder(folder)).isInstanceOfSatisfying(UnsafeStorageException.class, e -> assertThat(e).hasCauseInstanceOf(IOException.class));
+
+        assertThat(folder).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("S-D0117-07, S-D0117-01: the read-back is of the new path only: a folder and a file that exist are not read at all, whatever their rights")
+    void existingPathsAreNeverReadBack() throws IOException {
+        List<Path> asked = new ArrayList<>();
+        PosixPrivateStorage recording = new PosixPrivateStorage(path -> {
+            asked.add(path);
+            return PosixFilePermissions.fromString("rwx------");
+        });
+        Path folder = Files.createDirectory(directory.resolve("existing"));
+        Path file = Files.writeString(folder.resolve("payload.part"), "bytes");
+
+        recording.createFolder(folder);
+        try (FileChannel channel = recording.open(file, Set.of(StandardOpenOption.READ))) {
+            assertThat(channel.size()).isEqualTo(5);
+        }
+        assertThat(asked).isEmpty();
+
+        Path created = folder.resolve("created.part");
+        try (FileChannel channel = recording.open(created, Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE))) {
+            assertThat(channel.size()).isZero();
+        }
+        assertThat(asked).containsExactly(created);
     }
 }

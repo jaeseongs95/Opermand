@@ -55,6 +55,12 @@ jobs:
       - name: Test JVM sizes without -P properties
         working-directory: java
         run: ./gradlew --no-daemon --console=plain :portal-arch-checks:test
+      # Case S-D0117-09: the unit tests of the file rules need permission bits and symbolic links, which this runner has and a Windows user token does not. The property says so:
+      # a test that needs one of them and does not find it fails here instead of skipping (the build hands the property to the test JVM, the test code reads it). The property
+      # is not one of the sizes of the test JVM (portal.test.cpus, heap, forks), so the step above is not affected. The whole of both modules is run, not a list of classes.
+      - name: Unit tests of portal-store and portal-ssh with permission bits and symbolic links required
+        working-directory: java
+        run: ./gradlew --no-daemon --console=plain :portal-store:test :portal-ssh:test -Pportal.test.require=posix,links
       - name: Stop the OpenSSH server and remove the account
         if: always()
         run: sh java/ci/openssh-linux.sh stop
@@ -66,6 +72,8 @@ jobs:
           path: |
             java/portal-ssh/build/test-results/realOpenSshTest/*.xml
             java/portal-ssh/build/reports/tests/realOpenSshTest
+            java/portal-store/build/test-results/test/*.xml
+            java/portal-ssh/build/test-results/test/*.xml
           if-no-files-found: warn
           retention-days: 14
 
