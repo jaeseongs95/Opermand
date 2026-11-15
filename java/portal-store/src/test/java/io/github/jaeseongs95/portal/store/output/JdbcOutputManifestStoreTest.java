@@ -31,7 +31,7 @@ import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.Digest;
 import io.github.jaeseongs95.portal.store.StoreTest;
 
-/** The manifest part of the output store on the test database (Flyway applies the real scripts). Time comes from a fixed clock, never from the machine. */
+/** The manifest part of the output store on the test database (the migration runner applies the real scripts). Time comes from a fixed clock, never from the machine. */
 @StoreTest
 @Import({OutputMapper.class, OutputWorldFactory.class})
 class JdbcOutputManifestStoreTest {

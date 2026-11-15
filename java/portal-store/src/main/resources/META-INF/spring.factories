@@ -1,0 +1,2 @@
+# The migration at start-up is a database initializer: the beans that use the database wait for it (Spring Boot, "Depend Upon an Initialized Database").
+org.springframework.boot.sql.init.dependency.DatabaseInitializerDetector=io.github.jaeseongs95.portal.store.migration.MigrationInitializerDetector

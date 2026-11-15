@@ -37,9 +37,9 @@ import io.github.jaeseongs95.portal.store.migration.MigrationRunner.Phase;
 /**
  * S-D0109-06 and S-D0109-07: two runners that apply the same number at the same time (common format, 3 and 6). The overlap is not assumed from a start barrier: a
  * <em>holder</em> connection of the test keeps the claim row of the number uncommitted, so both runners are blocked on that one statement, and the test waits until the
- * database itself reports the two waiting sessions (H2: {@code INFORMATION_SCHEMA.SESSIONS}, column {@code BLOCKER_ID}, "the identifier of the session that blocks this
- * session", https://h2database.com/html/systemtables.html#sessions; the id of a session is {@code SESSION_ID()}). The wait is on that condition with a deadline
- * (Awaitility {@code atMost}), not on time. The runner itself has no sleep and no poll: the database makes it wait.
+ * database itself reports the two waiting sessions (H2: {@code INFORMATION_SCHEMA.SESSIONS}, columns {@code BLOCKER_ID}, {@code SESSION_STATE} and {@code EXECUTING_STATEMENT},
+ * https://h2database.com/html/systemtables.html#sessions; the id of a session is {@code SESSION_ID()}; see {@link #sessionsWaitingFor} for what H2 shows for an INSERT wait).
+ * The wait is on that condition with a deadline (Awaitility {@code atMost}), not on time. The runner itself has no sleep and no poll: the database makes it wait.
  */
 class MigrationConcurrencyTest {
 
@@ -100,8 +100,16 @@ class MigrationConcurrencyTest {
         }
     }
 
-    private long sessionsWaitingFor(long blocker) {
-        return count(jdbc, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SESSIONS WHERE BLOCKER_ID = ?", blocker);
+    /**
+     * The sessions the database shows as waiting for the holder. H2 2.4.240 shows a row-lock wait of an UPDATE or DELETE as {@code SESSION_STATE = BLOCKED} with the holder's id in
+     * {@code BLOCKER_ID}; the wait of an INSERT on a key that the holder has written and not committed is shown as a session that is {@code RUNNING} the INSERT, with no blocker (observed
+     * with a diagnostic program on 2.4.240, see docs/migration/migration-runner.md). So a session counts as waiting when the database says that it is blocked by the holder, or that
+     * it is executing the claim INSERT while the holder has uncommitted changes: that INSERT cannot finish before the holder ends its transaction.
+     */
+    private long sessionsWaitingFor(long holderSession) {
+        return count(jdbc, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.SESSIONS WHERE SESSION_ID <> ? AND (BLOCKER_ID = ? OR (LOWER(EXECUTING_STATEMENT) LIKE 'insert into "
+            + Phase.EXPAND.table() + "%' AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.SESSIONS holder WHERE holder.SESSION_ID = ? AND holder.CONTAINS_UNCOMMITTED)))",
+            holderSession, holderSession, holderSession);
     }
 
     private Future<Integer> startRunner() {

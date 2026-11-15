@@ -4,12 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Instant;
-import java.util.Arrays;
 import java.util.List;
-import java.util.Locale;
 
-import org.flywaydb.core.Flyway;
-import org.flywaydb.core.api.MigrationInfo;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -32,8 +28,8 @@ import io.github.jaeseongs95.portal.domain.operation.RecoveryReason;
 import io.github.jaeseongs95.portal.store.journal.OperationRow;
 
 /**
- * S2-DB-11 to S2-DB-15 and S2-DB-17 (the savepoint helper; the stores that use it are tested with their own cases): what the storage must do on every DBMS the product supports (H2, PostgreSQL, MariaDB, MySQL), written so that the same test class passes on the
- * embedded H2 database of the default run and on the PostgreSQL of the Gradle task {@code externalDbmsTest} (stage 2 design 13.3a). Each test asserts what the migration
+ * S2-DB-11 to S2-DB-15 and S2-DB-17 (the savepoint helper; the stores that use it are tested with their own cases): what the storage must do on every DBMS the product supports (H2, PostgreSQL, MariaDB, MySQL), written as the part of the behaviour that these DBMSs
+ * agree on, and run on the embedded H2 database only (the product does not test other DBMSs: Principles 7.3, the driver is the user's part). Each test asserts what the migration
  * scripts and the adapters rely on, not what one DBMS happens to do; where DBMSs differ (case folding, padding of CHAR, rounding below a microsecond) the assertion is the part
  * they agree on, and the difference is named in the test.
  *
@@ -49,22 +45,19 @@ class DbmsPortabilityTest {
     private static final String HEX = "0".repeat(64);
     private static final String STAMP = "TIMESTAMP '2026-11-12 00:00:00'";
 
-    /** The default schema of the embedded H2 database; the external run names its own schema in this system property (ExternalDbmsEnvironment). */
-    private static final String SCHEMA_PROPERTY = "portal.test.dbms.schema";
+    /** The default schema of the embedded H2 database. */
     private static final String H2_DEFAULT_SCHEMA = "PUBLIC";
 
     private final JdbcTemplate jdbc;
     private final JdbcAggregateOperations aggregates;
     private final PlatformTransactionManager transactions;
     private final Savepoints savepoints;
-    private final Flyway flyway;
 
-    DbmsPortabilityTest(JdbcTemplate jdbc, JdbcAggregateOperations aggregates, PlatformTransactionManager transactions, Savepoints savepoints, Flyway flyway) {
+    DbmsPortabilityTest(JdbcTemplate jdbc, JdbcAggregateOperations aggregates, PlatformTransactionManager transactions, Savepoints savepoints) {
         this.savepoints = savepoints;
         this.jdbc = jdbc;
         this.aggregates = aggregates;
         this.transactions = transactions;
-        this.flyway = flyway;
     }
 
     private static OperationRow row(String id, String requestKey, Instant createdAt, Instant updatedAt) {
@@ -203,26 +196,18 @@ class DbmsPortabilityTest {
         assertThatThrownBy(() -> jdbc.update("UPDATE maintenance_release SET owner_hash = ?", "f".repeat(65))).isInstanceOf(DataIntegrityViolationException.class);
     }
 
-    // ---- S2-DB-15: vendor scripts and schema ----
+    // ---- S2-DB-15: migration scripts and schema ----
 
     @Test
-    @DisplayName("S2-DB-15: the migration took the scripts of the DBMS in use ({vendor} is the lower-case product name) and no other vendor's, in the schema the connection works in")
-    void theVendorFolderAndTheSchemaAreTheOnesInUse() {
-        String vendor = jdbc.execute((ConnectionCallback<String>) connection -> connection.getMetaData().getDatabaseProductName()).toLowerCase(Locale.ROOT);
+    @DisplayName("S2-DB-15: the migration applied the seven scripts of db/expand once each and in order (one folder for every DBMS), in the schema the connection works in")
+    void theMigrationAndTheSchemaAreTheOnesInUse() {
+        List<String> scripts = jdbc.queryForList("SELECT script FROM portal_meta.expand_history WHERE outcome = 'SUCCEEDED' ORDER BY version", String.class);
+        assertThat(scripts).hasSize(7);
+        for (int number = 1; number <= 7; number++) {
+            assertThat(scripts.get(number - 1)).startsWith("V" + number + "__").endsWith(".sql");
+        }
 
-        List<String> scripts = Arrays.stream(flyway.info().applied()).map(DbmsPortabilityTest::location).toList();
-        assertThat(scripts).hasSize(9);
-        assertThat(scripts).filteredOn(script -> script.contains("/db/migration/common/")).as("common scripts (V7 is common: no vendor script was needed)").hasSize(7);
-        assertThat(scripts).filteredOn(script -> script.contains("/db/migration/" + vendor + "/")).as("the scripts of the vendor " + vendor)
-            .hasSize(2).allMatch(script -> script.contains("V1_1__long_text_columns.sql") || script.contains("V6_1__maintenance_baseline.sql"));
-
-        // The tables are in the schema the connection works in (SchemaMigrationTest counts them there); the external run names that schema, the embedded database has PUBLIC.
-        String expected = System.getProperty(SCHEMA_PROPERTY, H2_DEFAULT_SCHEMA);
-        assertThat(jdbc.queryForObject("SELECT CURRENT_SCHEMA", String.class)).isEqualToIgnoringCase(expected);
-    }
-
-    /** The script of an applied migration as a path with forward slashes: its relative name and its physical location, whichever Flyway reports the folder in. */
-    private static String location(MigrationInfo info) {
-        return ("/" + info.getScript() + "|" + info.getPhysicalLocation()).replace('\\', '/');
+        // The tables are in the schema the connection works in (SchemaMigrationTest counts them there): the embedded database has PUBLIC.
+        assertThat(jdbc.queryForObject("SELECT CURRENT_SCHEMA", String.class)).isEqualToIgnoringCase(H2_DEFAULT_SCHEMA);
     }
 }

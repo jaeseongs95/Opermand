@@ -10,6 +10,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -76,7 +78,7 @@ class ProductScriptsTest {
 
     @Test
     @DisplayName("S-D0109-21: no script names a DBMS's own long text type; the twelve long-text columns are written ${long_text} and have one type on the database")
-    void longTextIsWrittenOnlyAsThePlaceholder() throws IOException {
+    void longTextIsWrittenOnlyAsThePlaceholder() throws IOException, SQLException {
         List<String> offenders = new ArrayList<>();
         int placeholders = 0;
         for (Resource script : RESOURCES.getResources("classpath*:db/expand/**/*.sql")) {
@@ -89,10 +91,17 @@ class ProductScriptsTest {
         assertThat(offenders).isEmpty();
         assertThat(placeholders).as("every long-text column of the schema comes from the placeholder").isEqualTo(LONG_TEXT_COLUMNS.size());
 
+        // What the driver of this database reports for a long text (H2 2.4.240 asks for a length of its CHARACTER LARGE OBJECT, so the rule chooses CHARACTER VARYING(1000000000));
+        // the columns of the schema are exactly the twelve of the list, all of that type and size.
         DataSource database = freshDatabase();
+        LongTextType chosen;
+        try (Connection connection = database.getConnection()) {
+            chosen = LongTextType.choose(connection.getMetaData());
+        }
         new MigrationRunner(CLOCK, database).run(Phase.EXPAND);
-        List<String> columns = new JdbcTemplate(database).queryForList("SELECT LOWER(TABLE_NAME) || '.' || LOWER(COLUMN_NAME) FROM INFORMATION_SCHEMA.COLUMNS "
-            + "WHERE TABLE_SCHEMA = 'PUBLIC' AND DATA_TYPE = 'CHARACTER LARGE OBJECT' ORDER BY 1", String.class);
-        assertThat(columns).containsExactlyElementsOf(LONG_TEXT_COLUMNS);
+        List<String> columns = new JdbcTemplate(database).query("SELECT LOWER(TABLE_NAME) || '.' || LOWER(COLUMN_NAME), DATA_TYPE, CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS "
+            + "WHERE TABLE_SCHEMA = 'PUBLIC' ORDER BY 1", (rows, number) -> rows.getString(2).equalsIgnoreCase(chosen.name())
+                && (!chosen.needsLength() || rows.getLong(3) == chosen.precision()) ? rows.getString(1) : null).stream().filter(java.util.Objects::nonNull).toList();
+        assertThat(columns).as("the columns declared as " + chosen.declaration()).containsExactlyElementsOf(LONG_TEXT_COLUMNS);
     }
 }

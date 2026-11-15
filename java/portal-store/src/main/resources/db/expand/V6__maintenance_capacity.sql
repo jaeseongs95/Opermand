@@ -1,5 +1,5 @@
 -- Maintenance reservation and runtime capacity (2.x maintenance-state.mjs:14 and runtime-capacity-state.mjs:12). ANSI types only, see V1.
--- maintenance_reservation.baseline (up to 4 MiB of text) comes from the vendor script V6_1.
+-- maintenance_reservation.baseline (up to 4 MiB of text) is a long-text column, added at the end of this script (${long_text}, see V1).
 
 CREATE TABLE maintenance_reservation (
     id         INTEGER  NOT NULL,
@@ -34,3 +34,6 @@ CREATE TABLE runtime_capacity_target (
     CONSTRAINT pk_runtime_capacity_target PRIMARY KEY (target_id),
     CONSTRAINT ck_runtime_capacity_target CHECK ((queue_capacity IS NULL OR queue_capacity >= 1) AND (max_concurrency IS NULL OR max_concurrency >= 1))
 );
+
+-- The preservation baseline of a maintenance reservation (up to 4 MiB of text): a long-text column, nullable.
+ALTER TABLE maintenance_reservation ADD COLUMN baseline ${long_text};

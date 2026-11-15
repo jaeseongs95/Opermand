@@ -28,8 +28,8 @@ class NoInListInChecksTest {
     @DisplayName("S2-DB-02: no migration script checks a list of values with IN (H2 2.4.240 cannot evaluate it once the creating connection is closed)")
     void noScriptUsesAnInListOfLiterals() throws IOException {
         List<String> offenders = new ArrayList<>();
-        Resource[] scripts = new PathMatchingResourcePatternResolver().getResources("classpath*:db/migration/**/*.sql");
-        assertThat(scripts).as("the migration scripts are on the class path").hasSizeGreaterThanOrEqualTo(14);
+        Resource[] scripts = new PathMatchingResourcePatternResolver().getResources("classpath*:db/expand/**/*.sql");
+        assertThat(scripts).as("the migration scripts are on the class path").hasSizeGreaterThanOrEqualTo(7);
         for (Resource script : scripts) {
             try (InputStream in = script.getInputStream()) {
                 String text = new String(in.readAllBytes(), StandardCharsets.UTF_8);

@@ -41,7 +41,7 @@ dependencies {
 // ---- realOpenSshTest: the tests that need a real OpenSSH server (stage 3 design 7.2 and 7.3, cases S3-RO-nn and S3-RW-nn) ----
 // A source set of its own (src/realOpenSsh/java) and a test task of its own, so that the default test task never meets a missing server and no test is skipped by a condition.
 // Not part of check or build: a person or the CI job of stage 8 calls it by name, on a machine where an OpenSSH server runs (the CI preparation scripts of the java/ci folder
-// start it). Like externalDbmsTest of portal-store, the connection is described by Gradle properties (this PC: the gradle.properties of the dedicated Gradle user home;
+// start it). The connection is described by Gradle properties (this PC: the gradle.properties of the dedicated Gradle user home;
 // CI: -P or ORG_GRADLE_PROJECT_*), and nothing stands in for a missing server:
 //   portal.test.openssh.host         the host name or address of the server
 //   portal.test.openssh.port         its port

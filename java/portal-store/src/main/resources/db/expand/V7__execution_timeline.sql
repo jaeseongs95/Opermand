@@ -1,7 +1,7 @@
--- Execution timeline and one more failure code of an executed operation (stage 3 design 3.4, decisions D3-03 and D3-04). ANSI statements only, common to H2, PostgreSQL,
--- MariaDB and MySQL: no vendor script V7_1 is needed because every statement below is understood by all four (ALTER TABLE ... ADD COLUMN, DROP CONSTRAINT and ADD CONSTRAINT
--- ... CHECK; MySQL knows DROP CONSTRAINT for a CHECK from 8.0.19, MariaDB from 10.2.1). A statement that one of them did not understand would go to
--- db/migration/{vendor}/V7_1__*.sql, as V1_1 and V6_1 do. No CLOB, no IDENTITY, no function.
+-- Execution timeline and one more failure code of an executed operation (stage 3 design 3.4, decisions D3-03 and D3-04). ANSI statements only, common to every DBMS: every
+-- statement below is understood by H2, PostgreSQL, MariaDB and MySQL (ALTER TABLE ... ADD COLUMN, DROP CONSTRAINT and ADD CONSTRAINT ... CHECK; MySQL knows DROP CONSTRAINT
+-- for a CHECK from 8.0.19, MariaDB from 10.2.1). A statement that a database did not understand would be spelled for it in ScriptDialect, not in a script per DBMS.
+-- No CLOB, no IDENTITY, no function.
 --
 -- 1. Three instants of one execution, written by the use case after the operation settled (defect D-0038: the time between the steps of one execution tells a connection that
 --    failed at once from one that was lost later). They are NULL while the step was not reached and for every result that existed before this script; the other phases of the
