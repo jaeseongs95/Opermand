@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -472,7 +473,7 @@ class EnvironmentCredentialSourceTest {
 
         assertThat(appender.list).isNotEmpty().allSatisfy(event -> {
             assertThat(event.getFormattedMessage()).contains("SSH_MCP_KEY").doesNotContain("SECRETBODY").doesNotContain("BEGIN");
-            assertThat(String.valueOf(java.util.Arrays.asList(event.getArgumentArray()))).doesNotContain("SECRETBODY");
+            assertThat(String.valueOf(Arrays.asList(event.getArgumentArray()))).doesNotContain("SECRETBODY");
             assertThat(event.getThrowableProxy()).isNull();
         });
     }

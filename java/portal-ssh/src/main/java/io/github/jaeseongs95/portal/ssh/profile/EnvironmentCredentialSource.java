@@ -159,7 +159,7 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
             LOG.warn("The key path named by {} for the profile {} is not a valid path ({})", named.source(), alias.value(), e.getReason());
             return missing(CredentialPart.PRIVATE_KEY, place + " cannot be read");
         }
-        return switch (read(keyFile, named.source())) {
+        return switch (read(keyFile, place)) {
             case FileRead.Text key when key.text().isEmpty() -> missing(CredentialPart.PRIVATE_KEY, place + " is empty");
             case FileRead.Text key -> withPassphraseAndCertificate(SecretValue.of(key.text()), alias, prefix, keyFile, named.source());
             case FileRead.Absent absent -> missing(CredentialPart.PRIVATE_KEY, place + " does not exist");
@@ -225,7 +225,7 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
             .orElse(path);
     }
 
-    /** Reads a file; {@code source} names where its path was set, because the path itself may be a secret text and is never logged. */
+    /** Reads a file; {@code source} is a phrase that says where its path was set (it opens the log line), because the path itself may be a secret text and is never logged. */
     private FileRead read(Path file, String source) {
         if (!Files.exists(file)) {
             return new FileRead.Absent();
@@ -233,7 +233,7 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
         try {
             return new FileRead.Text(Files.readString(file, StandardCharsets.UTF_8));
         } catch (IOException e) {
-            LOG.warn("The file named by {} cannot be read ({})", source, e.getClass().getSimpleName());
+            LOG.warn("{} cannot be read ({})", source,e.getClass().getSimpleName());
             return new FileRead.Unreadable();
         }
     }
