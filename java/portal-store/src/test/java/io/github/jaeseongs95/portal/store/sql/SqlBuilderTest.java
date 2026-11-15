@@ -18,7 +18,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import io.github.jaeseongs95.portal.store.sql.DatabaseProductException.Reason;
 
 /**
- * S-SQLB-01, 02, 05, 07, 08, 09 (docs/migration/sqlbuilder-cases.md). Ported from AGS {@code SqlBuilderTest} (sennard-source int-6d37-m3, commit 1ad1b8e7): the seven
+ * S-SQLB-01, 02, 05, 07, 08, 09 (docs/migration/sqlbuilder-cases.md). Ported from AGS {@code SqlBuilderTest} (AGS, Agent Governance Suite, as of commit 1ad1b8e7): the seven
  * dialects render a bound limit; a complete statement keeps its parameter; an unknown database is refused; the default embedded database is H2.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)

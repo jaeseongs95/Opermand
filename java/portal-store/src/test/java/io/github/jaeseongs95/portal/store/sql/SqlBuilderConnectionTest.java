@@ -30,7 +30,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import io.github.jaeseongs95.portal.store.sql.DatabaseProductException.Reason;
 
 /**
- * S-SQLB-03 to S-SQLB-06 (docs/migration/sqlbuilder-cases.md). Ported from AGS {@code SqlBuilderConnectionTest} (sennard-source int-6d37-m3, commit 1ad1b8e7), plus the
+ * S-SQLB-03 to S-SQLB-06 (docs/migration/sqlbuilder-cases.md). Ported from AGS {@code SqlBuilderConnectionTest} (AGS, Agent Governance Suite, as of commit 1ad1b8e7), plus the
  * failed probe (S-SQLB-06). The data source delegates to a real in-memory H2 pool and only observes or, for the two refusal cases, disturbs the metadata read.
  */
 class SqlBuilderConnectionTest {

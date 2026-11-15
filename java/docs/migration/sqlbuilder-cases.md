@@ -6,7 +6,7 @@
 
 ## 1. 출처와 이식 범위
 
-- 출처: 저장소 `jaeseongs95/sennard-source`(private), 브랜치 `int-6d37-m3` 2aa6b008, 마지막 변경 커밋 1ad1b8e7. 경로 `java/ags-api/src/main/java/io/github/jaeseongs95/ags/service/database/SqlBuilder.java`(168줄)와 같은 패키지 test의 `SqlBuilderTest.java`, `SqlBuilderConnectionTest.java`. AGS와 포털 3.0.0은 둘 다 AGPL-3.0-or-later이고 소유자가 같다.
+- 출처: AGS(Agent Governance Suite)의 SqlBuilder, 커밋 1ad1b8e7 기준. 경로 `java/ags-api/src/main/java/io/github/jaeseongs95/ags/service/database/SqlBuilder.java`(168줄)와 같은 패키지 test의 `SqlBuilderTest.java`, `SqlBuilderConnectionTest.java`. AGS와 포털 3.0.0은 둘 다 AGPL-3.0-or-later이고 소유자가 같다.
 - 포털 위치: `portal-store`의 `io.github.jaeseongs95.portal.store.sql.SqlBuilder`. 세 제품(SSH 포털·장부·AGS)이 같은 SqlBuilder를 쓴다는 사용자 결정(「내가 sql builder도 다 똑같이 쓰라는 이유도 그 이유야.」「결국 차별점은 "맞춤형" 이거든.」)에 따라 클래스 구조·API·`Database` enum 7개·행 수 제한 분기·공식 문서 링크 주석이 AGS 원본 1ad1b8e7과 똑같다. 원본과 다른 곳은 예외 타입 하나뿐이다(패키지 이름과, 존재하지 않는 `StoreCode`를 가리키던 주석 문구는 포털에 맞게 고쳤다).
   - 한때 개인판 범위를 이유로 Oracle·Db2·SQL Server를 뺐다가(커밋 b1594bf, 2dc6836) 리드 정정으로 되돌렸다. 되돌린 커밋이 정본이다.
 - 예외: AGS의 `StoreException`·`StoreCode`는 포털의 `DatabaseProductException`과 그 `Reason`으로 바뀐다.

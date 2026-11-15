@@ -12,10 +12,10 @@ import org.springframework.stereotype.Component;
 import io.github.jaeseongs95.portal.store.sql.DatabaseProductException.Reason;
 
 /**
- * Builds SQL for the actual business database, resolving its product on first use. Ported from AGS {@code SqlBuilder} (repository jaeseongs95/sennard-source, branch
- * int-6d37-m3, last changed in commit 1ad1b8e7, path {@code java/ags-api/src/main/java/io/github/jaeseongs95/ags/service/database/SqlBuilder.java}; same owner,
- * AGPL-3.0-or-later) with the same structure, API, products and limit syntax: the only difference is the exception type, {@link DatabaseProductException} in place of
- * AGS {@code StoreException}. It opens no transaction: it joins the connection of the caller's transaction or borrows one for the single product read.
+ * Builds SQL for the actual business database, resolving its product on first use. Ported from the SqlBuilder of AGS (Agent Governance Suite), as of commit 1ad1b8e7
+ * (path {@code java/ags-api/src/main/java/io/github/jaeseongs95/ags/service/database/SqlBuilder.java};
+ * same owner, AGPL-3.0-or-later), with the same structure, API, products and limit syntax: the only difference is the exception type, {@link DatabaseProductException}
+ * in place of AGS {@code StoreException}. It opens no transaction: it joins the connection of the caller's transaction or borrows one for the single product read.
  */
 @Component
 public class SqlBuilder {
