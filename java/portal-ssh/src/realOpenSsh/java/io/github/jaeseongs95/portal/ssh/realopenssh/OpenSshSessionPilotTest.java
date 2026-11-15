@@ -78,8 +78,9 @@ class OpenSshSessionPilotTest {
                 assertThat(refusals).as("a server with the default MaxSessions refuses at least one of " + ATTEMPTS + " channels").isGreaterThan(0);
                 assertThat(session.isOpen()).as("a refused channel does not kill the session").isTrue();
                 // The commands end by themselves after COMMAND_SECONDS. The test waits for that, observing the CLOSED event of every channel with a time limit, and does not cut the
-                // connection while they run: Win32-OpenSSH does not turn a closed channel into the end of its command, the ten commands stayed running for two minutes, and every
-                // later test on the same server then saw a connection that the server had closed stay open (S-D0038-01 did not see the server end its idle connection).
+                // connection while they run. Observed on Windows CI: after the channels were closed by the client the ten commands stayed running for two minutes (tracked as
+                // SSH_PORTAL-D-0091), and in the same run S-D0038-01 did not see the server end its idle connection. The mechanism of that second observation is not confirmed
+                // (see S-D0038-02 in regression-cases.part-b.md, which also lists two observations that disagree with it).
                 for (ChannelExec channel : channels) {
                     assertThat(channel.waitFor(EnumSet.of(ClientChannelEvent.CLOSED), LIMIT)).as("the command of a channel ends by itself and the channel closes").contains(ClientChannelEvent.CLOSED);
                 }

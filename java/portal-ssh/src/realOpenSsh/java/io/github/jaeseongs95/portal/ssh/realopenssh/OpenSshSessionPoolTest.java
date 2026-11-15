@@ -174,13 +174,13 @@ class OpenSshSessionPoolTest {
     }
 
     @Test
-    @DisplayName("S-D0038-01 (cause of D-0038 not confirmed; this fixes the category) the real sshd closes the idle session of the pool: the next request through the pool makes one new connection and runs once")
+    @DisplayName("S-D0038-01 (cause of D-0038 not confirmed; this fixes the category) the real sshd closes the idle session of the pool: the next request through the pool succeeds on a session other than the closed one and runs once")
     void aRequestAfterTheServerClosedTheSession() throws Exception {
         startAdapter();
 
         Run before = run("echo " + BEFORE);
         assertThat(before.outcome().verdict()).as("the first request, which makes the session of the pool: " + before.outcome()).isEqualTo(OperationState.COMPLETED);
-        assertThat(before.stdout()).contains(BEFORE);
+        assertThat(before.stdout()).containsOnlyOnce(BEFORE);
 
         // Every channel is closed now. The server closes the connection by itself after its UnusedConnectionTimeout; the test only observes the end of the client session.
         ClientSession closedByServer;
@@ -194,9 +194,10 @@ class OpenSshSessionPoolTest {
         // The next request: the pool must not hand out the closed session and must not fail; it makes one new connection and the command runs.
         Run after = run("echo " + AFTER);
         assertThat(after.outcome().verdict()).as("the request after the server closed the session: " + after.outcome()).isEqualTo(OperationState.COMPLETED);
-        assertThat(after.stdout()).as("the command ran once on the new connection").contains(AFTER).doesNotContain(BEFORE);
+        assertThat(after.stdout()).as("the command ran once: its marker is in the output exactly once, and the marker of the first request is not").containsOnlyOnce(AFTER).doesNotContain(BEFORE);
 
-        // The new connection is idle for the same timeout, so whether it is still open is not asserted here; it is a different object from the closed one.
+        // Not asserted, on purpose: that exactly one connection was made (connections are not counted; only that the session is a different object from the closed one), and that the
+        // new session is still open (it is idle for the same timeout, so the server may close it at any moment).
         try (ChannelLease next = lease()) {
             assertThat(next.session()).as("the pool holds a new session, not the closed one").isNotSameAs(closedByServer);
         }

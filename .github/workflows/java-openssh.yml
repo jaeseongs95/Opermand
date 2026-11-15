@@ -94,10 +94,10 @@ jobs:
             -Pportal.test.openssh.platform=windows \
             -Pportal.test.openssh.windows-python="$PORTAL_OPENSSH_WINDOWS_PYTHON"
       # Diagnostic: the server log (LogLevel VERBOSE, no command text) of the sshd the preparation script started.
-      # It runs whatever the tests did and cannot fail the job (continue-on-error), so it never hides the result of the tests. Stop-ScheduledTask ends only the
-      # parent sshd, and commands that a test left running on the server (a command is not ended when its channel closes on Win32-OpenSSH) hold the log handle they
-      # inherited from sshd, so the log is read with a sharing mode first, and when that is refused every sshd process and every ping command that started after
-      # the prepared sshd is ended and the file is read afterwards. This is a diagnostic of the CI job, not product or test code.
+      # It runs whatever the tests did and cannot fail the job (continue-on-error), so it never hides the result of the tests. First it prints how many ping commands
+      # started after the prepared sshd are still running (case S-D0038-02 expects none when the tests end); nothing is ended before that count is printed. The log is
+      # read with a sharing mode (the running sshd has the file open). If it still cannot be read, the step says so and ends the sshd processes and the leftover ping
+      # commands it just counted, then reads the file once more. This is a diagnostic of the CI job, not product or test code.
       - name: Show the log of the prepared sshd
         if: always()
         continue-on-error: true
@@ -114,14 +114,16 @@ jobs:
             Write-Host ('--- sshd.log, ' + $lines.Count + ' lines, the last 300')
             $lines | Select-Object -Last 300 | ForEach-Object { Write-Host $_ }
           }
+          $leftover = @(Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -ge $since -and $_.CommandLine -like '*ping*-n*' } | ForEach-Object { $_.ProcessId })
+          $sshdCount = @(Get-Process -Name sshd -ErrorAction SilentlyContinue).Count
+          Write-Host ('--- when the tests ended: ' + $leftover.Count + ' ping command(s) started after the prepared sshd are still running, ' + $sshdCount + ' sshd process(es)')
           try {
             Read-SshdLog
           } catch {
-            Write-Host ('--- the log is locked (' + $_.Exception.Message + '); ending every sshd process and every ping command that a test left running')
+            Write-Host ('--- the log cannot be read (' + $_.Exception.Message + '); ending the ' + $sshdCount + ' sshd process(es) and the ' + $leftover.Count + ' ping command(s) counted above')
             Stop-ScheduledTask -TaskName PortalOpenSshCi -ErrorAction Continue
             Get-Process -Name sshd -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction Continue
             Get-Process -Name sshd -ErrorAction SilentlyContinue | Wait-Process -Timeout 15 -ErrorAction Continue
-            $leftover = @(Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -ge $since -and $_.CommandLine -like '*ping*-n*' } | ForEach-Object { $_.ProcessId })
             $leftover | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
             $leftover | ForEach-Object { Wait-Process -Id $_ -Timeout 10 -ErrorAction SilentlyContinue }
             Read-SshdLog

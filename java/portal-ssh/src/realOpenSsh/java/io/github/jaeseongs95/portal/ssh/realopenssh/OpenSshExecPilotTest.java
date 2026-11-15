@@ -117,7 +117,7 @@ class OpenSshExecPilotTest {
     }
 
     @Test
-    @DisplayName("S3-RO-03 P3-3 a signal request (INT) to a running command: Linux ends it with exit-signal INT; on Windows the channel can be closed whatever the server did")
+    @DisplayName("S3-RO-03 P3-3 a signal request (INT) to a running command: Linux ends it with exit-signal INT; on Windows the command ends (by the signal or by itself) and then the channel closes; the test does not close the channel while the command runs (D-0091)")
     void aSignalRequestToARunningCommand() throws Exception {
         String longRunning = switch (target.platform()) {
             case LINUX -> "sleep " + COMMAND_SECONDS;
@@ -138,8 +138,9 @@ class OpenSshExecPilotTest {
                     }
                     case WINDOWS -> {
                         // Whether Win32-OpenSSH acts on the signal is what this case finds out; what holds either way is that the command ends (by the signal, or by itself after
-                        // COMMAND_SECONDS) and the channel closes. The test waits for that with a time limit and does not close the channel while the command runs: Win32-OpenSSH
-                        // does not turn a closed channel into the end of its command, and a command left running keeps a closed connection open on the server for the tests that follow.
+                        // COMMAND_SECONDS) and the channel closes. The test waits for that with a time limit and does not close the channel while the command runs: a channel
+                        // closed by the client did not end the command on Win32-OpenSSH (SSH_PORTAL-D-0091), and a command left running was followed by a failure of S-D0038-01 in the
+                        // same run (observed; the mechanism is not confirmed, see S-D0038-02 in regression-cases.part-b.md).
                         Set<ClientChannelEvent> events = channel.waitFor(EnumSet.of(ClientChannelEvent.CLOSED), LIMIT);
                         assertThat(events).contains(ClientChannelEvent.CLOSED);
                         assertThat(channel.isOpen()).isFalse();
