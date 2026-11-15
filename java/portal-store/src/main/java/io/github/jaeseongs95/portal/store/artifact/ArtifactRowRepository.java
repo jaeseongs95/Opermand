@@ -29,6 +29,14 @@ interface ArtifactRowRepository extends CrudRepository<ArtifactRow, String> {
     @Query("UPDATE artifact SET size_bytes = :size, version = version + 1 WHERE id = :id AND direction = 'DOWNLOAD' AND state = 'STAGING' AND received_bytes = 0 AND size_bytes >= :size")
     int narrowDownload(@Param("id") String id, @Param("size") long size);
 
+    /**
+     * Moves a row that is {@code STAGING} or {@code READY} to {@code DELETING} in one statement (the version moves with it, so a concurrent step of the optimistic lock loses).
+     * It changes one row when the row exists in one of those states, and none otherwise (the row is gone, already {@code DELETING}, in use or consumed).
+     */
+    @Modifying
+    @Query("UPDATE artifact SET state = 'DELETING', version = version + 1 WHERE id = :id AND state IN ('STAGING', 'READY')")
+    int markDeleting(@Param("id") String id);
+
     /** What the rows charge now: a consumed row and an empty file charge one byte each (2.x {@code artifacts.mjs:18}). */
     @Query("SELECT COALESCE(SUM(CASE WHEN state = 'CONSUMED' THEN 1 WHEN size_bytes < 1 THEN 1 ELSE size_bytes END), 0) FROM artifact")
     long chargedBytes();

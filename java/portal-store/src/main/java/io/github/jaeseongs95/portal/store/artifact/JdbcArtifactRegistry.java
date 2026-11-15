@@ -371,6 +371,29 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
     }
 
     /**
+     * One conditional UPDATE, so no transaction is opened here (Principles 4.4) and the winner is told by the rows changed. When no row changed the artifact is read once
+     * to say why: no row is the answer {@code false}, a row that is {@code DELETING} already is {@code true}, and a row in use or consumed is refused as
+     * {@link #beginDelete} refuses it. Nothing is written again and nothing is retried.
+     */
+    @Override
+    public boolean beginDeleteIfPresent(ArtifactId id) {
+        if (artifacts.markDeleting(id.value()) == 1) {
+            return true;
+        }
+        Optional<ArtifactRow> row = artifacts.findById(id.value());
+        if (row.isEmpty()) {
+            return false;
+        }
+        return switch (row.get().state()) {
+            case DELETING -> true;
+            case CONSUMING -> throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_BUSY);
+            case CONSUMED -> throw new RequestRefusedException(ArtifactErrorCode.STAGED_FILE_CONSUMED);
+            // STAGING and READY are the states the UPDATE moves: a row seen in one of them after the UPDATE changed none was changed by another caller in between.
+            case STAGING, READY -> throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_CHANGED);
+        };
+    }
+
+    /**
      * Removes the row and its chunks and actions. The row must not stand for bytes that still exist: it is {@code DELETING} or {@code CONSUMED}, or it never
      * received a byte. An unknown id is a repeated release and changes nothing.
      */

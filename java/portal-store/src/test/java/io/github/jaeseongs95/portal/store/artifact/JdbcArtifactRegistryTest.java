@@ -534,6 +534,38 @@ class JdbcArtifactRegistryTest {
         assertThat(registry.holding()).extracting(ArtifactRecord::state).containsExactly(ArtifactState.DELETING);
     }
 
+    @Test
+    @DisplayName("S-D0012-08 (D-0012): beginDeleteIfPresent answers an unknown id with false and changes nothing; a STAGING or READY row becomes DELETING; a DELETING row is answered as it is; a row in use or consumed is refused")
+    void beginDeleteIfPresentAnswersAnUnknownIdWithoutAnException() {
+        ArtifactId staging = fixtures.reservedId(registry.reserve(fixtures.upload(8), fixtures.at()));
+        ArtifactId ready = fixtures.readyArtifact(registry, fixtures.upload(4), fixtures.bytes(4, 1));
+        ArtifactId deleting = fixtures.readyArtifact(registry, fixtures.upload(4), fixtures.bytes(4, 2));
+        registry.beginDelete(deleting);
+        ArtifactId consuming = fixtures.readyArtifact(registry, fixtures.stagedFile(4), fixtures.bytes(4, 3));
+        registry.beginConsume(consuming, ConsumeReason.REMOVED);
+        ArtifactId consumed = fixtures.readyArtifact(registry, fixtures.stagedFile(4), fixtures.bytes(4, 4));
+        registry.beginConsume(consumed, ConsumeReason.REMOVED);
+        registry.completeConsume(consumed, ConsumeReason.REMOVED);
+        long charged = registry.budget().chargedBytes();
+        long deletingVersion = registry.find(deleting).orElseThrow().version();
+
+        assertThat(registry.beginDeleteIfPresent(new ArtifactId("9".repeat(48)))).as("an unknown id is answered, not thrown").isFalse();
+        assertThat(registry.budget().chargedBytes()).as("and nothing changed").isEqualTo(charged);
+
+        assertThat(registry.beginDeleteIfPresent(staging)).isTrue();
+        assertThat(registry.find(staging).orElseThrow().state()).isEqualTo(ArtifactState.DELETING);
+        assertThat(registry.beginDeleteIfPresent(ready)).isTrue();
+        assertThat(registry.find(ready).orElseThrow().state()).isEqualTo(ArtifactState.DELETING);
+        assertThat(registry.beginDeleteIfPresent(ready)).as("again: the row is DELETING already").isTrue();
+        assertThat(registry.beginDeleteIfPresent(deleting)).isTrue();
+        assertThat(registry.find(deleting).orElseThrow().version()).as("a row already DELETING is not written again").isEqualTo(deletingVersion);
+        assertThat(registry.budget().chargedBytes()).as("the charge stays until the release").isEqualTo(charged);
+
+        assertRefused(() -> registry.beginDeleteIfPresent(consuming), ArtifactErrorCode.ARTIFACT_BUSY);
+        assertRefused(() -> registry.beginDeleteIfPresent(consumed), ArtifactErrorCode.STAGED_FILE_CONSUMED);
+        assertThat(registry.find(consuming).orElseThrow().state()).isEqualTo(ArtifactState.CONSUMING);
+    }
+
     /**
      * The refused call runs in its own savepoint: a refusal that comes from a violated constraint aborts the transaction on PostgreSQL (SQL state 25P02 for every later
      * statement), and any refusal from a {@code @Transactional} method marks the joined transaction rollback-only. A caller that goes on after a refusal scopes the call in a

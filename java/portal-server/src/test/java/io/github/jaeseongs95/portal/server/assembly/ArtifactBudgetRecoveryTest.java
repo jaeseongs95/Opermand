@@ -237,7 +237,7 @@ class ArtifactBudgetRecoveryTest {
     }
 
     @Test
-    @DisplayName("S-D0012-04 (D-0012): the code that is taken as 'already removed' is ARTIFACT_NOT_FOUND alone: any other refusal of the removal is still a failure with its warning")
+    @DisplayName("S-D0012-04 (D-0012): a refusal of the removal other than the lost race is still a failure with its warning")
     void anyOtherRefusalOfTheRemovalIsStillAFailure() {
         ArtifactId discarding = aRowThatAFailedDiscardLeftDeleting();
         RegistryProbe probe = new RegistryProbe();
@@ -253,6 +253,50 @@ class ArtifactBudgetRecoveryTest {
             assertThat(event.getThrowableProxy()).isNotNull();
         });
         assertThat(registry.find(discarding)).as("the row stays for the next run").isPresent();
+    }
+
+    @Test
+    @DisplayName("S-D0012-09 (D-0012): the reap learns that the row is gone from the answer of beginDeleteIfPresent, not from an exception: it counts the row as removed, and calls neither beginDelete nor release")
+    void theLostRaceIsToldByTheAnswerAndNotByAnException() {
+        ArtifactId discarding = aRowThatAFailedDiscardLeftDeleting();
+        RegistryProbe probe = new RegistryProbe();
+        probe.afterDeletingIsListed = () -> {
+            payloads.delete(discarding);
+            registry.release(discarding, ReleaseReason.REFUSED);
+        };
+        ArtifactReaper racing = new ArtifactReaper(probe.registry, payloads, gate, clock, quarantine);
+        List<ILoggingEvent> logged = captureReaperLog();
+
+        ReapReport report = racing.reap();
+
+        assertThat(report).isEqualTo(new ReapReport.Reaped(1, 0));
+        assertThat(probe.calls).as("the removal began with the method that answers an unknown id").contains("beginDeleteIfPresent").doesNotContain("beginDelete");
+        assertThat(logged).as("nothing is logged as a warning and no throwable is involved").noneMatch(event -> event.getLevel().isGreaterOrEqual(Level.WARN))
+            .noneMatch(event -> event.getThrowableProxy() != null);
+        assertThat(probe.reasons).as("the reap released nothing itself").isEmpty();
+        assertThat(registry.holding()).isEmpty();
+        assertThat(registry.budget().chargedBytes()).isZero();
+    }
+
+    @Test
+    @DisplayName("S-D0012-10 (D-0012): every refusal of beginDeleteIfPresent is a failure with its cause in the warning, ARTIFACT_NOT_FOUND included: only the answer 'absent' means the row is gone")
+    void everyRefusalOfTheRemovalIsAFailureWithItsCause() {
+        ArtifactId discarding = aRowThatAFailedDiscardLeftDeleting();
+        for (ArtifactErrorCode code : List.of(ArtifactErrorCode.ARTIFACT_NOT_FOUND, ArtifactErrorCode.ARTIFACT_CHANGED)) {
+            RegistryProbe probe = new RegistryProbe();
+            probe.beginDeleteRefusal = new RequestRefusedException(code);
+            ArtifactReaper reaperOfRefusals = new ArtifactReaper(probe.registry, payloads, gate, clock, quarantine);
+            List<ILoggingEvent> logged = captureReaperLog();
+
+            ReapReport report = reaperOfRefusals.reap();
+
+            assertThat(report).as(code.name()).isEqualTo(new ReapReport.Reaped(0, 1));
+            assertThat(logged).as("the failure is warned about, with its cause: " + code.name()).anySatisfy(event -> {
+                assertThat(event.getLevel()).isEqualTo(Level.WARN);
+                assertThat(event.getThrowableProxy()).isNotNull();
+            });
+            assertThat(registry.find(discarding)).as("the row stays for the next run").isPresent();
+        }
     }
 
     @Test
@@ -316,7 +360,7 @@ class ArtifactBudgetRecoveryTest {
 
     /**
      * The real registry (the rows and the budget are real) behind a {@link Proxy} that adds what a test needs and a real run cannot give on cue: a step that runs right after
-     * the list of {@code DELETING} rows was taken (the other thread finishing its discard at exactly that point, no sleep), a refusal of {@code beginDelete}, and the reason of
+     * the list of {@code DELETING} rows was taken (the other thread finishing its discard at exactly that point, no sleep), a refusal of {@code beginDeleteIfPresent}, the names of the methods called, and the reason of
      * every release (the registry only logs it).
      */
     private final class RegistryProbe {
@@ -324,9 +368,11 @@ class ArtifactBudgetRecoveryTest {
         Runnable afterDeletingIsListed = () -> { };
         RuntimeException beginDeleteRefusal;
         final Map<ArtifactId, ReleaseReason> reasons = new LinkedHashMap<>();
+        final List<String> calls = new ArrayList<>();
         final ArtifactRegistry registry = (ArtifactRegistry) Proxy.newProxyInstance(ArtifactRegistry.class.getClassLoader(), new Class<?>[] {ArtifactRegistry.class},
             (proxy, method, args) -> {
-                if (method.getName().equals("beginDelete") && beginDeleteRefusal != null) {
+                calls.add(method.getName());
+                if (method.getName().equals("beginDeleteIfPresent") && beginDeleteRefusal != null) {
                     throw beginDeleteRefusal;
                 }
                 if (method.getName().equals("release")) {

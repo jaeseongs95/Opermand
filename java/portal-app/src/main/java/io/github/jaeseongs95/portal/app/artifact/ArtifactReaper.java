@@ -12,8 +12,6 @@ import org.springframework.stereotype.Component;
 import io.github.jaeseongs95.portal.app.storage.ReapGate;
 import io.github.jaeseongs95.portal.app.storage.ReapPermission;
 import io.github.jaeseongs95.portal.app.storage.ReapReport;
-import io.github.jaeseongs95.portal.domain.error.ArtifactErrorCode;
-import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 
 /**
  * Removes the artifacts whose time has come: the bytes, the row and the charge of each (2.x {@code reap}). It asks the {@link ReapGate} before every run, so a
@@ -79,19 +77,15 @@ public class ArtifactReaper {
      * Removes one listed artifact. A row that is {@code DELETING} did not expire: a removal began and did not finish, so it is released as {@link ReleaseReason#ABANDONED}
      * (the reason the start-up check gives it); only a row that was listed because its expiry passed is released as {@link ReleaseReason#EXPIRED}.
      *
-     * <p>The row may be gone between the list and {@code beginDelete}: the discard that left it {@code DELETING} can still be running and finish first. That is the outcome
-     * the run wanted, so it is no failure and no retry (Principles 4.4: the one who lost the race is not run again); only {@code ARTIFACT_NOT_FOUND} of {@code beginDelete}
-     * means this, every other refusal is rethrown and counted as a failure.
+     * <p>The row may be gone between the list and the start of the removal: the discard that left it {@code DELETING} can still be running and finish first. That is the
+     * outcome the run wanted, so it is no failure and no retry (Principles 4.4: the one who lost the race is not run again). The registry tells it by the answer of
+     * {@link ArtifactRegistry#beginDeleteIfPresent}, not by an exception, so every refusal that is thrown, {@code ARTIFACT_NOT_FOUND} included, is counted as a failure with
+     * its cause.
      */
     private void remove(ArtifactRecord due) {
         ReleaseReason reason = due.state() == ArtifactState.DELETING ? ReleaseReason.ABANDONED : ReleaseReason.EXPIRED;
         if (due.state() != ArtifactState.CONSUMED) {
-            try {
-                registry.beginDelete(due.id());
-            } catch (RequestRefusedException e) {
-                if (e.code() != ArtifactErrorCode.ARTIFACT_NOT_FOUND) {
-                    throw e;
-                }
+            if (!registry.beginDeleteIfPresent(due.id())) {
                 LOG.debug("The artifact {} was removed by another use case before the reap took it", due.id().value());
                 return;
             }
