@@ -6,6 +6,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import io.github.jaeseongs95.portal.app.remote.CancelSource;
 import io.github.jaeseongs95.portal.app.remote.FileAccess;
 import io.github.jaeseongs95.portal.app.remote.FileDiagnostic;
+import io.github.jaeseongs95.portal.app.remote.PathPolicyDecision;
 import io.github.jaeseongs95.portal.app.remote.PayloadSource;
 import io.github.jaeseongs95.portal.app.remote.ReplaceMethod;
 import io.github.jaeseongs95.portal.app.remote.TransferFailureCause;
@@ -33,6 +34,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.function.UnaryOperator;
 import java.util.stream.Stream;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.client.SftpClientFactory;
@@ -616,6 +618,64 @@ class UploadTest {
         UploadResult result = testBed.transfer().upload(testBed.upload("/out.bin", content, OverwriteMode.FAIL_IF_EXISTS), TransferBed.source(content), testBed.control());
 
         assertThat(result).isEqualTo(new UploadResult.NotDispatched(TransferFailureCause.CONNECT_FAILED));
+    }
+
+    // ---- D-0013 (re-audit C1): a stop that ends the channel before the first look of the path ----
+
+    private TransferBed startWith(UnaryOperator<SftpClient> fault) throws IOException {
+        bed = TransferBed.start(root, true, new SftpDoubles.FaultyChannels(fault), ScriptedExecutor.everythingSucceeds(), (target, path) -> new PathPolicyDecision.NotApplicable());
+        return bed;
+    }
+
+    private List<String> entries() throws IOException {
+        try (Stream<Path> files = Files.list(root)) {
+            return files.map(file -> file.getFileName().toString()).toList();
+        }
+    }
+
+    @Test
+    @DisplayName("S-D0013-10 D-0013 a cancel that comes while the path is first looked at and ends the channel stays NotDispatched(CANCELLED), not TRANSPORT_LOST: the live session is kept")
+    void cancelDuringTheFirstLookKeepsItsCause() throws IOException {
+        CancelSource cancel = new CancelSource();
+        TransferBed testBed = startWith(client -> new SftpDoubles().channelEndingAtTheFirstLook(client, cancel::cancel));
+        byte[] content = pattern(1024);
+
+        UploadResult result = testBed.transfer().upload(testBed.upload("/out.bin", content, OverwriteMode.FAIL_IF_EXISTS), TransferBed.source(content), testBed.control(cancel));
+
+        assertThat(result).as("the channel ended because of the cancel: %s", result).isEqualTo(new UploadResult.NotDispatched(TransferFailureCause.CANCELLED));
+        assertThat(testBed.sessions().discards()).as("the connection is fine; only the transfer was stopped: the session is kept").isZero();
+        assertThat(entries()).as("nothing was written").isEmpty();
+    }
+
+    @Test
+    @DisplayName("S-D0013-11 D-0013 a cancel that comes while the channel is opened makes the watch close the new client at once: NotDispatched(CANCELLED), the session is kept")
+    void cancelWhileTheChannelIsOpenedKeepsItsCause() throws IOException {
+        CancelSource cancel = new CancelSource();
+        TransferBed testBed = startWith(client -> {
+            cancel.cancel();
+            return client;
+        });
+        byte[] content = pattern(1024);
+
+        UploadResult result = testBed.transfer().upload(testBed.upload("/out.bin", content, OverwriteMode.FAIL_IF_EXISTS), TransferBed.source(content), testBed.control(cancel));
+
+        assertThat(result).as("the client was closed because of the cancel: %s", result).isEqualTo(new UploadResult.NotDispatched(TransferFailureCause.CANCELLED));
+        assertThat(testBed.sessions().discards()).isZero();
+        assertThat(entries()).as("nothing was written").isEmpty();
+    }
+
+    @Test
+    @DisplayName("S-D0013-12 D-0013 a channel that ends at the first look with nobody having stopped the upload is still NotDispatched(TRANSPORT_LOST) and the session is discarded")
+    void lossAtTheFirstLookWithoutACauseIsTransportLost() throws IOException {
+        TransferBed testBed = startWith(client -> new SftpDoubles().channelEndingAtTheFirstLook(client, () -> { }));
+        byte[] content = pattern(1024);
+
+        UploadResult result = testBed.transfer().upload(testBed.upload("/out.bin", content, OverwriteMode.FAIL_IF_EXISTS), TransferBed.source(content), testBed.control());
+
+        assertThat(result).isEqualTo(new UploadResult.NotDispatched(TransferFailureCause.TRANSPORT_LOST));
+        assertThat(testBed.sessions().discards()).isEqualTo(1);
+        assertThat(testBed.sessions().leases()).as("no automatic second upload").isEqualTo(1);
+        assertThat(entries()).isEmpty();
     }
 
     // ---- the doubles of this file ----

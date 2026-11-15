@@ -2,6 +2,7 @@ package io.github.jaeseongs95.portal.ssh.sftp;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.jaeseongs95.portal.app.remote.CancelSource;
 import io.github.jaeseongs95.portal.app.remote.DownloadRequest;
 import io.github.jaeseongs95.portal.app.remote.DownloadResult;
 import io.github.jaeseongs95.portal.app.remote.FileAccess;
@@ -13,6 +14,7 @@ import io.github.jaeseongs95.portal.app.remote.PathPolicyDecision;
 import io.github.jaeseongs95.portal.app.remote.PermissionRequest;
 import io.github.jaeseongs95.portal.app.remote.PermissionResult;
 import io.github.jaeseongs95.portal.app.remote.PermissionSupport;
+import io.github.jaeseongs95.portal.app.remote.TransferFailureCause;
 import io.github.jaeseongs95.portal.app.remote.TransferLimits;
 import io.github.jaeseongs95.portal.app.remote.UnsupportedReason;
 import io.github.jaeseongs95.portal.app.remote.UploadRequest;
@@ -30,7 +32,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.nio.file.attribute.PosixFilePermission;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.UnaryOperator;
+import org.apache.sshd.sftp.client.SftpClient;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -215,6 +221,45 @@ class PolicyAndPermissionTest {
             // NTFS on the developer's PC has no POSIX modes; the adapter does not claim a change it could not read back.
             assertThat(result).isEqualTo(new PermissionResult.Refused(TransferErrorCode.INVALID_REQUEST, new FileDiagnostic.None()));
         }
+    }
+
+    private TransferBed startWithFault(UnaryOperator<SftpClient> fault) throws IOException {
+        bed = TransferBed.start(root, true, new SftpDoubles.FaultyChannels(fault), ScriptedExecutor.everythingSucceeds(), (target, path) -> new PathPolicyDecision.NotApplicable());
+        return bed;
+    }
+
+    @Test
+    @DisplayName("S-D0013-07 D-0013 a cancel that comes while the path is first looked at and ends the channel is NotDispatched(CANCELLED), not TRANSPORT_LOST: the live session is kept")
+    void cancelDuringTheFirstLookKeepsItsCause() throws IOException {
+        CancelSource cancel = new CancelSource();
+        TransferBed testBed = startWithFault(client -> new SftpDoubles().channelEndingAtTheFirstLook(client, cancel::cancel));
+        Path file = root.resolve("a.bin");
+        Files.write(file, CONTENT);
+        Set<PosixFilePermission> before = posixPermissionsOrNull(file);
+
+        PermissionResult result = testBed.transfer().applyPermissions(permission("/a.bin", 0640, new PermissionSupport.Supported()), testBed.control(cancel));
+
+        assertThat(result).as("the channel ended because of the cancel: %s", result).isEqualTo(new PermissionResult.NotDispatched(TransferFailureCause.CANCELLED));
+        assertThat(testBed.sessions().discards()).as("the connection is fine; only the request was stopped: the session is kept").isZero();
+        assertThat(posixPermissionsOrNull(file)).as("nothing was sent: the bits are as they were").isEqualTo(before);
+    }
+
+    @Test
+    @DisplayName("S-D0013-09 D-0013 a channel that ends at the first look with nobody having stopped the request is still NotDispatched(TRANSPORT_LOST) and the session is discarded")
+    void lossAtTheFirstLookWithoutACauseIsTransportLost() throws IOException {
+        TransferBed testBed = startWithFault(client -> new SftpDoubles().channelEndingAtTheFirstLook(client, () -> { }));
+        Files.write(root.resolve("a.bin"), CONTENT);
+
+        PermissionResult result = testBed.transfer().applyPermissions(permission("/a.bin", 0640, new PermissionSupport.Supported()), testBed.control());
+
+        assertThat(result).isEqualTo(new PermissionResult.NotDispatched(TransferFailureCause.TRANSPORT_LOST));
+        assertThat(testBed.sessions().discards()).isEqualTo(1);
+        assertThat(testBed.sessions().leases()).as("no automatic second try").isEqualTo(1);
+    }
+
+    /** The POSIX permissions of the file, or {@code null} on a file system that has none (the test then compares {@code null} with {@code null}). */
+    private static Set<PosixFilePermission> posixPermissionsOrNull(Path file) throws IOException {
+        return Files.getFileStore(file).supportsFileAttributeView(PosixFileAttributeView.class) ? Files.getPosixFilePermissions(file) : null;
     }
 
     @Test

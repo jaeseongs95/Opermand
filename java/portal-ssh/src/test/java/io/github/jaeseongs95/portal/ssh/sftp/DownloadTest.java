@@ -6,6 +6,7 @@ import io.github.jaeseongs95.portal.app.remote.CancelSource;
 import io.github.jaeseongs95.portal.app.remote.DownloadRequest;
 import io.github.jaeseongs95.portal.app.remote.DownloadResult;
 import io.github.jaeseongs95.portal.app.remote.FileDiagnostic;
+import io.github.jaeseongs95.portal.app.remote.PathPolicyDecision;
 import io.github.jaeseongs95.portal.app.remote.PayloadSink;
 import io.github.jaeseongs95.portal.app.remote.SinkResult;
 import io.github.jaeseongs95.portal.app.remote.TransferFailureCause;
@@ -19,6 +20,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.util.function.UnaryOperator;
+import org.apache.sshd.sftp.client.SftpClient;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -194,6 +197,104 @@ class DownloadTest {
         testBed.server().injectSftpFault(SftpFault.of(SftpFault.Operation.OPEN_FOR_READ, "cut.bin", SftpFault.Failure.CONNECTION_DROPPED).afterBytes(100_000));
 
         DownloadResult result = testBed.transfer().download(testBed.download("/cut.bin"), new TransferBed.Collecting(), testBed.control());
+
+        assertThat(result).isEqualTo(new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST));
+        assertThat(testBed.sessions().discards()).isEqualTo(1);
+        assertThat(testBed.sessions().leases()).as("no automatic second read").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("S-D0013-01 D-0013 a file read to its last byte, with its size and SHA-256 right, is Fetched when closing the read stream then fails: a close error does not turn a verified read into TRANSPORT_LOST")
+    void closeFailureAfterACompleteReadKeepsTheFetchedResult() throws IOException {
+        TransferBed testBed = startWith(client -> new SftpDoubles().failingToCloseWhenReading(client, ".bin"));
+        byte[] content = pattern(850);
+        Files.write(root.resolve("small.bin"), content);
+        TransferBed.Collecting sink = new TransferBed.Collecting();
+
+        DownloadResult result = testBed.transfer().download(testBed.download("/small.bin"), sink, testBed.control());
+
+        assertThat(result).as("the 850 bytes arrived and match; only closing the stream failed: %s", result).isInstanceOf(DownloadResult.Fetched.class);
+        DownloadResult.Fetched fetched = (DownloadResult.Fetched) result;
+        assertThat(fetched.size()).isEqualTo(850);
+        assertThat(fetched.sha256()).isEqualTo(testBed.sha256(content));
+        assertThat(sink.bytes()).isEqualTo(content);
+        assertThat(testBed.sessions().discards()).as("the connection is fine: the session is kept").isZero();
+        assertThat(entriesInRoot()).as("a download creates nothing on the target").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("S-D0013-03 D-0013 a close failure that comes with the end of the channel after the last byte is still Failed(TRANSPORT_LOST): the session is discarded and the read is not tried again")
+    void closeFailureWithAChannelThatEndedIsTransportLost() throws IOException {
+        TransferBed testBed = startWith(client -> new SftpDoubles().channelEndingAfterTheRead(client, ".bin", true, () -> { }));
+        Files.write(root.resolve("small.bin"), pattern(850));
+
+        DownloadResult result = testBed.transfer().download(testBed.download("/small.bin"), new TransferBed.Collecting(), testBed.control());
+
+        assertThat(result).isEqualTo(new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST));
+        assertThat(testBed.sessions().discards()).isEqualTo(1);
+        assertThat(testBed.sessions().leases()).as("no automatic second read").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("S-D0013-04 D-0013 a stop, a file that changed and a sink that failed keep their own result when closing the read stream fails as well")
+    void closeFailureDoesNotReplaceTheResultOfAnEarlyEnd() throws IOException {
+        TransferBed testBed = startWith(client -> new SftpDoubles().failingToCloseWhenReading(client, ".bin"));
+        Path moving = root.resolve("moving.bin");
+        Files.write(moving, pattern(1024 * 1024));
+        Files.write(root.resolve("a.bin"), pattern(1024 * 1024));
+        Files.write(root.resolve("sunk.bin"), pattern(500_000));
+        CancelSource cancel = new CancelSource();
+
+        DownloadResult stopped = testBed.transfer().download(testBed.download("/a.bin"), new TransferBed.Collecting(cancel::cancel), testBed.control(cancel));
+        DownloadResult changed = testBed.transfer().download(testBed.download("/moving.bin"), new TransferBed.Collecting(() -> appendQuietly(moving)), testBed.control());
+        DownloadResult sinkFailed = testBed.transfer().download(testBed.download("/sunk.bin"),
+            data -> new SinkResult.Failed(new IOException("the artifact store is full")), testBed.control());
+
+        assertThat(stopped).as("a cancel in the middle").isEqualTo(new DownloadResult.Failed(TransferFailureCause.CANCELLED));
+        assertThat(changed).as("a file that changed while it was read").isEqualTo(new DownloadResult.Refused(TransferErrorCode.FILE_CHANGED, new FileDiagnostic.None()));
+        assertThat(sinkFailed).as("a sink that failed").isEqualTo(new DownloadResult.Failed(TransferFailureCause.LOCAL_IO_FAILED));
+        assertThat(testBed.sessions().discards()).as("none of the three lost the connection").isZero();
+    }
+
+    @Test
+    @DisplayName("S-D0013-05 D-0013 a cancel that comes after the last byte and ends the channel before the look at the file stays Failed(CANCELLED), not TRANSPORT_LOST")
+    void cancelAfterTheLastByteKeepsItsCause() throws IOException {
+        CancelSource cancel = new CancelSource();
+        TransferBed testBed = startWith(client -> new SftpDoubles().channelEndingAfterTheRead(client, ".bin", false, cancel::cancel));
+        Files.write(root.resolve("small.bin"), pattern(850));
+
+        DownloadResult result = testBed.transfer().download(testBed.download("/small.bin"), new TransferBed.Collecting(), testBed.control(cancel));
+
+        assertThat(result).as("the channel ended because of the cancel: %s", result).isEqualTo(new DownloadResult.Failed(TransferFailureCause.CANCELLED));
+    }
+
+    private TransferBed startWith(UnaryOperator<SftpClient> fault) throws IOException {
+        bed = TransferBed.start(root, true, new SftpDoubles.FaultyChannels(fault), ScriptedExecutor.everythingSucceeds(), (target, path) -> new PathPolicyDecision.NotApplicable());
+        return bed;
+    }
+
+    @Test
+    @DisplayName("S-D0013-06 D-0013 a cancel that comes while the path is first looked at and ends the channel stays Failed(CANCELLED), not TRANSPORT_LOST: the live session is kept")
+    void cancelDuringTheFirstLookKeepsItsCause() throws IOException {
+        CancelSource cancel = new CancelSource();
+        TransferBed testBed = startWith(client -> new SftpDoubles().channelEndingAtTheFirstLook(client, cancel::cancel));
+        Files.write(root.resolve("small.bin"), pattern(850));
+        TransferBed.Collecting sink = new TransferBed.Collecting();
+
+        DownloadResult result = testBed.transfer().download(testBed.download("/small.bin"), sink, testBed.control(cancel));
+
+        assertThat(result).as("the channel ended because of the cancel: %s", result).isEqualTo(new DownloadResult.Failed(TransferFailureCause.CANCELLED));
+        assertThat(testBed.sessions().discards()).as("the connection is fine; only the transfer was stopped: the session is kept").isZero();
+        assertThat(sink.bytes()).as("not a byte was read").isEmpty();
+    }
+
+    @Test
+    @DisplayName("S-D0013-08 D-0013 a channel that ends at the first look with nobody having stopped the transfer is still Failed(TRANSPORT_LOST) and the session is discarded")
+    void lossAtTheFirstLookWithoutACauseIsTransportLost() throws IOException {
+        TransferBed testBed = startWith(client -> new SftpDoubles().channelEndingAtTheFirstLook(client, () -> { }));
+        Files.write(root.resolve("small.bin"), pattern(850));
+
+        DownloadResult result = testBed.transfer().download(testBed.download("/small.bin"), new TransferBed.Collecting(), testBed.control());
 
         assertThat(result).isEqualTo(new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST));
         assertThat(testBed.sessions().discards()).isEqualTo(1);

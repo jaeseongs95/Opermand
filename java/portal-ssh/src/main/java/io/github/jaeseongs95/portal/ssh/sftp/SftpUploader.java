@@ -12,7 +12,6 @@ import io.github.jaeseongs95.portal.domain.id.Digest;
 import io.github.jaeseongs95.portal.domain.operation.CleanupState;
 import io.github.jaeseongs95.portal.domain.operation.OverwriteMode;
 import io.github.jaeseongs95.portal.domain.path.WindowsRemotePath;
-import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -106,6 +105,12 @@ public class SftpUploader {
         PathInspection original = checker.inspect(client, location);
         return switch (original) {
             case PathInspection.Lost lost -> {
+                // Nothing was written yet. A time limit or a cancel that fires while the channel is opened or the path is first looked at closes the channel, and the look
+                // then fails as a lost connection: the cause stays what stopped the upload and the live session is kept. Only a loss that nobody caused is a lost connection
+                // (cases S-D0013-10 and S-D0013-11).
+                if (watch.fired().isPresent()) {
+                    yield new UploadResult.NotDispatched(watch.fired().orElseThrow());
+                }
                 lease.discard();
                 yield new UploadResult.NotDispatched(TransferFailureCause.TRANSPORT_LOST);
             }
@@ -247,7 +252,7 @@ public class SftpUploader {
         } catch (IOException e) {
             return new Copy.RemoteFailure(e);
         } finally {
-            closeQuietly(out);
+            ChannelClosing.quietly(out);
         }
     }
 
@@ -331,18 +336,7 @@ public class SftpUploader {
         try {
             return replacer.remove(fresh, tempPath);
         } finally {
-            closeQuietly(fresh);
-        }
-    }
-
-    private static void closeQuietly(Closeable closeable) {
-        if (closeable == null) {
-            return;
-        }
-        try {
-            closeable.close();
-        } catch (IOException e) {
-            LOG.debug("A channel was already closed", e);
+            ChannelClosing.quietly(fresh);
         }
     }
 }

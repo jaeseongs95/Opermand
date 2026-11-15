@@ -6,17 +6,23 @@ import java.io.InputStream;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
+import java.nio.channels.ClosedChannelException;
 import java.nio.charset.StandardCharsets;
 import java.util.NavigableMap;
 import java.util.TreeMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.UnaryOperator;
+import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.client.extensions.openssh.OpenSSHFsyncExtension;
+import org.apache.sshd.sftp.common.SftpException;
 import org.apache.sshd.sftp.common.extensions.openssh.FsyncExtensionParser;
 
 /**
  * Faults the embedded server cannot make, put in front of a real MINA SFTP client with a plain JDK proxy (no mocking library): a server that changes a byte of the file
- * it was given, and a flush ({@code fsync@openssh.com}) that is offered and refused, or not offered at all. Every other call goes to the real client unchanged.
+ * it was given, a flush ({@code fsync@openssh.com}) that is offered and refused, or not offered at all, a read stream whose {@code close()} fails while the channel is alive,
+ * and a channel that ends right after the last byte (with or without a failing {@code close()}). Every other call goes to the real client unchanged.
  */
 final class SftpDoubles {
 
@@ -47,6 +53,95 @@ final class SftpDoubles {
             }
             return passThrough(real, method, arguments);
         });
+    }
+
+    /**
+     * A client that hands out the file's bytes as they are, but whose read stream throws an {@link IOException} from {@code close()} (the real stream is closed first)
+     * while the channel stays alive: a close that fails by itself, after the last block. Only a read of a path that ends with the suffix is changed.
+     */
+    SftpClient failingToCloseWhenReading(SftpClient real, String pathSuffix) {
+        return proxy(real, (method, arguments) -> {
+            if ("read".equals(method.getName()) && arguments != null && arguments.length == 1 && arguments[0] instanceof String path && path.endsWith(pathSuffix)) {
+                return new ClosedStream(real.read(path), true, new AtomicBoolean());
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client whose channel ends after the read: once the read stream of a path with the suffix is closed, every {@code lstat} (the look at the file after the read) runs
+     * {@code atTheLook} and then fails with a {@link ClosedChannelException}, what a client that was closed from outside answers. The bytes of the read are the real ones;
+     * with {@code closeFails} the {@code close()} of the stream fails as well (the real stream is closed first), which is the close failure and the channel end together.
+     */
+    SftpClient channelEndingAfterTheRead(SftpClient real, String pathSuffix, boolean closeFails, Runnable atTheLook) {
+        AtomicBoolean readClosed = new AtomicBoolean();
+        return proxy(real, (method, arguments) -> {
+            if ("read".equals(method.getName()) && arguments != null && arguments.length == 1 && arguments[0] instanceof String path && path.endsWith(pathSuffix)) {
+                return new ClosedStream(real.read(path), closeFails, readClosed);
+            }
+            if ("lstat".equals(method.getName()) && readClosed.get()) {
+                atTheLook.run();
+                throw new ClosedChannelException();
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client whose channel ends at the first look at a path: the first {@code lstat} runs {@code atTheLook} and then fails with a {@link ClosedChannelException}, what a
+     * client that was closed from outside answers (a stop that fires during the look closes the channel the same way). With a no-op {@code atTheLook} the loss has no
+     * cause but the connection. Every later call goes to the real client.
+     */
+    SftpClient channelEndingAtTheFirstLook(SftpClient real, Runnable atTheLook) {
+        AtomicBoolean ended = new AtomicBoolean();
+        return proxy(real, (method, arguments) -> {
+            if ("lstat".equals(method.getName()) && ended.compareAndSet(false, true)) {
+                atTheLook.run();
+                throw new ClosedChannelException();
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client whose {@code close()} fails with an {@link IOException} after the real client was closed: a close that fails by itself while the work with the client is
+     * done (the channel that only looked for the server program of an elevated transfer). Every other call goes to the real client.
+     */
+    SftpClient failingToClose(SftpClient real) {
+        return proxy(real, (method, arguments) -> {
+            if ("close".equals(method.getName()) && (arguments == null || arguments.length == 0)) {
+                real.close();
+                throw new IOException("injected: closing the channel failed");
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client whose {@code stat} of a path that ends with the suffix is answered with the SFTP status: a server that refuses to say whether a file is there. Every other
+     * call goes to the real client.
+     */
+    SftpClient refusingToStat(SftpClient real, String pathSuffix, int status) {
+        return proxy(real, (method, arguments) -> {
+            if ("stat".equals(method.getName()) && arguments != null && arguments.length == 1 && arguments[0] instanceof String path && path.endsWith(pathSuffix)) {
+                throw new SftpException(status, "injected: the status of " + path + " is refused");
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /** Opens the real client of a session and puts a fault in front of it. */
+    static final class FaultyChannels extends SftpChannels {
+        private final UnaryOperator<SftpClient> fault;
+
+        FaultyChannels(UnaryOperator<SftpClient> fault) {
+            this.fault = fault;
+        }
+
+        @Override
+        public SftpClient open(ClientSession session) throws IOException {
+            return fault.apply(super.open(session));
+        }
     }
 
     /** A client whose server offers {@code fsync@openssh.com} (or does not, as chosen) and whose flush always fails; the counter says how often it was tried. */
@@ -93,6 +188,30 @@ final class SftpDoubles {
             return method.invoke(real, arguments);
         } catch (InvocationTargetException e) {
             throw e.getCause();
+        }
+    }
+
+    /**
+     * Every byte is given as it is. Closing the stream closes the real one, tells the flag that it was closed, and then fails when it is asked to. The failure is the
+     * stream's own: it says nothing about the channel, which stays alive unless another part of the double ends it.
+     */
+    private static final class ClosedStream extends FilterInputStream {
+        private final boolean failOnClose;
+        private final AtomicBoolean closed;
+
+        ClosedStream(InputStream in, boolean failOnClose, AtomicBoolean closed) {
+            super(in);
+            this.failOnClose = failOnClose;
+            this.closed = closed;
+        }
+
+        @Override
+        public void close() throws IOException {
+            super.close();
+            closed.set(true);
+            if (failOnClose) {
+                throw new IOException("injected: closing the read stream failed");
+            }
         }
     }
 

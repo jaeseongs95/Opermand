@@ -2,6 +2,7 @@ package io.github.jaeseongs95.portal.ssh.sftp;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.jaeseongs95.portal.app.remote.CancelSource;
 import io.github.jaeseongs95.portal.app.remote.DownloadRequest;
 import io.github.jaeseongs95.portal.app.remote.DownloadResult;
 import io.github.jaeseongs95.portal.app.remote.ElevationPlan;
@@ -31,6 +32,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.time.Duration;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Consumer;
+import org.apache.sshd.server.SshServer;
+import org.apache.sshd.sftp.common.SftpConstants;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -183,6 +192,167 @@ class ElevatedTransferTest {
 
         assertThat(result).isEqualTo(new UploadResult.Refused(TransferErrorCode.INVALID_REQUEST, new FileDiagnostic.None(), CleanupState.COMPLETE));
         assertThat(root.resolve("x.bin")).doesNotExist();
+    }
+
+    // ---- D-0013 (re-audit C2, R3): what the opening of the elevated channel came to ----
+
+    private TransferBed start(TransferBed.Sudo sudo, SftpChannels channels, Consumer<SshServer> serverFault) throws IOException {
+        bed = TransferBed.start(root, sudo, channels, ScriptedExecutor.everythingSucceeds(), serverFault);
+        return bed;
+    }
+
+    @Test
+    @DisplayName("S-D0013-13 D-0013 a server that refuses to open the SFTP channel while the session lives is CHANNEL_OPEN_FAILED, as on the plain path: the session is kept")
+    void serverRefusesTheLookingChannel() throws IOException {
+        TransferBed testBed = start(TransferBed.Sudo.WORKS, new SftpChannels(), TransferBed.refusingSessionChannels(opening -> true));
+
+        DownloadResult download = testBed.transfer().download(elevatedDownload("/x.bin"), new TransferBed.Collecting(), testBed.control());
+        UploadResult upload = testBed.transfer().upload(elevatedUpload("/x.bin", OverwriteMode.REPLACE, SUDO), TransferBed.source(CONTENT), testBed.control());
+
+        assertThat(download).isEqualTo(new DownloadResult.Failed(TransferFailureCause.CHANNEL_OPEN_FAILED));
+        assertThat(upload).isEqualTo(new UploadResult.NotDispatched(TransferFailureCause.CHANNEL_OPEN_FAILED));
+        assertThat(testBed.sessions().discards()).as("the connection is fine; the server only refused a channel").isZero();
+        assertThat(root.resolve("x.bin")).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("S-D0013-14 D-0013 a server that refuses to open the channel of sudo -n while the session lives is CHANNEL_OPEN_FAILED, not PERMISSION_DENIED: the session is kept")
+    void serverRefusesTheSudoChannel() throws IOException {
+        TransferBed testBed = start(TransferBed.Sudo.WORKS, new SftpChannels(), TransferBed.refusingSessionChannels(opening -> opening == 2));
+
+        DownloadResult download = testBed.transfer().download(elevatedDownload("/x.bin"), new TransferBed.Collecting(), testBed.control());
+
+        assertThat(download).isEqualTo(new DownloadResult.Failed(TransferFailureCause.CHANNEL_OPEN_FAILED));
+        assertThat(testBed.sessions().discards()).isZero();
+    }
+
+    @Test
+    @DisplayName("S-D0013-15 D-0013 a close of the channel that looked for the server program fails: the elevated download is still Fetched")
+    void closeFailureOfTheLookDoesNotCoverTheResult() throws IOException {
+        TransferBed testBed = start(TransferBed.Sudo.WORKS, new SftpDoubles.FaultyChannels(client -> new SftpDoubles().failingToClose(client)), sshd -> { });
+        Files.write(root.resolve("secret.txt"), CONTENT);
+        TransferBed.Collecting sink = new TransferBed.Collecting();
+
+        DownloadResult result = testBed.transfer().download(elevatedDownload("/secret.txt"), sink, testBed.control());
+
+        assertThat(result).isEqualTo(new DownloadResult.Fetched(CONTENT.length, testBed.sha256(CONTENT)));
+        assertThat(sink.bytes()).isEqualTo(CONTENT);
+        assertThat(testBed.sessions().discards()).isZero();
+    }
+
+    @Test
+    @DisplayName("S-D0013-16 D-0013 a refusal of the permission to look for the server program is PERMISSION_DENIED, not a missing program: the session is kept")
+    void refusedLookIsNotAMissingProgram() throws IOException {
+        TransferBed testBed = start(TransferBed.Sudo.WORKS,
+            new SftpDoubles.FaultyChannels(client -> new SftpDoubles().refusingToStat(client, "sftp-server", SftpConstants.SSH_FX_PERMISSION_DENIED)), sshd -> { });
+
+        DownloadResult result = testBed.transfer().download(elevatedDownload("/x.bin"), new TransferBed.Collecting(), testBed.control());
+
+        assertThat(result).isEqualTo(new DownloadResult.Refused(TransferErrorCode.PERMISSION_DENIED, new FileDiagnostic.None()));
+        assertThat(testBed.sessions().discards()).isZero();
+    }
+
+    @Test
+    @DisplayName("S-D0013-17 D-0013 a usual place that holds no program (status no such file) does not end the search: the next place serves the elevated download")
+    void missingFirstPlaceGoesOn() throws IOException {
+        TransferBed testBed = start(TransferBed.Sudo.WORKS, ScriptedExecutor.everythingSucceeds());
+        Files.write(root.resolve("secret.txt"), CONTENT);
+        TransferBed.Collecting sink = new TransferBed.Collecting();
+
+        DownloadResult result = testBed.transfer().download(elevatedDownload("/secret.txt"), sink, testBed.control());
+
+        assertThat(root.resolve("usr/libexec")).as("the first place of the search is empty").doesNotExist();
+        assertThat(result).isEqualTo(new DownloadResult.Fetched(CONTENT.length, testBed.sha256(CONTENT)));
+        assertThat(sink.bytes()).isEqualTo(CONTENT);
+    }
+
+    // ---- D-0013 (re-audit condition 1): the SFTP initialization of the program that sudo -n started ----
+
+    /** How long the client waits for the version answer of a program that never gives it: short, so the tests that wait for it are short. */
+    private static final Duration SHORT_WAIT = Duration.ofMillis(300);
+    /** The wait of the tests that stop the transfer while it waits: much longer than the stop, which comes from an event (the server started the command). */
+    private static final Duration LONG_WAIT = Duration.ofSeconds(1);
+
+    @Test
+    @DisplayName("S-D0013-18 D-0013 a program that sudo -n started and that never answers the SFTP version request ends the wait: CHANNEL_OPEN_FAILED, not PERMISSION_DENIED; the session is kept")
+    void initializationThatTimesOutIsNotARefusal() throws IOException {
+        TransferBed testBed = start(TransferBed.Sudo.HANGS, ScriptedExecutor.everythingSucceeds());
+        testBed.sessions().sftpInitializationWait(SHORT_WAIT);
+
+        DownloadResult download = testBed.transfer().download(elevatedDownload("/x.bin"), new TransferBed.Collecting(), testBed.control());
+        UploadResult upload = testBed.transfer().upload(elevatedUpload("/x.bin", OverwriteMode.REPLACE, SUDO), TransferBed.source(CONTENT), testBed.control());
+
+        assertThat(download).isEqualTo(new DownloadResult.Failed(TransferFailureCause.CHANNEL_OPEN_FAILED));
+        assertThat(upload).isEqualTo(new UploadResult.NotDispatched(TransferFailureCause.CHANNEL_OPEN_FAILED));
+        assertThat(testBed.sessions().discards()).as("the connection is fine; the program did not answer").isZero();
+        assertThat(root.resolve("x.bin")).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("S-D0013-19 D-0013 the time limit that is reached while the version answer is awaited stays DEADLINE, not PERMISSION_DENIED")
+    void deadlineDuringTheInitializationKeepsItsCause() throws IOException {
+        TransferBed testBed = start(TransferBed.Sudo.HANGS, ScriptedExecutor.everythingSucceeds());
+        testBed.sessions().sftpInitializationWait(LONG_WAIT);
+        // The time limit is the default (it does not run by itself); it runs when the server has started the command, which happens after the channel was opened and so
+        // always while the version answer is awaited, however long the steps before it took.
+        testBed.server().startedCommands().whenAtLeast(1).thenRun(testBed::expireDeadline);
+
+        DownloadResult download = testBed.transfer().download(elevatedDownload("/x.bin"), new TransferBed.Collecting(), testBed.control());
+
+        assertThat(download).isEqualTo(new DownloadResult.Failed(TransferFailureCause.DEADLINE));
+        assertThat(testBed.sessions().discards()).isZero();
+    }
+
+    @Test
+    @DisplayName("S-D0013-20 D-0013 a cancel that comes while the version answer is awaited stays CANCELLED, not PERMISSION_DENIED")
+    void cancelDuringTheInitializationKeepsItsCause() throws IOException {
+        TransferBed testBed = start(TransferBed.Sudo.HANGS, ScriptedExecutor.everythingSucceeds());
+        testBed.sessions().sftpInitializationWait(LONG_WAIT);
+        CancelSource cancel = new CancelSource();
+        testBed.server().startedCommands().whenAtLeast(1).thenRun(cancel::cancel);
+
+        DownloadResult download = testBed.transfer().download(elevatedDownload("/x.bin"), new TransferBed.Collecting(), testBed.control(cancel));
+
+        assertThat(download).isEqualTo(new DownloadResult.Failed(TransferFailureCause.CANCELLED));
+        assertThat(testBed.sessions().discards()).isZero();
+    }
+
+    /** What a transfer on another thread came to, and whether that thread was left interrupted. */
+    private record Interrupted(DownloadResult result, boolean interruptedAfterwards) {
+    }
+
+    @Test
+    @DisplayName("S-D0013-21 D-0013 a transfer thread that is interrupted while the version answer is awaited gets CHANNEL_OPEN_FAILED, not PERMISSION_DENIED; its interrupt status is kept")
+    void interruptDuringTheInitializationIsNotARefusal() throws Exception {
+        TransferBed testBed = start(TransferBed.Sudo.HANGS, ScriptedExecutor.everythingSucceeds());
+        testBed.sessions().sftpInitializationWait(LONG_WAIT);
+        AtomicReference<Thread> worker = new AtomicReference<>();
+        testBed.server().startedCommands().whenAtLeast(1).thenRun(() -> worker.get().interrupt());
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        try {
+            Interrupted outcome = executor.submit(() -> {
+                worker.set(Thread.currentThread());
+                DownloadResult result = testBed.transfer().download(elevatedDownload("/x.bin"), new TransferBed.Collecting(), testBed.control());
+                return new Interrupted(result, Thread.currentThread().isInterrupted());
+            }).get(60, TimeUnit.SECONDS);
+
+            assertThat(outcome.result()).isEqualTo(new DownloadResult.Failed(TransferFailureCause.CHANNEL_OPEN_FAILED));
+            assertThat(outcome.interruptedAfterwards()).as("the thread was interrupted: that stays known to its owner").isTrue();
+            assertThat(testBed.sessions().discards()).isZero();
+        } finally {
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("S-D0013-22 D-0013 a program whose channel closes before the version answer (sudo -n that ends at once) is still PERMISSION_DENIED")
+    void closedBeforeTheVersionAnswerIsStillARefusal() throws IOException {
+        TransferBed testBed = start(TransferBed.Sudo.CLOSES, ScriptedExecutor.everythingSucceeds());
+
+        DownloadResult download = testBed.transfer().download(elevatedDownload("/x.bin"), new TransferBed.Collecting(), testBed.control());
+
+        assertThat(download).isEqualTo(new DownloadResult.Refused(TransferErrorCode.PERMISSION_DENIED, new FileDiagnostic.None()));
+        assertThat(testBed.sessions().discards()).isZero();
     }
 
     // ---- S3-EL-03, S3-EL-04: the plan decides ----

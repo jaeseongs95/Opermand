@@ -24,7 +24,6 @@ import io.github.jaeseongs95.portal.app.remote.UploadResult;
 import io.github.jaeseongs95.portal.domain.error.TransferErrorCode;
 import io.github.jaeseongs95.portal.domain.operation.CleanupState;
 import io.github.jaeseongs95.portal.domain.path.RemotePath;
-import java.io.Closeable;
 import java.io.IOException;
 import java.time.Clock;
 import java.util.List;
@@ -259,14 +258,19 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
     private PermissionResult permissionsOver(PermissionRequest request, ExecutionControl control, boolean elevated) {
         return withSftp(request.target(), request.limits(), control, elevated, PermissionResult.NotDispatched::new,
             code -> new PermissionResult.Refused(code, new FileDiagnostic.None()),
-            (client, lease, watch) -> setPermissions(client, lease, request));
+            (client, lease, watch) -> setPermissions(client, lease, watch, request));
     }
 
-    private PermissionResult setPermissions(SftpClient client, SessionLease lease, PermissionRequest request) {
+    private PermissionResult setPermissions(SftpClient client, SessionLease lease, TransferWatch watch, PermissionRequest request) {
         SftpLocation location = new SftpLocation(request.path());
         PathInspection inspection = checker.inspect(client, location);
         switch (inspection) {
             case PathInspection.Lost lost -> {
+                // Nothing was sent yet. A time limit or a cancel that fires during the look closes the channel and the look then fails: the cause stays what stopped the
+                // request and the live session is kept; only a loss that nobody caused is a lost connection (case S-D0013-07).
+                if (watch.fired().isPresent()) {
+                    return new PermissionResult.NotDispatched(watch.fired().orElseThrow());
+                }
                 lease.discard();
                 return new PermissionResult.NotDispatched(TransferFailureCause.TRANSPORT_LOST);
             }
@@ -343,6 +347,10 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
                 case SudoSftpChannels.Opening.Opened opened -> new Attempt.Ready(opened.client());
                 case SudoSftpChannels.Opening.NoServer noServer -> new Attempt.Refused(TransferErrorCode.INVALID_REQUEST);
                 case SudoSftpChannels.Opening.NotStarted notStarted -> new Attempt.Refused(TransferErrorCode.PERMISSION_DENIED);
+                case SudoSftpChannels.Opening.LookRefused denied -> new Attempt.Refused(denied.code());
+                // The session lives and there is no elevated channel without a refusal of the request (the server refused a channel, the program did not answer in time, the
+                // wait was interrupted): the same cause as the plain path gives, the session is kept; a stop that fired meanwhile is the cause (S-D0013-13, 14, 18 to 21).
+                case SudoSftpChannels.Opening.ChannelFailed failed -> new Attempt.Unreachable(watch.fired().orElse(TransferFailureCause.CHANNEL_OPEN_FAILED));
                 case SudoSftpChannels.Opening.Lost lost -> {
                     lease.discard();
                     yield new Attempt.Unreachable(watch.fired().orElse(TransferFailureCause.TRANSPORT_LOST));
@@ -379,21 +387,13 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
                     return notDispatched.apply(unreachable.cause());
                 }
             }
-            watch.interruptWith(() -> closeQuietly(client));
+            watch.interruptWith(() -> ChannelClosing.quietly(client));
             try {
                 return work.run(client, lease, watch);
             } finally {
                 watch.disarm();
-                closeQuietly(client);
+                ChannelClosing.quietly(client);
             }
-        }
-    }
-
-    private static void closeQuietly(Closeable closeable) {
-        try {
-            closeable.close();
-        } catch (IOException e) {
-            LOG.debug("A channel was already closed", e);
         }
     }
 }

@@ -26,7 +26,8 @@ import org.springframework.stereotype.Component;
  * compared the inode and the change time, which SFTP attributes do not carry). A sink that fails ends the read at once.
  *
  * <p>What the failures come to: a status the server answered with (permission denied, no such file) is {@code Refused} with its own code; a lost connection is
- * {@code Failed(TRANSPORT_LOST)}; the time limit and the cancel are {@code Failed(DEADLINE)} and {@code Failed(CANCELLED)}. The adapter never reads the file again.
+ * {@code Failed(TRANSPORT_LOST)}; the time limit and the cancel are {@code Failed(DEADLINE)} and {@code Failed(CANCELLED)}. The adapter never reads the file again. A failure of {@code close()} on the read stream is only logged: it comes after the
+ * last byte and does not change what was read (size and SHA-256) or what the second look at the file found.
  */
 @Component
 public class SftpDownloader {
@@ -60,6 +61,11 @@ public class SftpDownloader {
         PathInspection before = checker.inspect(client, location);
         return switch (before) {
             case PathInspection.Lost lost -> {
+                // A time limit or a cancel that fires during the first look closes the channel, and the look then fails: the cause stays what stopped the transfer and the
+                // live session is kept, as in the look after the read and in failedReading. Only a loss that nobody caused is a lost connection (case S-D0013-06).
+                if (watch.fired().isPresent()) {
+                    yield new DownloadResult.Failed(watch.fired().orElseThrow());
+                }
                 lease.discard();
                 yield new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST);
             }
@@ -84,24 +90,21 @@ public class SftpDownloader {
             return new DownloadResult.Failed(TransferFailureCause.LOCAL_IO_FAILED);
         }
         StreamDigest digest = StreamDigest.sha256();
-        byte[] block = new byte[BLOCK_BYTES];
-        try (InputStream in = client.read(location.file())) {
-            int read;
-            while ((read = in.read(block)) >= 0) {
-                stopped = watch.stopRequested();
-                if (stopped.isPresent()) {
-                    return new DownloadResult.Failed(stopped.orElseThrow());
-                }
-                digest.update(block, 0, read);
-                if (digest.count() > announced.size()) {
-                    return changed(); // the file grew while it was read
-                }
-                if (sink.append(Arrays.copyOf(block, read)) instanceof SinkResult.Failed) {
-                    return new DownloadResult.Failed(TransferFailureCause.LOCAL_IO_FAILED);
-                }
+        DownloadResult ended;
+        try {
+            // The stream is closed by ChannelClosing.quietly and not by try-with-resources: an exception of close() would replace what the read came to, a verified Fetched
+            // included (defect D-0013, case S-D0013-01). What the bytes are is known from the read itself and from the second look at the file below.
+            InputStream in = client.read(location.file());
+            try {
+                ended = pump(in, watch, announced, sink, digest);
+            } finally {
+                ChannelClosing.quietly(in);
             }
         } catch (IOException e) {
             return failedReading(lease, watch, e);
+        }
+        if (ended != null) {
+            return ended;
         }
         if (digest.count() != announced.size()) {
             return changed();
@@ -114,10 +117,40 @@ public class SftpDownloader {
             case PathInspection.Absent absent -> changed();
             case PathInspection.Refused refused -> new DownloadResult.Refused(refused.code(), refused.diagnostic());
             case PathInspection.Lost lost -> {
+                // A time limit or a cancel that came after the last byte closes the channel, and the look at the file then fails: the cause stays what stopped the transfer
+                // (the same order as in failedReading), and only a loss that nobody caused is a lost connection (case S-D0013-05).
+                if (watch.fired().isPresent()) {
+                    yield new DownloadResult.Failed(watch.fired().orElseThrow());
+                }
                 lease.discard();
                 yield new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST);
             }
         };
+    }
+
+    /**
+     * Reads the stream to its end into the sink and the digest.
+     *
+     * @return the result when the read ended before the end of the file (a stop, a changed file, a failing sink), or {@code null} when the whole stream was read
+     * @throws IOException when a read of the stream fails
+     */
+    private DownloadResult pump(InputStream in, TransferWatch watch, LeafState announced, PayloadSink sink, StreamDigest digest) throws IOException {
+        byte[] block = new byte[BLOCK_BYTES];
+        int read;
+        while ((read = in.read(block)) >= 0) {
+            Optional<TransferFailureCause> stopped = watch.stopRequested();
+            if (stopped.isPresent()) {
+                return new DownloadResult.Failed(stopped.orElseThrow());
+            }
+            digest.update(block, 0, read);
+            if (digest.count() > announced.size()) {
+                return changed(); // the file grew while it was read
+            }
+            if (sink.append(Arrays.copyOf(block, read)) instanceof SinkResult.Failed) {
+                return new DownloadResult.Failed(TransferFailureCause.LOCAL_IO_FAILED);
+            }
+        }
+        return null;
     }
 
     private DownloadResult failedReading(SessionLease lease, TransferWatch watch, IOException cause) {
