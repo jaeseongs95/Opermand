@@ -233,8 +233,8 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
             .map(mapper::toRecord).toList();
     }
 
+    /** One read of one query: it joins the caller's transaction when there is one and opens none (Principles 4.4: the store adds no transaction boundary of its own). */
     @Override
-    @Transactional(readOnly = true)
     public List<ArtifactRecord> deleting() {
         return artifacts.findByStateOrderByIdAsc(ArtifactState.DELETING).stream().map(mapper::toRecord).toList();
     }
