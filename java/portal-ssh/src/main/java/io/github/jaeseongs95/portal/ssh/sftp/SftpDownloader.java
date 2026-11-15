@@ -36,14 +36,17 @@ public class SftpDownloader {
 
     private final RemotePathChecker checker;
     private final SftpFailureClassifier classifier;
+    private final SftpChannels channels;
 
     /**
      * @param checker looks at the path before and after the read
      * @param classifier the meaning of an SFTP failure
+     * @param channels closes the stream of the read without changing what the read came to
      */
-    public SftpDownloader(RemotePathChecker checker, SftpFailureClassifier classifier) {
+    public SftpDownloader(RemotePathChecker checker, SftpFailureClassifier classifier, SftpChannels channels) {
         this.checker = Objects.requireNonNull(checker, "checker");
         this.classifier = Objects.requireNonNull(classifier, "classifier");
+        this.channels = Objects.requireNonNull(channels, "channels");
     }
 
     /**
@@ -92,13 +95,13 @@ public class SftpDownloader {
         StreamDigest digest = StreamDigest.sha256();
         DownloadResult ended;
         try {
-            // The stream is closed by ChannelClosing.quietly and not by try-with-resources: an exception of close() would replace what the read came to, a verified Fetched
+            // The stream is closed by SftpChannels.closeQuietly and not by try-with-resources: an exception of close() would replace what the read came to, a verified Fetched
             // included (defect D-0013, case S-D0013-01). What the bytes are is known from the read itself and from the second look at the file below.
             InputStream in = client.read(location.file());
             try {
                 ended = pump(in, watch, announced, sink, digest);
             } finally {
-                ChannelClosing.quietly(in);
+                channels.closeQuietly(in);
             }
         } catch (IOException e) {
             return failedReading(lease, watch, e);

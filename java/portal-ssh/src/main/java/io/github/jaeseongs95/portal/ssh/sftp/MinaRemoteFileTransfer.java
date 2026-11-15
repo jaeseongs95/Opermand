@@ -387,12 +387,12 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
                     return notDispatched.apply(unreachable.cause());
                 }
             }
-            watch.interruptWith(() -> ChannelClosing.quietly(client));
+            watch.interruptWith(() -> channels.closeQuietly(client));
             try {
                 return work.run(client, lease, watch);
             } finally {
                 watch.disarm();
-                ChannelClosing.quietly(client);
+                channels.closeQuietly(client);
             }
         }
     }

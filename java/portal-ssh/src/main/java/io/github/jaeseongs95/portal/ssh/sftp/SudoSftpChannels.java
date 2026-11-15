@@ -138,7 +138,7 @@ public class SudoSftpChannels {
                 case SftpFailureClassifier.Verdict.Lost lost -> new Opening.Lost();
             };
         } finally {
-            ChannelClosing.quietly(look);
+            plain.closeQuietly(look);
         }
         if (server.isEmpty()) {
             return new Opening.NoServer();

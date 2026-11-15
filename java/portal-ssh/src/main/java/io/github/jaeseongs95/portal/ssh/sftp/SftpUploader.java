@@ -252,7 +252,7 @@ public class SftpUploader {
         } catch (IOException e) {
             return new Copy.RemoteFailure(e);
         } finally {
-            ChannelClosing.quietly(out);
+            channels.closeQuietly(out);
         }
     }
 
@@ -336,7 +336,7 @@ public class SftpUploader {
         try {
             return replacer.remove(fresh, tempPath);
         } finally {
-            ChannelClosing.quietly(fresh);
+            channels.closeQuietly(fresh);
         }
     }
 }
