@@ -1,6 +1,8 @@
 package io.github.jaeseongs95.portal.ssh.profile;
 
 import java.io.IOException;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -76,7 +78,7 @@ public final class PosixPrivateFileRule implements PrivateFileRule {
         for (Path path : missing) {
             try {
                 Files.createDirectory(path, FOLDER_MODE);
-            } catch (IOException notCreated) { // FileAlreadyExistsException, and possibly an access denial for a path that appeared in between
+            } catch (FileAlreadyExistsException | AccessDeniedException notCreated) { // FileAlreadyExistsException, and possibly an access denial for a path that appeared in between
                 if (Files.isDirectory(path)) {
                     continue; // somebody made it between the check and the call: it is not ours, and it is not judged
                 }
@@ -91,7 +93,7 @@ public final class PosixPrivateFileRule implements PrivateFileRule {
     public void createFile(Path file) throws IOException {
         try {
             Files.createFile(file, FILE_MODE); // the file system decides whether this call creates the file: there is no check before it
-        } catch (IOException notCreated) { // FileAlreadyExistsException (an access denial too, where a file system answers so for a folder in the way)
+        } catch (FileAlreadyExistsException | AccessDeniedException notCreated) { // FileAlreadyExistsException (an access denial too, where a file system answers so for a folder in the way)
             if (Files.exists(file, LinkOption.NOFOLLOW_LINKS)) {
                 return; // something was there already (or somebody made it just now): it is not ours and it is not judged; the caller checks the kind
             }

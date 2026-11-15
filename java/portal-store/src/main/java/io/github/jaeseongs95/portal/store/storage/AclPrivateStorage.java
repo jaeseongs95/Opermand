@@ -2,6 +2,8 @@ package io.github.jaeseongs95.portal.store.storage;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileStore;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
@@ -74,7 +76,7 @@ public final class AclPrivateStorage implements PrivateStorage {
         for (Path path : missing) {
             try {
                 Files.createDirectory(path);
-            } catch (IOException notCreated) { // FileAlreadyExistsException, and on Windows possibly an access denial for a path that appeared in between
+            } catch (FileAlreadyExistsException | AccessDeniedException notCreated) { // FileAlreadyExistsException, and on Windows possibly an access denial for a path that appeared in between
                 if (Files.isDirectory(path)) {
                     continue; // somebody made it between the check and the call (a second first start): it is not ours, and it is not judged
                 }
