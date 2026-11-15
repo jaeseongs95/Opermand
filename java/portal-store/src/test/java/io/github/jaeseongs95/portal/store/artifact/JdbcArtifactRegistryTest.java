@@ -28,7 +28,6 @@ import io.github.jaeseongs95.portal.app.artifact.ConsumeReason;
 import io.github.jaeseongs95.portal.app.artifact.ConsumeState;
 import io.github.jaeseongs95.portal.app.artifact.ContentDigest;
 import io.github.jaeseongs95.portal.app.artifact.ReleaseReason;
-import io.github.jaeseongs95.portal.app.artifact.ReservedSplit;
 import io.github.jaeseongs95.portal.app.artifact.StagedAction;
 import io.github.jaeseongs95.portal.app.artifact.StagedActionKind;
 import io.github.jaeseongs95.portal.app.artifact.StagedActionState;
@@ -93,7 +92,7 @@ class JdbcArtifactRegistryTest {
         assertThat(registry.budget().budgetBytes()).isEqualTo(536_870_912L);
         assertThat(registry.budget().chargedBytes()).isEqualTo(536_870_912L);
         assertThat(registry.budget().remainingBytes()).isZero();
-        assertThat(registry.reserve(fixtures.upload(MAX_FILE), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(MAX_FILE, new ReservedSplit(536_870_912L, 0), 536_870_912L));
+        assertThat(registry.reserve(fixtures.upload(MAX_FILE), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(MAX_FILE, 536_870_912L, 536_870_912L));
         assertThat(registry.holding()).hasSize(8);
 
         ids.forEach(id -> registry.release(id, ReleaseReason.REFUSED));
@@ -155,6 +154,27 @@ class JdbcArtifactRegistryTest {
         assertThat(registry.completeDownload(id, fixtures.digest(bytes))).isEqualTo(ready);
         ArtifactId upload = fixtures.reservedId(registry.reserve(fixtures.upload(4), fixtures.at()));
         assertRefused(() -> registry.completeDownload(upload, fixtures.digest(bytes)), ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
+    }
+
+    @Test
+    @DisplayName("S-D0012-01 (store half): the reservation of a download shrinks to the size the target announced, before any byte; a size above the reservation, an upload, a download that has received a byte and an unknown id are refused")
+    void aDownloadReservationShrinksToTheAnnouncedSize() {
+        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.download(64), fixtures.at()));
+
+        registry.narrowReservation(id, 10);
+
+        assertThat(registry.budget().chargedBytes()).as("the charge fell from 64 to the announced 10").isEqualTo(10);
+        assertThat(registry.find(id).orElseThrow().spec().sizeBytes()).isEqualTo(10L);
+        registry.narrowReservation(id, 10);
+        assertThat(registry.budget().chargedBytes()).as("the same size again changes nothing").isEqualTo(10);
+        assertRefused(() -> registry.narrowReservation(id, 11), ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
+        assertRefused(() -> registry.narrowReservation(id, -1), ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
+        ArtifactId upload = fixtures.reservedId(registry.reserve(fixtures.upload(4), fixtures.at()));
+        assertRefused(() -> registry.narrowReservation(upload, 1), ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
+        registry.append(id, 0, fixtures.chunk(fixtures.bytes(4, 7)));
+        assertRefused(() -> registry.narrowReservation(id, 4), ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
+        assertRefused(() -> registry.narrowReservation(new ArtifactId("9".repeat(48)), 1), ArtifactErrorCode.ARTIFACT_NOT_FOUND);
+        assertThat(registry.budget().chargedBytes()).as("the refusals changed nothing: 10 and 4").isEqualTo(14);
     }
 
     @Test
@@ -512,6 +532,42 @@ class JdbcArtifactRegistryTest {
         assertThat(registry.budget().chargedBytes()).isEqualTo(4);
         assertThat(registry.expired(ArtifactFixtures.T0.plus(Duration.ofHours(5)))).isEmpty();
         assertThat(registry.holding()).extracting(ArtifactRecord::state).containsExactly(ArtifactState.DELETING);
+    }
+
+    @Test
+    @DisplayName("S-D0012-08 (D-0012): beginDeleteIfPresent answers an unknown id with false and changes nothing; a STAGING or READY row becomes DELETING; a DELETING row is answered as it is; a row in use or consumed is refused")
+    void beginDeleteIfPresentAnswersAnUnknownIdWithoutAnException() {
+        ArtifactId staging = fixtures.reservedId(registry.reserve(fixtures.upload(8), fixtures.at()));
+        ArtifactId ready = fixtures.readyArtifact(registry, fixtures.upload(4), fixtures.bytes(4, 1));
+        ArtifactId deleting = fixtures.readyArtifact(registry, fixtures.upload(4), fixtures.bytes(4, 2));
+        registry.beginDelete(deleting);
+        ArtifactId consuming = fixtures.readyArtifact(registry, fixtures.stagedFile(4), fixtures.bytes(4, 3));
+        registry.beginConsume(consuming, ConsumeReason.REMOVED);
+        ArtifactId consumed = fixtures.readyArtifact(registry, fixtures.stagedFile(4), fixtures.bytes(4, 4));
+        registry.beginConsume(consumed, ConsumeReason.REMOVED);
+        registry.completeConsume(consumed, ConsumeReason.REMOVED);
+        long charged = registry.budget().chargedBytes();
+        long deletingVersion = registry.find(deleting).orElseThrow().version();
+
+        assertThat(registry.beginDeleteIfPresent(new ArtifactId("9".repeat(48)))).as("an unknown id is answered, not thrown").isFalse();
+        assertThat(registry.budget().chargedBytes()).as("and nothing changed").isEqualTo(charged);
+
+        long stagingVersion = registry.find(staging).orElseThrow().version();
+        long readyVersion = registry.find(ready).orElseThrow().version();
+        assertThat(registry.beginDeleteIfPresent(staging)).isTrue();
+        assertThat(registry.find(staging).orElseThrow().state()).isEqualTo(ArtifactState.DELETING);
+        assertThat(registry.find(staging).orElseThrow().version()).as("the UPDATE raises the version, the basis of the optimistic lock").isEqualTo(stagingVersion + 1);
+        assertThat(registry.beginDeleteIfPresent(ready)).isTrue();
+        assertThat(registry.find(ready).orElseThrow().state()).isEqualTo(ArtifactState.DELETING);
+        assertThat(registry.find(ready).orElseThrow().version()).as("the UPDATE raises the version, the basis of the optimistic lock").isEqualTo(readyVersion + 1);
+        assertThat(registry.beginDeleteIfPresent(ready)).as("again: the row is DELETING already").isTrue();
+        assertThat(registry.beginDeleteIfPresent(deleting)).isTrue();
+        assertThat(registry.find(deleting).orElseThrow().version()).as("a row already DELETING is not written again").isEqualTo(deletingVersion);
+        assertThat(registry.budget().chargedBytes()).as("the charge stays until the release").isEqualTo(charged);
+
+        assertRefused(() -> registry.beginDeleteIfPresent(consuming), ArtifactErrorCode.ARTIFACT_BUSY);
+        assertRefused(() -> registry.beginDeleteIfPresent(consumed), ArtifactErrorCode.STAGED_FILE_CONSUMED);
+        assertThat(registry.find(consuming).orElseThrow().state()).isEqualTo(ArtifactState.CONSUMING);
     }
 
     /**

@@ -15,6 +15,7 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import tools.jackson.databind.json.JsonMapper;
 
 import io.github.jaeseongs95.portal.app.artifact.ArtifactImporter;
+import io.github.jaeseongs95.portal.app.artifact.QuarantineNotice;
 import io.github.jaeseongs95.portal.app.artifact.StagingTimes;
 import io.github.jaeseongs95.portal.app.config.DomainBeans;
 import io.github.jaeseongs95.portal.app.file.DownloadService;
@@ -41,14 +42,15 @@ import io.github.jaeseongs95.portal.store.output.OutputConfiguration;
 
 /**
  * The wiring of the use case slice. Real: every use case bean of portal-app (found by scanning its packages), every storage adapter that the use cases need (found by
- * scanning the store packages, without the artifact, audit, capacity and agent CLI adapters, which no use case of this slice touches), the helper beans of
- * {@link DomainBeans}. Plain test classes: the SSH executor ({@link ScriptedExecutor}), the audit port ({@link RecordingAudit}), the two target platforms
+ * scanning the store packages, without the audit, capacity and agent CLI adapters, which no use case of this slice touches), the helper beans of
+ * {@link DomainBeans}. The store scan includes {@code ArtifactStartupCheck}, which needs {@link QuarantineNotice}; that class is a {@code @Component} of the app artifact
+ * package, which the production assembly scans ({@code CoreAssembly}), so it is imported here as the real class like {@link ArtifactImporter}. Plain test classes: the SSH executor ({@link ScriptedExecutor}), the audit port ({@link RecordingAudit}), the two target platforms
  * ({@link TestPlatform}), the targets ({@link FixedTargets}) and a listener of terminal operations. The limits are small numbers a test can reach: four operations at
  * once, two on one target.
  */
 @TestConfiguration(proxyBeanMethods = false)
 @Import({DomainBeans.class, OutputConfiguration.class, TargetPlatformRegistry.class, StagedFileService.class, UploadService.class, DownloadService.class,
-    TransferSupport.class, TransferOutcomes.class, OperationUploadAdmission.class, ArtifactImporter.class})
+    TransferSupport.class, TransferOutcomes.class, OperationUploadAdmission.class, ArtifactImporter.class, QuarantineNotice.class})
 @ComponentScan(basePackages = {"io.github.jaeseongs95.portal.app.event", "io.github.jaeseongs95.portal.app.admission", "io.github.jaeseongs95.portal.app.operation",
     "io.github.jaeseongs95.portal.app.execution", "io.github.jaeseongs95.portal.app.recovery"}, excludeFilters = @ComponentScan.Filter(type = FilterType.REGEX,
     pattern = "io\\.github\\.jaeseongs95\\.portal\\.app\\.execution\\.AgentCliOperationRunner"))

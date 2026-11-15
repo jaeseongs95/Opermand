@@ -21,7 +21,7 @@ import org.springframework.stereotype.Component;
  * is a failed read, never an {@code UNKNOWN} outcome (decision D3-17, defect D-0013: an 850-byte file that fails to arrive is a failure with its reason).
  *
  * <p>The order: the path is looked at ({@link RemotePathChecker}: no link, a regular file); the size comes from that look and above the limit the answer is
- * {@code TooLarge} before a byte is read; the bytes flow to the {@link PayloadSink} in blocks while the SHA-256 and the size are counted; the file is looked at again
+ * {@code TooLarge} before a byte is read; the size is told to the sink ({@link PayloadSink#expect}) before the first block; the bytes flow to the {@link PayloadSink} in blocks while the SHA-256 and the size are counted; the file is looked at again
  * afterwards. A size read that is not the size announced, or a file whose size, modification time or mode changed meanwhile, is {@code FILE_CHANGED} (the 2.x helper also
  * compared the inode and the change time, which SFTP attributes do not carry). A sink that fails ends the read at once.
  *
@@ -78,6 +78,10 @@ public class SftpDownloader {
         Optional<TransferFailureCause> stopped = watch.stopRequested();
         if (stopped.isPresent()) {
             return new DownloadResult.Failed(stopped.orElseThrow());
+        }
+        // The size the target announced goes to the sink before the first block, so the use case can hold only that much of its budget (defect D-0012).
+        if (sink.expect(announced.size()) instanceof SinkResult.Failed) {
+            return new DownloadResult.Failed(TransferFailureCause.LOCAL_IO_FAILED);
         }
         StreamDigest digest = StreamDigest.sha256();
         byte[] block = new byte[BLOCK_BYTES];

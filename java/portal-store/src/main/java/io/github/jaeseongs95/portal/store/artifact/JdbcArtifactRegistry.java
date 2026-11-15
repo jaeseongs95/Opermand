@@ -27,7 +27,6 @@ import io.github.jaeseongs95.portal.app.artifact.ArtifactState;
 import io.github.jaeseongs95.portal.app.artifact.ChunkDigest;
 import io.github.jaeseongs95.portal.app.artifact.ConsumeReason;
 import io.github.jaeseongs95.portal.app.artifact.ReleaseReason;
-import io.github.jaeseongs95.portal.app.artifact.ReservedSplit;
 import io.github.jaeseongs95.portal.app.artifact.StagedAction;
 import io.github.jaeseongs95.portal.app.artifact.StagedActionState;
 import io.github.jaeseongs95.portal.app.artifact.UnpinReason;
@@ -59,7 +58,7 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
 
     private static final Logger LOG = LoggerFactory.getLogger(JdbcArtifactRegistry.class);
 
-    /** The states in which an expired, unpinned artifact is released: not {@code CONSUMING} (in use) and not {@code DELETING} (being removed). */
+    /** The states in which an expired, unpinned artifact is released: not {@code CONSUMING} (in use) and not {@code DELETING} (being removed; {@link #deleting()} lists those). */
     private static final List<ArtifactState> RELEASABLE_STATES = List.of(ArtifactState.STAGING, ArtifactState.READY, ArtifactState.CONSUMED);
 
     private final ArtifactRowRepository artifacts;
@@ -100,10 +99,9 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
         if (spec.sizeBytes() > limits.maxFileBytes()) {
             return new ArtifactReservation.FileTooLarge(spec.sizeBytes(), limits.maxFileBytes());
         }
-        // File-system reads, outside the transaction (Principles 4.4).
+        // The file-system read, outside the transaction (Principles 4.4). The quarantine is not read: its bytes never decide a reservation (defect D-0012).
         DiskReading disk = readDisk();
-        long quarantined = retained.retainedBytes();
-        return Objects.requireNonNull(transaction.execute(status -> reserveRows(spec, at, disk, quarantined)), "reservation");
+        return Objects.requireNonNull(transaction.execute(status -> reserveRows(spec, at, disk)), "reservation");
     }
 
     private DiskReading readDisk() {
@@ -115,13 +113,14 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
     }
 
     /**
-     * The budget is the reserved bytes of the rows plus the bytes in quarantine: both are on the disk of the staging folder (design 13.6, RC-A-170). A refusal tells
-     * the two parts apart (defect D-0012), the rows as {@code liveBytes} and the quarantine as {@code holdingBytes}.
+     * The budget is the reserved bytes of the rows. The bytes in quarantine are not in it: nothing deletes them, so counting them would let a payload that no transfer owns
+     * refuse every new transfer for good (defect D-0012, which replaces design 13.6 and RC-A-169, RC-A-170); {@link #budget()} shows them apart. The disk check still sees
+     * them, because they use the disk's space.
      */
-    private ArtifactReservation reserveRows(ArtifactSpec spec, Instant at, DiskReading disk, long quarantined) {
-        ReservedSplit reserved = new ReservedSplit(artifacts.chargedBytes(), quarantined);
-        if (reserved.totalBytes() > limits.budgetBytes() - Math.max(1L, spec.sizeBytes())) {
-            return new ArtifactReservation.BudgetExceeded(spec.sizeBytes(), reserved, limits.budgetBytes());
+    private ArtifactReservation reserveRows(ArtifactSpec spec, Instant at, DiskReading disk) {
+        long live = artifacts.chargedBytes();
+        if (live > limits.budgetBytes() - Math.max(1L, spec.sizeBytes())) {
+            return new ArtifactReservation.BudgetExceeded(spec.sizeBytes(), live, limits.budgetBytes());
         }
         long usable = disk.usableBytes();
         if (usable - spec.sizeBytes() < limits.diskMarginBytes()) {
@@ -206,6 +205,25 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
         return mapper.toRecord(updated);
     }
 
+    /**
+     * One conditional UPDATE, so this method sets no transaction boundary of its own (Principles 4.4) and the winner is told by the rows changed. When no row changed the artifact is read once to
+     * say why; nothing is written again and nothing is retried.
+     */
+    @Override
+    public void narrowReservation(ArtifactId id, long sizeBytes) {
+        if (sizeBytes < 0) {
+            throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
+        }
+        if (artifacts.narrowDownload(id.value(), sizeBytes) == 1) {
+            return;
+        }
+        ArtifactRow row = require(id);
+        if (row.direction() != ArtifactDirection.DOWNLOAD || row.state() != ArtifactState.STAGING || row.receivedBytes() != 0L) {
+            throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
+        }
+        throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
+    }
+
     @Override
     @Transactional(readOnly = true)
     public Optional<ArtifactRecord> find(ArtifactId id) {
@@ -218,11 +236,11 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
         return artifacts.findByPublicUuid(publicUuid.text()).map(mapper::toRecord);
     }
 
-    /** Not {@code @Transactional}: the bytes in quarantine are read from the disk first (Principles 4.4), then the rows are summed. */
+    /** Not {@code @Transactional}: the bytes in quarantine are read from the disk first (Principles 4.4), then the rows are summed; the two figures stay apart (defect D-0012). */
     @Override
     public ArtifactBudget budget() {
-        long quarantined = retained.retainedBytes();
-        return new ArtifactBudget(limits.budgetBytes(), artifacts.chargedBytes() + quarantined);
+        RetainedPayloads.Held quarantined = retained.held();
+        return new ArtifactBudget(limits.budgetBytes(), artifacts.chargedBytes(), quarantined.files(), quarantined.bytes());
     }
 
     @Override
@@ -231,6 +249,12 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
         Objects.requireNonNull(now, "now");
         return artifacts.findByRetentionAndStateInAndExpiresAtLessThanEqualOrderByExpiresAtAscIdAsc(ArtifactRetention.RELEASABLE, RELEASABLE_STATES, now).stream()
             .map(mapper::toRecord).toList();
+    }
+
+    /** One read of one query: it joins the caller's transaction when there is one and opens none (Principles 4.4: the store adds no transaction boundary of its own). */
+    @Override
+    public List<ArtifactRecord> deleting() {
+        return artifacts.findByStateOrderByIdAsc(ArtifactState.DELETING).stream().map(mapper::toRecord).toList();
     }
 
     /**
@@ -344,6 +368,25 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
         ArtifactRow updated = row.withState(ArtifactState.DELETING, takeLock(row, ArtifactErrorCode.ARTIFACT_CHANGED));
         aggregates.update(updated);
         return mapper.toRecord(updated);
+    }
+
+    /**
+     * One conditional UPDATE, so this method sets no transaction boundary of its own (Principles 4.4) and the winner is told by the rows changed. When no row changed the artifact is read once
+     * to say why: no row is the answer {@code false}, a row that is {@code DELETING} already is {@code true}, and a row in use or consumed is refused as
+     * {@link #beginDelete} refuses it. Nothing is written again and nothing is retried.
+     */
+    @Override
+    public boolean beginDeleteIfPresent(ArtifactId id) {
+        if (artifacts.markDeleting(id.value()) == 1) {
+            return true;
+        }
+        return artifacts.findById(id.value()).map(row -> switch (row.state()) {
+            case DELETING -> true;
+            case CONSUMING -> throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_BUSY);
+            case CONSUMED -> throw new RequestRefusedException(ArtifactErrorCode.STAGED_FILE_CONSUMED);
+            // STAGING and READY are the states the UPDATE moves: a row seen in one of them after the UPDATE changed none was changed by another caller in between.
+            case STAGING, READY -> throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_CHANGED);
+        }).orElse(false);
     }
 
     /**

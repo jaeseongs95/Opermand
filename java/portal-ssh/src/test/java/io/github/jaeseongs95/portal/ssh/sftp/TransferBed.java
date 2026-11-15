@@ -200,6 +200,18 @@ final class TransferBed implements AutoCloseable {
             this.onFirstCall = onFirstCall;
         }
 
+        private long announced = -1L;
+        private int announcements;
+        private boolean announcedBeforeTheFirstBlock;
+
+        @Override
+        public SinkResult expect(long totalBytes) {
+            announced = totalBytes;
+            announcements++;
+            announcedBeforeTheFirstBlock = calls.get() == 0;
+            return new SinkResult.Accepted();
+        }
+
         @Override
         public SinkResult append(byte[] data) {
             if (calls.getAndIncrement() == 0) {
@@ -207,6 +219,19 @@ final class TransferBed implements AutoCloseable {
             }
             bytes.write(data, 0, data.length);
             return new SinkResult.Accepted();
+        }
+
+        /** The size the adapter announced, or -1 when it announced none. */
+        long announced() {
+            return announced;
+        }
+
+        int announcements() {
+            return announcements;
+        }
+
+        boolean announcedBeforeTheFirstBlock() {
+            return announcedBeforeTheFirstBlock;
         }
 
         byte[] bytes() {

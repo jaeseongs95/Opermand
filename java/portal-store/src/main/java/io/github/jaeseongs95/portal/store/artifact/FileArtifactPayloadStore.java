@@ -204,25 +204,27 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
         return Set.copyOf(found);
     }
 
-    /** The sizes of the regular files in {@code orphans/}; a link is not followed and not counted, a missing folder is zero. */
+    /** The number and the sizes of the regular files in {@code orphans/}; a link is not followed and not counted, a missing folder is zero. */
     @Override
-    public long retainedBytes() {
+    public Held held() {
         Path quarantine = root.resolve(QUARANTINE_FOLDER);
         if (!Files.isDirectory(quarantine, LinkOption.NOFOLLOW_LINKS)) {
-            return 0L;
+            return new Held(0L, 0L);
         }
+        long files = 0L;
         long total = 0L;
         try (DirectoryStream<Path> entries = Files.newDirectoryStream(quarantine, "*" + SUFFIX)) {
             for (Path entry : entries) {
                 BasicFileAttributes attributes = Files.readAttributes(entry, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
                 if (attributes.isRegularFile()) {
+                    files++;
                     total += attributes.size();
                 }
             }
         } catch (IOException e) {
             throw ioFailure(e);
         }
-        return total;
+        return new Held(files, total);
     }
 
     @Override

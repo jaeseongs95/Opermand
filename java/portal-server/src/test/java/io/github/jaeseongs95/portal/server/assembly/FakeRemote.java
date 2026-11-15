@@ -51,9 +51,12 @@ final class FakeRemote implements RemoteFileTransfer {
     PermissionResult permissionAnswer = new PermissionResult.Applied();
     /** Thrown by the next download, as the {@code DispatchGuard} of the adapter throws before its first read. */
     RuntimeException downloadFailure;
+    /** Run by the next downloads after the size is announced and before the first block: what a second transfer that overlaps this one would do. */
+    Runnable whileTransferring;
 
     void reset() {
         downloadFailure = null;
+        whileTransferring = null;
         uploads.clear();
         downloads.clear();
         permissions.clear();
@@ -87,6 +90,13 @@ final class FakeRemote implements RemoteFileTransfer {
         }
         if (downloadAnswer != null) {
             return downloadAnswer;
+        }
+        // Like SftpDownloader: the size of the file is announced to the sink once, before the first block.
+        if (sink.expect(served.length) instanceof SinkResult.Failed) {
+            return new DownloadResult.Failed(io.github.jaeseongs95.portal.app.remote.TransferFailureCause.LOCAL_IO_FAILED);
+        }
+        if (whileTransferring != null) {
+            whileTransferring.run();
         }
         for (int from = 0; from < served.length; from += PIECE) {
             byte[] piece = java.util.Arrays.copyOfRange(served, from, Math.min(served.length, from + PIECE));

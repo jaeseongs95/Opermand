@@ -7,6 +7,11 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
 import org.junit.jupiter.api.AfterEach;
@@ -29,6 +34,7 @@ import io.github.jaeseongs95.portal.app.artifact.ArtifactSpec;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactState;
 import io.github.jaeseongs95.portal.app.artifact.ConsumeReason;
 import io.github.jaeseongs95.portal.app.artifact.ConsumeState;
+import io.github.jaeseongs95.portal.app.artifact.QuarantineNotice;
 import io.github.jaeseongs95.portal.domain.error.ArtifactErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
@@ -42,10 +48,13 @@ import io.github.jaeseongs95.portal.store.StoreTest;
  */
 @StoreTest
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
-@Import({JdbcArtifactRegistry.class, ArtifactMapper.class, FileArtifactPayloadStore.class, ArtifactStartupCheck.class, ArtifactTestStorage.class})
+@Import({JdbcArtifactRegistry.class, ArtifactMapper.class, FileArtifactPayloadStore.class, ArtifactStartupCheck.class, QuarantineNotice.class, ArtifactTestStorage.class})
 class ArtifactStartupCheckTest {
 
     private static final Logger LOG = LoggerFactory.getLogger(ArtifactStartupCheckTest.class);
+
+    /** The line the owner reads (design stage 3, 5.3): the number of files in quarantine and their bytes. */
+    private static final String QUARANTINE_LINE = "Artifact quarantine: %d file(s), %d retained byte(s) (not charged to the staging budget, only the owner clears them)";
 
     @TestConfiguration(proxyBeanMethods = false)
     static class Limits {
@@ -171,7 +180,7 @@ class ArtifactStartupCheckTest {
     }
 
     @Test
-    @DisplayName("RC-A-167 / RC-A-169: a payload without metadata is quarantined with its bytes and does not stop the start; the next run finds nothing; its bytes count in the staging budget (design 13.6)")
+    @DisplayName("RC-A-167 / RC-A-169: a payload without metadata is quarantined with its bytes and does not stop the start; the next run finds nothing; its bytes are shown apart from the staging budget (D-0012)")
     void aPayloadWithoutMetadataIsQuarantined() throws IOException {
         ArtifactId legacy = new ArtifactId("f".repeat(48));
         byte[] bytes = fixtures.bytes(48, 'f');
@@ -183,7 +192,34 @@ class ArtifactStartupCheckTest {
         assertThat(payloads.stored()).isEmpty();
         assertThat(Files.readAllBytes(roots.artifacts().resolve("orphans").resolve(legacy.value() + ".part"))).isEqualTo(bytes);
         assertThat(startup.reconcile().quarantined()).isEmpty();
-        assertThat(registry.budget().chargedBytes()).as("the quarantined bytes use the disk of the staging folder, so they are charged (RC-A-170)").isEqualTo(48);
+        assertThat(registry.budget().retainedBytes()).as("the quarantined bytes are shown to the owner").isEqualTo(48);
+        assertThat(registry.budget().chargedBytes()).as("and are not charged to the staging budget (D-0012)").isZero();
+    }
+
+    @Test
+    @DisplayName("S-D0012-06 (D-0012): the start-up check tells the owner, in one INFO line, how many files are in quarantine and how many bytes they hold, whether or not this run moved one")
+    void theStartupCheckLogsTheQuarantineFigures() {
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        ch.qos.logback.classic.Logger startupLog = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(ch.qos.logback.classic.Logger.ROOT_LOGGER_NAME);
+        startupLog.addAppender(appender);
+        try {
+            payloads.append(new ArtifactId("e".repeat(48)), 0, fixtures.bytes(48, 'e'));
+            startup.reconcile();
+            payloads.append(new ArtifactId("d".repeat(48)), 0, fixtures.bytes(5, 'd'));
+            appender.list.clear();
+
+            startup.reconcile();
+            List<String> lines = appender.list.stream().filter(event -> event.getLevel() == Level.INFO).map(ILoggingEvent::getFormattedMessage).toList();
+            appender.list.clear();
+            startup.reconcile();
+            List<String> nothingMoved = appender.list.stream().filter(event -> event.getLevel() == Level.INFO).map(ILoggingEvent::getFormattedMessage).toList();
+
+            assertThat(lines).as("two files in quarantine, 48 + 5 bytes, after a run that moved one of them").contains(QUARANTINE_LINE.formatted(2, 53));
+            assertThat(nothingMoved).as("the same figures when the run moved none").contains(QUARANTINE_LINE.formatted(2, 53));
+        } finally {
+            startupLog.detachAppender(appender);
+        }
     }
 
     @Test

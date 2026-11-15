@@ -33,10 +33,19 @@ public interface ArtifactRegistry {
 
     /**
      * {@code STAGING} to {@code READY} for a download, whose size was not known when the budget was reserved (the reservation holds the largest file a transfer may
-     * carry, design 5.2): the declared size becomes the bytes received, so the charge falls from the reserved size to the real one. Only a {@code DOWNLOAD} that is
+     * carry, design 5.2, until {@link #narrowReservation} shrinks it): the declared size becomes the bytes received, so the charge is the real one. Only a {@code DOWNLOAD} that is
      * {@code STAGING} can be completed this way; any other artifact throws {@code ARTIFACT_NOT_WRITABLE}. Repeating it with the same digest answers the same record.
      */
     ArtifactRecord completeDownload(ArtifactId id, Digest sha256);
+
+    /**
+     * Shrinks the reservation of a download to {@code sizeBytes}, the size the target announced before the first byte is read (defect D-0012): the charge falls from the
+     * largest file a transfer carries to the real size, so a download no longer holds more of the budget than its file needs. It is one conditional update, so it opens no
+     * transaction and the loser of a race is told by the number of rows it changed. Only a {@code DOWNLOAD} that is {@code STAGING} and has received no byte can shrink,
+     * and only to a size not above what it holds; any other artifact throws {@code ARTIFACT_NOT_WRITABLE}, a size above the reservation {@code ARTIFACT_SEQUENCE_OR_SIZE}
+     * and an unknown id {@code ARTIFACT_NOT_FOUND}. The same size again is accepted: the charge stays, but the row is updated, so its {@code version} rises by one.
+     */
+    void narrowReservation(ArtifactId id, long sizeBytes);
 
     /** {@code Optional} here has the one meaning "no such artifact". */
     Optional<ArtifactRecord> find(ArtifactId id);
@@ -57,8 +66,14 @@ public interface ArtifactRegistry {
 
     ArtifactBudget budget();
 
-    /** Releasable artifacts whose expiry is not after {@code now}; pinned ones are never listed. */
+    /** Releasable artifacts whose expiry is not after {@code now}; pinned ones are never listed, and neither are rows in {@code DELETING} (see {@link #deleting()}). */
     List<ArtifactRecord> expired(Instant now);
+
+    /**
+     * The artifacts whose removal began and did not finish: the row is {@code DELETING}, and the bytes may or may not be gone yet (a use case that failed to delete them
+     * logged the failure and left the row, defect D-0012). The removal is due at once, whatever the expiry, so the reap lists them with {@link #expired} and finishes them.
+     */
+    List<ArtifactRecord> deleting();
 
     /** Records that an operation was made from the artifact. */
     ArtifactRecord submit(ArtifactId id, OperationId operationId);
@@ -80,6 +95,15 @@ public interface ArtifactRegistry {
 
     /** Marks the row {@code DELETING} before the bytes are deleted; the row is removed by {@link #release}. */
     ArtifactRecord beginDelete(ArtifactId id);
+
+    /**
+     * {@link #beginDelete} for a caller that expects the row may be gone, such as the reap, whose list can be older than the use case that removed the row meanwhile (defect
+     * D-0012). It answers {@code true} when the row is {@code DELETING} now (it was {@code STAGING} or {@code READY}, or it already was {@code DELETING}) and {@code false}
+     * when there is no such artifact, in which case nothing changed: an unknown id is an answer, not a refusal. Every other refusal of {@link #beginDelete} is thrown
+     * ({@code ARTIFACT_BUSY} for a file in use, {@code STAGED_FILE_CONSUMED} for a consumed one). It is one conditional update, so it sets no transaction boundary of its own and the loser
+     * of a race is told by the rows changed.
+     */
+    boolean beginDeleteIfPresent(ArtifactId id);
 
     /** Removes the row and gives its budget back. */
     void release(ArtifactId id, ReleaseReason reason);

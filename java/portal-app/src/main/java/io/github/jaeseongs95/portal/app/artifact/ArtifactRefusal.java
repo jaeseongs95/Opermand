@@ -9,7 +9,8 @@ import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 
 /**
  * A refused reservation as the owner sees it: the error code and the numbers behind it (defect D-0012). Each refusal has its own code and its own values, so the owner
- * can tell "the budget is full" from "the disk is short" and, for the budget, "transfers in flight" from "bytes in quarantine". The values are typed fields, never text.
+ * can tell "the budget is full" from "the disk is short". The values are typed fields, never text. The bytes in quarantine are no part of a budget refusal; the owner reads
+ * them from {@link ArtifactBudget#retainedBytes()} (defect D-0012).
  *
  * <p>Why not the exception: {@link RequestRefusedException} carries a code and two facts and no values, and the answer envelope that would carry them is stage 4's. The
  * use cases return this value where the owner wants the numbers and use {@link #toException()} where a caller only wants to stop.
@@ -29,7 +30,7 @@ public record ArtifactRefusal(ErrorCode code, Detail detail) {
         return switch (Objects.requireNonNull(reservation, "reservation")) {
             case ArtifactReservation.Reserved reserved -> throw new IllegalArgumentException("A reserved artifact is not a refusal");
             case ArtifactReservation.BudgetExceeded budget -> new ArtifactRefusal(ExecutionErrorCode.ARTIFACT_QUOTA,
-                new Detail.Budget(budget.requestedBytes(), budget.reserved().liveBytes(), budget.reserved().holdingBytes(), budget.budgetBytes()));
+                new Detail.Budget(budget.requestedBytes(), budget.liveBytes(), budget.budgetBytes()));
             case ArtifactReservation.DiskSpaceInsufficient disk -> new ArtifactRefusal(ExecutionErrorCode.ARTIFACT_STORAGE_FULL,
                 new Detail.Disk(disk.requestedBytes(), disk.usableBytes(), disk.marginBytes()));
             case ArtifactReservation.FileTooLarge large -> new ArtifactRefusal(ArtifactErrorCode.FILE_TOO_LARGE, new Detail.SizeLimit(large.requestedBytes(), large.limitBytes()));
@@ -48,11 +49,10 @@ public record ArtifactRefusal(ErrorCode code, Detail detail) {
          * The budget cannot take the file.
          *
          * @param requestedBytes the declared size
-         * @param liveBytes what the rows of the artifacts charge
-         * @param holdingBytes what stays in quarantine without a row
+         * @param liveBytes what the rows of the artifacts charge; the bytes in quarantine are not part of it
          * @param budgetBytes the budget
          */
-        record Budget(long requestedBytes, long liveBytes, long holdingBytes, long budgetBytes) implements Detail {
+        record Budget(long requestedBytes, long liveBytes, long budgetBytes) implements Detail {
         }
 
         /**

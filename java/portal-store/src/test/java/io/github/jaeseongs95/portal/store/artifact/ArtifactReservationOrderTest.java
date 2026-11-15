@@ -19,7 +19,6 @@ import io.github.jaeseongs95.portal.app.artifact.ArtifactPayloadStore;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRegistry;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactReservation;
 import io.github.jaeseongs95.portal.app.artifact.ReleaseReason;
-import io.github.jaeseongs95.portal.app.artifact.ReservedSplit;
 import io.github.jaeseongs95.portal.app.storage.DiskSpace;
 import io.github.jaeseongs95.portal.app.storage.PayloadRead;
 import io.github.jaeseongs95.portal.app.storage.PayloadWrite;
@@ -84,17 +83,17 @@ class ArtifactReservationOrderTest {
     }
 
     @Test
-    @DisplayName("S3-AR-02: a refusal by the budget is BudgetExceeded and shows the live rows and the held bytes apart, with the request and the budget")
-    void aBudgetRefusalShowsTheLiveAndTheHeldBytesApart() {
+    @DisplayName("S3-AR-02: a refusal by the budget is BudgetExceeded with the live rows, the request and the budget; the bytes held in quarantine are no part of it")
+    void aBudgetRefusalShowsTheLiveBytes() {
         disk.usable(1_000_000_000_000L);
         fixtures.reservedId(registry.reserve(fixtures.upload(6_000L), fixtures.at()));
+        fixtures.reservedId(registry.reserve(fixtures.upload(3_000L), fixtures.at()));
         disk.retained(3_500L);
 
         ArtifactReservation refused = registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at());
 
-        assertThat(refused).isEqualTo(new ArtifactReservation.BudgetExceeded(THE_DEFECT_SIZE, new ReservedSplit(6_000L, 3_500L), BUDGET));
-        assertThat(((ArtifactReservation.BudgetExceeded) refused).reserved().totalBytes()).isEqualTo(9_500L);
-        assertThat(registry.holding()).hasSize(1);
+        assertThat(refused).isEqualTo(new ArtifactReservation.BudgetExceeded(THE_DEFECT_SIZE, 9_000L, BUDGET));
+        assertThat(registry.holding()).hasSize(2);
     }
 
     @ParameterizedTest
@@ -104,7 +103,7 @@ class ArtifactReservationOrderTest {
         fixtures.reservedId(registry.reserve(fixtures.upload(FILE_LIMIT), fixtures.at()));
         disk.usable(usableBytes);
 
-        assertThat(registry.reserve(fixtures.upload(2_500L), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(2_500L, new ReservedSplit(FILE_LIMIT, 0L), BUDGET));
+        assertThat(registry.reserve(fixtures.upload(2_500L), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(2_500L, FILE_LIMIT, BUDGET));
     }
 
     @Test
@@ -142,7 +141,7 @@ class ArtifactReservationOrderTest {
         // 9,000 is over the file limit, over the budget with the filler, and the disk is unreadable: the limit speaks first.
         assertThat(registry.reserve(fixtures.upload(9_000L), fixtures.at())).isEqualTo(new ArtifactReservation.FileTooLarge(9_000L, FILE_LIMIT));
         // 2,500 is within the limit, over the budget with the filler, and the disk is unreadable: the budget speaks before the disk is asked.
-        assertThat(registry.reserve(fixtures.upload(2_500L), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(2_500L, new ReservedSplit(FILE_LIMIT, 0L), BUDGET));
+        assertThat(registry.reserve(fixtures.upload(2_500L), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(2_500L, FILE_LIMIT, BUDGET));
 
         registry.release(filler, ReleaseReason.REFUSED);
         disk.usable(0L);
@@ -151,19 +150,17 @@ class ArtifactReservationOrderTest {
     }
 
     @Test
-    @DisplayName("S3-AR-05: bytes held in quarantine use the budget and show as holdingBytes in the refusal; once they are gone the same file is accepted")
-    void heldBytesAreRefusedWithTheirOwnNumberAndFreedBytesLetTheFileIn() {
+    @DisplayName("S-D0012-03 (store half; replaces S3-AR-05): bytes held in quarantine are not charged to the budget, even when they are more than the whole budget: the file is accepted, and the budget view shows the two figures apart")
+    void heldBytesAreShownApartAndNeverRefuseAFile() {
         disk.usable(1_000_000_000_000L);
-        disk.retained(9_500L);
+        disk.retained(BUDGET + 5_000L);
 
-        ArtifactReservation refused = registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at());
+        ArtifactReservation reservation = registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at());
 
-        assertThat(refused).isEqualTo(new ArtifactReservation.BudgetExceeded(THE_DEFECT_SIZE, new ReservedSplit(0L, 9_500L), BUDGET));
-        assertThat(registry.budget().chargedBytes()).as("the budget view counts the held bytes too").isEqualTo(9_500L);
-
-        disk.retained(0L);
-
-        assertThat(registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at())).isInstanceOf(ArtifactReservation.Reserved.class);
+        assertThat(reservation).isInstanceOf(ArtifactReservation.Reserved.class);
+        assertThat(registry.budget().chargedBytes()).as("only the live row is charged").isEqualTo(THE_DEFECT_SIZE);
+        assertThat(registry.budget().retainedBytes()).as("the quarantine is shown to the owner").isEqualTo(BUDGET + 5_000L);
+        assertThat(registry.budget().remainingBytes()).as("and does not shrink what a new transfer may take").isEqualTo(BUDGET - THE_DEFECT_SIZE);
     }
 
     /** A payload store that is only a disk: it answers the usable space and the retained bytes the test sets, or fails to read them. */
@@ -201,8 +198,8 @@ class ArtifactReservationOrderTest {
         }
 
         @Override
-        public long retainedBytes() {
-            return retainedBytes;
+        public Held held() {
+            return new Held(retainedBytes > 0 ? 1L : 0L, retainedBytes);
         }
 
         @Override
