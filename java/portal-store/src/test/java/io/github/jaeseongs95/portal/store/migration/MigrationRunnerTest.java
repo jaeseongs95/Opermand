@@ -222,8 +222,9 @@ class MigrationRunnerTest {
 
         assertThat(runner.run(Phase.EXPAND, List.of(script(1, sql)))).isEqualTo(1);
 
-        assertThat(jdbc.queryForObject("SELECT DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'PUBLIC' AND TABLE_NAME = 'LONG_T' AND COLUMN_NAME = 'BODY'", String.class))
-            .as("the declaration the rule chose for H2: its character large object type with the reported largest size").isEqualTo("CHARACTER LARGE OBJECT");
+        Map<String, Object> column = jdbc.queryForMap("SELECT DATA_TYPE, CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'PUBLIC' AND TABLE_NAME = 'LONG_T' AND COLUMN_NAME = 'BODY'");
+        assertThat(column).as("the declaration SqlBuilder gives for H2: CHARACTER LARGE OBJECT(2147483647)").containsEntry("DATA_TYPE", "CHARACTER LARGE OBJECT")
+            .containsEntry("CHARACTER_MAXIMUM_LENGTH", 2_147_483_647L);
         jdbc.update("INSERT INTO long_t (id, body) VALUES (1, ?)", text);
         assertThat(jdbc.queryForObject("SELECT body FROM long_t WHERE id = 1", String.class)).isEqualTo(text);
         assertThat(jdbc.queryForObject("SELECT digest FROM " + Phase.EXPAND.table() + " WHERE version = 1", String.class).strip()).isEqualTo(sha256(sql));

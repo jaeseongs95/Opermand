@@ -124,6 +124,19 @@ class SqlBuilderTest {
     }
 
     @Test
+    @DisplayName("S-SQLB-22: each of the seven products declares its long text column with its own type, and a type whose length may be left out (Db2 CLOB: 1M) is written with the length")
+    void generatesTheLongTextDeclarationOfEveryProduct() {
+        assertThat(SqlBuilder.generateLongText(SqlBuilder.Database.H2)).isEqualTo("CHARACTER LARGE OBJECT(2147483647)");
+        assertThat(SqlBuilder.generateLongText(SqlBuilder.Database.POSTGRESQL)).isEqualTo("TEXT");
+        assertThat(SqlBuilder.generateLongText(SqlBuilder.Database.ORACLE)).isEqualTo("CLOB");
+        assertThat(SqlBuilder.generateLongText(SqlBuilder.Database.DB2)).isEqualTo("CLOB(2147483647)");
+        assertThat(SqlBuilder.generateLongText(SqlBuilder.Database.SQLSERVER)).isEqualTo("NVARCHAR(MAX)");
+        assertThat(SqlBuilder.generateLongText(SqlBuilder.Database.MARIADB)).isEqualTo("LONGTEXT");
+        assertThat(SqlBuilder.generateLongText(SqlBuilder.Database.MYSQL)).isEqualTo("LONGTEXT");
+        assertThat(SqlBuilder.Database.values()).as("every product above is a case of this test").hasSize(7);
+    }
+
+    @Test
     @DisplayName("S-SQLB-21: each of the seven product names a connection reports selects its product, by name alone and without a connection")
     void selectsTheDialectFromEachProductName() {
         assertThat(SqlBuilder.ofProductName("H2")).isEqualTo(SqlBuilder.Database.H2);

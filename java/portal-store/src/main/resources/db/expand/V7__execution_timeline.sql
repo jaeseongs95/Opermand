@@ -1,6 +1,6 @@
 -- Execution timeline and one more failure code of an executed operation (stage 3 design 3.4, decisions D3-03 and D3-04). ANSI statements only, common to every DBMS: every
 -- statement below is understood by H2, PostgreSQL, MariaDB and MySQL (ALTER TABLE ... ADD COLUMN, DROP CONSTRAINT and ADD CONSTRAINT ... CHECK; MySQL knows DROP CONSTRAINT
--- for a CHECK from 8.0.19, MariaDB from 10.2.1). A statement that a database did not understand would be spelled for it in ScriptDialect, not in a script per DBMS.
+-- for a CHECK from 8.0.19, MariaDB from 10.2.1). The runner rewrites nothing in a script except the long text placeholder, and there is no script per DBMS, so a statement stays within what these databases share.
 -- No CLOB, no IDENTITY, no function.
 --
 -- 1. Three instants of one execution, written by the use case after the operation settled (defect D-0038: the time between the steps of one execution tells a connection that

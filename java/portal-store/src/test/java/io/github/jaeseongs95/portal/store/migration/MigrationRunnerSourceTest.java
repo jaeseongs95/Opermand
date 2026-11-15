@@ -45,12 +45,14 @@ class MigrationRunnerSourceTest {
         assertThat(offenders).isEmpty();
     }
 
-    private static final Pattern DBMS_SPECIFIC = Pattern.compile("\\bScriptDialect\\b|getDatabaseProductName|\\bofProductName\\b|\\bSqlBuilder\\b|\\bDatabase\\.");
+    private static final String PRODUCTS = "(?:H2|POSTGRESQL|ORACLE|DB2|SQLSERVER|MARIADB|MYSQL)";
+    private static final Pattern DBMS_SPECIFIC = Pattern.compile("\\bScriptDialect\\b|\\bLongTextType\\b|\\bgetTypeInfo\\b|\\bcase\\s+" + PRODUCTS + "\\b|\\bDatabase\\." + PRODUCTS + "\\b");
 
     @Test
-    @DisplayName("S-D0109-14: the sources of the migration package have no DBMS-specific branch: no ScriptDialect, no product name, no SqlBuilder")
+    @DisplayName("S-D0109-14: the sources of the migration package have no DBMS-specific branch (no ScriptDialect, no getTypeInfo choice, no case or constant of a product): the dialect is SqlBuilder's")
     void noDbmsSpecificBranch() throws IOException {
         assertThat(SOURCES.resolve("ScriptDialect.java")).as("ScriptDialect is not ported").doesNotExist();
+        assertThat(SOURCES.resolve("LongTextType.java")).as("the long text type is not chosen from the driver's type info").doesNotExist();
         List<String> offenders = new ArrayList<>();
         try (Stream<Path> found = Files.list(SOURCES)) {
             for (Path file : found.filter(path -> path.toString().endsWith(".java")).toList()) {

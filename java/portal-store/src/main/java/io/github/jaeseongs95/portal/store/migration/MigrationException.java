@@ -5,7 +5,7 @@ import java.util.Objects;
 
 /**
  * The schema cannot be migrated: a script that was applied has changed or is missing, the numbers are not consecutive, a script failed (or the runner that held its number
- * failed), the database's encoding is not UTF-8, or the driver reports no long text type. These are start-up failures, not refusals of a request, so this is not a
+ * failed), or the database's encoding is not UTF-8. These are start-up failures, not refusals of a request, so this is not a
  * {@code PortalException} and adds no code to the public contract (the same reasoning as {@code DatabaseProductException} and {@code ArtifactStoreCorruptedException}). The
  * message holds the {@link Reason} and fixed names (script files of the jar, numbers); the caught exception is the {@code cause} only.
  */

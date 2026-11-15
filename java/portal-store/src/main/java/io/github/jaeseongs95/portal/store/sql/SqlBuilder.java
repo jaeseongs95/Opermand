@@ -15,7 +15,7 @@ import io.github.jaeseongs95.portal.store.sql.DatabaseProductException.Reason;
  * Builds SQL for the actual business database, resolving its product on first use. Ported from the SqlBuilder of AGS (Agent Governance Suite), as of commit 1ad1b8e7
  * (path {@code java/ags-api/src/main/java/io/github/jaeseongs95/ags/service/database/SqlBuilder.java};
  * same owner, AGPL-3.0-or-later), with the same structure, API, products and limit syntax: the only difference is the exception type, {@link DatabaseProductException}
- * in place of AGS {@code StoreException}. It opens no transaction: it joins the connection of the caller's transaction or borrows one for the single product read.
+ * in place of AGS {@code StoreException}; {@link #generateLongText} is added in the shape of {@code generateLimit} (the AGS original has no such method at that commit). It opens no transaction: it joins the connection of the caller's transaction or borrows one for the single product read.
  */
 @Component
 public class SqlBuilder {
@@ -82,6 +82,29 @@ public class SqlBuilder {
             case H2, POSTGRESQL, ORACLE, DB2 -> "FETCH FIRST " + parameter + " ROWS ONLY";
             case SQLSERVER, MARIADB -> "OFFSET 0 ROWS FETCH NEXT " + parameter + " ROWS ONLY";
             case MYSQL -> "LIMIT " + parameter;
+        };
+    }
+
+    /**
+     * The declaration of a column that holds a long text (the migration scripts write it as {@code ${long_text}}): the product's own type, with the length written where leaving it out
+     * would give a smaller limit. Like {@link #generateLimit(Database, String)} it is a switch over every product without a default, so a product that is added fails the build here
+     * until its declaration is written.
+     */
+    public static String generateLongText(Database database) {
+        // PostgreSQL: https://www.postgresql.org/docs/current/datatype-character.html (text: unlimited length)
+        // H2: https://h2database.com/html/datatypes.html#character_large_object_type (CHARACTER LARGE OBJECT, up to 2,147,483,647 characters)
+        // Oracle: https://docs.oracle.com/en/database/oracle/oracle-database/23/sqlrf/Data-Types.html (CLOB: no length is given)
+        // Db2: https://www.ibm.com/docs/en/db2/12.1.x?topic=list-character-strings (CLOB(n), n up to 2,147,483,647; the default without n is 1M, so n is written)
+        // SQL Server: https://learn.microsoft.com/en-us/sql/t-sql/data-types/nchar-and-nvarchar-transact-sql (NVARCHAR(MAX), Unicode up to 2 GB; VARCHAR(MAX) depends on the collation's code page)
+        // MariaDB: https://mariadb.com/docs/server/reference/data-types/string-data-types/longtext
+        // MySQL: https://dev.mysql.com/doc/refman/8.4/en/blob.html (LONGTEXT)
+        return switch (database) {
+            case H2 -> "CHARACTER LARGE OBJECT(2147483647)";
+            case POSTGRESQL -> "TEXT";
+            case ORACLE -> "CLOB";
+            case DB2 -> "CLOB(2147483647)";
+            case SQLSERVER -> "NVARCHAR(MAX)";
+            case MARIADB, MYSQL -> "LONGTEXT";
         };
     }
 

@@ -31,18 +31,20 @@ import org.springframework.jdbc.support.SQLErrorCodeSQLExceptionTranslator;
 import org.springframework.jdbc.support.SQLExceptionTranslator;
 
 import io.github.jaeseongs95.portal.store.migration.MigrationException.Reason;
+import io.github.jaeseongs95.portal.store.sql.SqlBuilder;
 
 /**
  * The migration runner: the scripts of the jar ({@code V<number>__<description>.sql}) applied in number order, once each, with plain JDBC and Spring's script reader
  * ({@link ResourceDatabasePopulator}, which splits a script at its semicolons and knows quoted text and comments). What it needs from the database is the SQL standard: a history
- * table of ANSI types, {@code CREATE SCHEMA}, and the type name the driver reports for a long text ({@link LongTextType}). It keeps no list of DBMS and does not ask for the name of
- * one: the history table is plain ANSI SQL and a script is changed in one place only, {@code ${long_text}}.
+ * table of ANSI types, {@code CREATE SCHEMA}, and the declaration of a long text column, which the dialect of {@link SqlBuilder} gives for the product of the connection
+ * ({@link SqlBuilder#generateLongText}). The runner has no branch on the DBMS of its own: the history table is plain ANSI SQL and a script is changed in one place only,
+ * {@code ${long_text}}.
  *
  * <p><b>Why Flyway is not used.</b> The product runs on H2 by default and on the user's own JDBC driver (PostgreSQL, MariaDB, MySQL, Oracle, Db2, SQL Server); the differences of the
- * databases are absorbed by ANSI SQL and {@code SqlBuilder}. Flyway keeps a list of the databases it knows and, from version 10, ships the support of each database as a module of
+ * databases are absorbed by ANSI SQL and {@link SqlBuilder}. Flyway keeps a list of the databases it knows and, from version 10, ships the support of each database as a module of
  * its own ({@code flyway-database-postgresql}, {@code flyway-mysql} ...), so the product would carry a module for every database a user may choose, and a database without one
  * cannot be migrated: that ties the product to the vendors it lists. A runner of this size over the standard needs no such list. The same runner, with the same history table and
- * the same rules, is used by the other two products of the owner (common format, edition 2); this class follows the structure and the names of the AGS (Agent Governance Suite)
+ * the same rules, is used by the other two products of the owner (common format, edition 4); this class follows the structure and the names of the AGS (Agent Governance Suite)
  * migration runner, so what differs from it is the common-format changes and the replaced AGS-only types, listed in {@code docs/migration/migration-runner.md}. Version 3.0.0 keeps
  * no compatibility with the 2.x data or with a Flyway history: there is no code that reads {@code flyway_schema_history}.
  *
@@ -128,8 +130,11 @@ final class MigrationRunner {
             List<HistoryRow> history = readHistory(connection, phase);
             List<MigrationScript> pending = pending(scripts, history, phase);
             connection.commit();
-            String longText = LongTextType.choose(connection.getMetaData()).declaration();
-            SQLExceptionTranslator translator = new SQLErrorCodeSQLExceptionTranslator(dataSource);
+            // The product name is read once, from this connection: it picks the dialect of SqlBuilder, which declares the long text column, and it builds the error translator (a
+            // translator made from the data source would open a connection of its own for the same name).
+            String productName = connection.getMetaData().getDatabaseProductName();
+            String longText = SqlBuilder.generateLongText(SqlBuilder.ofProductName(productName));
+            SQLExceptionTranslator translator = new SQLErrorCodeSQLExceptionTranslator(productName);
             int applied = 0;
             for (MigrationScript script : pending) {
                 if (apply(connection, translator, phase, script, nextAttempt(history, script), longText)) {

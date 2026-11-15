@@ -103,7 +103,7 @@ class MigrationConcurrencyTest {
     /**
      * The sessions the database shows as waiting for the holder. H2 2.4.240 shows a row-lock wait of an UPDATE or DELETE as {@code SESSION_STATE = BLOCKED} with the holder's id in
      * {@code BLOCKER_ID}; the wait of an INSERT on a key that the holder has written and not committed is shown as a session that is {@code RUNNING} the INSERT, with no blocker (observed
-     * with a diagnostic program on 2.4.240, see docs/migration/migration-runner.md). So a session counts as waiting when the database says that it is blocked by the holder, or that
+     * on 2.4.240 by reading {@code INFORMATION_SCHEMA.SESSIONS} while the wait lasted; see docs/migration/migration-runner.md). So a session counts as waiting when the database says that it is blocked by the holder, or that
      * it is executing the claim INSERT while the holder has uncommitted changes: that INSERT cannot finish before the holder ends its transaction.
      */
     private long sessionsWaitingFor(long holderSession) {
