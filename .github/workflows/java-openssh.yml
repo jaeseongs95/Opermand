@@ -131,7 +131,7 @@ jobs:
               }
             }
             # The processes that could hold the server end (children of sshd and of its sessions), each time the set changes.
-            $procs = (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @('sshd', 'ssh-shellhost', 'sftp-server', 'cmd', 'conhost', 'PING', 'python') } |
+            $procs = (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @('sshd', 'ssh-shellhost', 'sftp-server') } |
               Sort-Object Id | ForEach-Object { '{0}={1}<{2}' -f $_.Id, $_.Name, $_.Parent.Id }) -join ' '
             if ($procs -ne $lastProcs) {
               Add-Content -LiteralPath $out -Value ((Get-Date).ToString('HH:mm:ss.fff') + '    processes (pid=name<parent): ' + $procs)
@@ -142,6 +142,23 @@ jobs:
           '@
           Start-Process -FilePath pwsh -ArgumentList @('-NoProfile', '-NonInteractive', '-File', $script) -WindowStyle Hidden
           Write-Host ('watching the idle port ' + $env:PORTAL_OPENSSH_IDLE_PORT + ' into ' + (Join-Path $env:RUNNER_TEMP 'idle-watch.log'))
+      # Diagnostic: S-D0038-01 alone, on a server that no other test has used yet. In the full run the server end of its connection stays open for the whole 30 s although the
+      # session processes of that connection are gone and the probe above (no command, no other test) sees the connection end in about 4 s. Whether this class passes alone
+      # tells whether what the other tests leave behind matters. It cannot fail the job; the full run below is the result.
+      - name: realOpenSshTest of the session pool class alone (diagnostic)
+        continue-on-error: true
+        shell: bash
+        working-directory: java
+        run: |
+          ./gradlew --no-daemon --console=plain :portal-ssh:realOpenSshTest --tests '*OpenSshSessionPoolTest' \
+            -Pportal.test.openssh.host=127.0.0.1 \
+            -Pportal.test.openssh.port="$PORTAL_OPENSSH_PORT" \
+            -Pportal.test.openssh.idle-port="$PORTAL_OPENSSH_IDLE_PORT" \
+            -Pportal.test.openssh.user="$PORTAL_OPENSSH_USER" \
+            -Pportal.test.openssh.key-file="$PORTAL_OPENSSH_KEY_FILE" \
+            -Pportal.test.openssh.known-hosts="$PORTAL_OPENSSH_KNOWN_HOSTS" \
+            -Pportal.test.openssh.platform=windows \
+            -Pportal.test.openssh.windows-python="$PORTAL_OPENSSH_WINDOWS_PYTHON"
       # Git Bash is on every Windows runner; the Gradle wrapper script of the repository is the POSIX one.
       - name: realOpenSshTest on Windows
         shell: bash
