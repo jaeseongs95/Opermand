@@ -24,7 +24,6 @@ import io.github.jaeseongs95.portal.app.remote.UploadResult;
 import io.github.jaeseongs95.portal.domain.error.TransferErrorCode;
 import io.github.jaeseongs95.portal.domain.operation.CleanupState;
 import io.github.jaeseongs95.portal.domain.path.RemotePath;
-import java.io.Closeable;
 import java.io.IOException;
 import java.time.Clock;
 import java.util.List;
@@ -349,6 +348,8 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
                 case SudoSftpChannels.Opening.NoServer noServer -> new Attempt.Refused(TransferErrorCode.INVALID_REQUEST);
                 case SudoSftpChannels.Opening.NotStarted notStarted -> new Attempt.Refused(TransferErrorCode.PERMISSION_DENIED);
                 case SudoSftpChannels.Opening.LookRefused denied -> new Attempt.Refused(denied.code());
+                // Not known whether the program started (no answer in time, the wait interrupted): not a refusal; a stop that fired meanwhile is the cause (S-D0013-18 to 21).
+                case SudoSftpChannels.Opening.StartUnconfirmed unconfirmed -> new Attempt.Unreachable(watch.fired().orElse(TransferFailureCause.CHANNEL_OPEN_FAILED));
                 // The session lives and the server refused a channel: the same cause as the plain path gives (the session is kept).
                 case SudoSftpChannels.Opening.ChannelRefused refusedChannel ->
                     new Attempt.Unreachable(watch.fired().orElse(TransferFailureCause.CHANNEL_OPEN_FAILED));
@@ -388,21 +389,13 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
                     return notDispatched.apply(unreachable.cause());
                 }
             }
-            watch.interruptWith(() -> closeQuietly(client));
+            watch.interruptWith(() -> ChannelClosing.quietly(client));
             try {
                 return work.run(client, lease, watch);
             } finally {
                 watch.disarm();
-                closeQuietly(client);
+                ChannelClosing.quietly(client);
             }
-        }
-    }
-
-    private static void closeQuietly(Closeable closeable) {
-        try {
-            closeable.close();
-        } catch (IOException e) {
-            LOG.debug("A channel was already closed", e);
         }
     }
 }

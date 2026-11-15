@@ -13,8 +13,6 @@ import java.util.Arrays;
 import java.util.Objects;
 import java.util.Optional;
 import org.apache.sshd.sftp.client.SftpClient;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
@@ -34,7 +32,6 @@ import org.springframework.stereotype.Component;
 @Component
 public class SftpDownloader {
 
-    private static final Logger LOG = LoggerFactory.getLogger(SftpDownloader.class);
     private static final int BLOCK_BYTES = 64 * 1024;
 
     private final RemotePathChecker checker;
@@ -91,13 +88,13 @@ public class SftpDownloader {
         StreamDigest digest = StreamDigest.sha256();
         DownloadResult ended;
         try {
-            // The stream is closed by closeQuietly and not by try-with-resources: an exception of close() would replace what the read came to, a verified Fetched
+            // The stream is closed by ChannelClosing.quietly and not by try-with-resources: an exception of close() would replace what the read came to, a verified Fetched
             // included (defect D-0013, case S-D0013-01). What the bytes are is known from the read itself and from the second look at the file below.
             InputStream in = client.read(location.file());
             try {
                 ended = pump(in, watch, announced, sink, digest);
             } finally {
-                closeQuietly(in);
+                ChannelClosing.quietly(in);
             }
         } catch (IOException e) {
             return failedReading(lease, watch, e);
@@ -150,14 +147,6 @@ public class SftpDownloader {
             }
         }
         return null;
-    }
-
-    private static void closeQuietly(InputStream in) {
-        try {
-            in.close();
-        } catch (IOException e) {
-            LOG.debug("The read stream could not be closed cleanly; the result of the read stands", e);
-        }
     }
 
     private DownloadResult failedReading(SessionLease lease, TransferWatch watch, IOException cause) {

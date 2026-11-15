@@ -12,7 +12,6 @@ import io.github.jaeseongs95.portal.domain.id.Digest;
 import io.github.jaeseongs95.portal.domain.operation.CleanupState;
 import io.github.jaeseongs95.portal.domain.operation.OverwriteMode;
 import io.github.jaeseongs95.portal.domain.path.WindowsRemotePath;
-import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -253,7 +252,7 @@ public class SftpUploader {
         } catch (IOException e) {
             return new Copy.RemoteFailure(e);
         } finally {
-            closeQuietly(out);
+            ChannelClosing.quietly(out);
         }
     }
 
@@ -337,18 +336,7 @@ public class SftpUploader {
         try {
             return replacer.remove(fresh, tempPath);
         } finally {
-            closeQuietly(fresh);
-        }
-    }
-
-    private static void closeQuietly(Closeable closeable) {
-        if (closeable == null) {
-            return;
-        }
-        try {
-            closeable.close();
-        } catch (IOException e) {
-            LOG.debug("A channel was already closed", e);
+            ChannelClosing.quietly(fresh);
         }
     }
 }
