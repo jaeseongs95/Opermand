@@ -56,8 +56,10 @@ import io.github.jaeseongs95.portal.store.sql.SqlBuilder;
  *
  * <p><b>Two runners at once</b> do not apply a script twice and no runner waits by itself (no sleep, no poll, no retry): the first statement of an attempt writes its history row
  * (the claim, as FAILED) in the transaction that applies the script, and {@code (version, attempt)} is the primary key, so the second runner's insert waits in the database for the
- * first one's commit and then gets a {@link DuplicateKeyException}. It reads the history once more: the number is SUCCEEDED with the same digest (the first runner applied it), so
- * it goes on; otherwise the first runner failed, and it stops with {@code MIGRATION_FAILED} (the next start tries again). Each script is one transaction; a database whose DDL is not
+ * first one's commit and then gets a {@link DuplicateKeyException}. The attempt of a script is taken from the same read of the history that decided which scripts are pending (the
+ * highest attempt of the number there, plus one), not read again before the script is applied, so a runner whose history is out of date meets the same key and not the next one.
+ * It reads the history once more: the number is SUCCEEDED with the same digest (the first runner applied it), so it goes on; otherwise the first runner failed or is still applying
+ * it, and it stops with {@code MIGRATION_FAILED} (the next start tries again). Each script is one transaction; a database whose DDL is not
  * transactional (MariaDB, MySQL, and H2 for DDL) keeps what a script did before it failed and commits the claim with the script's first DDL statement, so a half-applied script is never
  * shown as SUCCEEDED: its row says FAILED until the last statement has run.
  *
@@ -124,13 +126,15 @@ final class MigrationRunner {
             verifyEncoding(connection);
             ScriptDialect dialect = ScriptDialect.of(SqlBuilder.ofProductName(connection.getMetaData().getDatabaseProductName()));
             ensureHistory(connection, phase, dialect);
-            List<MigrationScript> pending = pending(scripts, readHistory(connection, phase), phase);
+            // The history is read once: it decides which scripts are pending and also the attempt of each, so that a peer that committed a number after this read is met as a duplicate key.
+            List<HistoryRow> history = readHistory(connection, phase);
+            List<MigrationScript> pending = pending(scripts, history, phase);
             connection.commit();
             String longText = LongTextType.choose(connection.getMetaData()).declaration();
             SQLExceptionTranslator translator = new SQLErrorCodeSQLExceptionTranslator(dataSource);
             int applied = 0;
             for (MigrationScript script : pending) {
-                if (apply(connection, translator, phase, script, longText, dialect)) {
+                if (apply(connection, translator, phase, script, nextAttempt(history, script), longText, dialect)) {
                     applied++;
                 }
             }
@@ -300,8 +304,8 @@ final class MigrationRunner {
      * last statement of the transaction (the row of this attempt only). A database whose DDL is not transactional (MariaDB, MySQL, H2: each DDL statement commits what came before it, the
      * claim included) so never shows a half-applied script as SUCCEEDED: what it has committed of it says FAILED until the whole script has run.
      */
-    private boolean apply(Connection connection, SQLExceptionTranslator translator, Phase phase, MigrationScript script, String longText, ScriptDialect dialect) throws SQLException {
-        int attempt = nextAttempt(connection, phase, script);
+    private boolean apply(Connection connection, SQLExceptionTranslator translator, Phase phase, MigrationScript script, int attempt, String longText, ScriptDialect dialect)
+            throws SQLException {
         try {
             record(connection, translator, phase, script, attempt, Outcome.FAILED);
             ResourceDatabasePopulator populator = new ResourceDatabasePopulator(false, false, StandardCharsets.UTF_8.name(),
@@ -321,9 +325,13 @@ final class MigrationRunner {
         }
     }
 
-    /** The number of the next attempt at this script: one more than the highest attempt the history shows for the number. */
-    private static int nextAttempt(Connection connection, Phase phase, MigrationScript script) throws SQLException {
-        return Math.toIntExact(queryLong(connection, "SELECT COALESCE(MAX(attempt), 0) + 1 FROM " + phase.table() + " WHERE version = ?", script.version()));
+    /**
+     * The number of the next attempt at this script: one more than the highest attempt of the number in the history that decided which scripts are pending (1 when it has none). It is
+     * not read again just before the script is applied: a peer that committed an attempt in between must be met as a duplicate key of the same {@code (version, attempt)}, which
+     * {@link #settleAfterPeer} answers, and not be passed by taking the next attempt and applying the script a second time.
+     */
+    private static int nextAttempt(List<HistoryRow> history, MigrationScript script) {
+        return history.stream().filter(row -> row.version() == script.version()).mapToInt(HistoryRow::attempt).max().orElse(0) + 1;
     }
 
     /**
@@ -342,7 +350,8 @@ final class MigrationRunner {
                 return false;
             }
         }
-        throw new MigrationException(Reason.MIGRATION_FAILED, "Another runner took the migration " + script.file() + " (" + phase.location() + ") and did not apply it.");
+        throw new MigrationException(Reason.MIGRATION_FAILED, "Another runner took the migration " + script.file() + " (" + phase.location()
+                + ") and it is not applied: that runner failed, or is still applying it. Start again after it has finished.");
     }
 
     /** Writes the row of an attempt. A row with that key already there is a {@link DuplicateKeyException} (Spring translates the driver's error by the database's own error codes). */
