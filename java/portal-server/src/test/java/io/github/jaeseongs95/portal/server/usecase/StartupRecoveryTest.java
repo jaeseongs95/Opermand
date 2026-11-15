@@ -15,6 +15,7 @@ import io.github.jaeseongs95.portal.app.journal.ClaimResult;
 import io.github.jaeseongs95.portal.app.journal.ClaimStore;
 import io.github.jaeseongs95.portal.app.journal.OperationJournal;
 import io.github.jaeseongs95.portal.app.recovery.StartupRecovery;
+import io.github.jaeseongs95.portal.domain.id.OperationId;
 import io.github.jaeseongs95.portal.domain.operation.ExecutionOutcome;
 import io.github.jaeseongs95.portal.domain.operation.NewOperation;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
@@ -98,7 +99,10 @@ class StartupRecoveryTest {
 
         List<Operation> changed = recovery.recover();
 
-        assertThat(changed.stream().map(Operation::id).toList()).containsExactlyInAnyOrder(wasRunning.id(), wasPending.id());
+        // The journal is shared with the other use case tests, so an operation that one of them left in flight is rightly recovered too: assert what must and must not be in it.
+        List<OperationId> changedIds = changed.stream().map(Operation::id).toList();
+        assertThat(changedIds).contains(wasRunning.id(), wasPending.id());
+        assertThat(changedIds).doesNotContain(wasQueued.id(), wasCompleted.id());
         Operation unknown = kit.find(wasRunning.id());
         assertThat(unknown.state()).isEqualTo(OperationState.UNKNOWN);
         assertThat(unknown.recovery()).isEqualTo(RecoveryReason.BRIDGE_RESTART);
