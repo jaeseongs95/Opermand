@@ -2,6 +2,7 @@ package io.github.jaeseongs95.portal.app.operation;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Optional;
 
 import org.springframework.stereotype.Service;
 
@@ -20,6 +21,7 @@ import io.github.jaeseongs95.portal.domain.error.DispatchStage;
 import io.github.jaeseongs95.portal.domain.error.RequestErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
+import io.github.jaeseongs95.portal.domain.id.OperationIdGenerator;
 import io.github.jaeseongs95.portal.domain.operation.Admission;
 import io.github.jaeseongs95.portal.domain.operation.NewOperation;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
@@ -51,6 +53,7 @@ public class OperationIntake {
     private final CurrentTargets targets;
     private final ApprovalPolicy approvalPolicy;
     private final ApprovalJudge judge;
+    private final OperationIdGenerator ids;
     private final OperationScheduler scheduler;
     private final ConcurrencyLimits limits;
     private final AdmissionGate gate;
@@ -60,13 +63,14 @@ public class OperationIntake {
     private final Clock clock;
 
     public OperationIntake(OperationJournal journal, OperationQueueView queueView, MaintenanceView maintenance, CurrentTargets targets, ApprovalPolicy approvalPolicy,
-                           ApprovalJudge judge, OperationScheduler scheduler, ConcurrencyLimits limits, AdmissionGate gate, AuditGate audit, OutcomeAudit outcomes, OperationWrites writes, Clock clock) {
+                           ApprovalJudge judge, OperationIdGenerator ids, OperationScheduler scheduler, ConcurrencyLimits limits, AdmissionGate gate, AuditGate audit, OutcomeAudit outcomes, OperationWrites writes, Clock clock) {
         this.journal = journal;
         this.queueView = queueView;
         this.maintenance = maintenance;
         this.targets = targets;
         this.approvalPolicy = approvalPolicy;
         this.judge = judge;
+        this.ids = ids;
         this.scheduler = scheduler;
         this.limits = limits;
         this.gate = gate;
@@ -77,49 +81,69 @@ public class OperationIntake {
     }
 
     /**
-     * Accepts the operation, or returns the one the same request key and contract was accepted as earlier (idempotent). The target must still be at the revision the
-     * request holds; maintenance and a full request store refuse before anything is written, each with its own code. The operation is judged by the owner's rule and
-     * stored once, in the state the judgement gives: {@code queued} (the audit lines are {@code submitted}, then {@code queued}), {@code denied} ({@code submitted}, then
-     * {@code denied}) or {@code pending} ({@code submitted}). The audit lines of a new operation are written after the row, because its id is made by the journal.
+     * Accepts the operation, or returns the one the same request key and contract was accepted as earlier (idempotent, answered before any capacity is looked at). The
+     * target must still be at the revision the request holds; maintenance and a full request store refuse before anything is written, each with its own code. The operation
+     * is judged by the owner's rule and stored once, in the state the judgement gives: {@code queued}, {@code denied} or {@code pending}.
+     *
+     * <p>The audit comes first (decision D3-14, as for the owner's approval): the id and the time are made here, the lines {@code submitted} and then {@code execution-queued}
+     * or {@code denied} are written, and only then is the row stored, so a row that a dispatcher can claim never exists without its audit, and an audit that does not become
+     * durable stores nothing. When the row is not stored after its audit (the room in the queue was gone at the moment of the insert, a lost race), one more line says so, so
+     * the lines of an operation that does not exist have an end.
      *
      * @throws RequestRefusedException {@code TARGET_UNAVAILABLE}, {@code TARGET_REVISION_CONFLICT}, {@code MAINTENANCE_ACTIVE}, {@code REQUEST_CAPACITY_EXCEEDED}, the code
-     *     of the queue limit that is reached (for a judgement that queues), {@code OPERATION_KEY_CONFLICT} (the key was used with another contract)
-     * @throws DispatchRefusedException the audit of the queueing did not become durable ({@link DispatchStage#START_AUDIT}); the operation is stored as cancelled
+     *     of the queue limit that is reached (for a judgement that queues, when the queue is full), {@code OPERATION_KEY_CONFLICT} (the key was used with another contract),
+     *     {@code OPERATION_VERSION_CONFLICT} (two operations took the same place in the queue; decide again)
+     * @throws DispatchRefusedException the audit did not become durable ({@link DispatchStage#DECISION_AUDIT}); nothing is stored
      */
     public Operation submit(NewOperation spec) {
         ResolvedTarget target = targets.requireAt(spec.targetId(), spec.targetRevision());
+        Optional<Operation> known = journal.findByRequestKey(spec.requestKey());
+        if (known.isPresent()) {
+            if (!known.orElseThrow().hasContract(spec.contractDigest())) {
+                throw new RequestRefusedException(RequestErrorCode.OPERATION_KEY_CONFLICT);
+            }
+            return known.orElseThrow();
+        }
         gate.require(approvalPolicy.admit(maintenance.state(), queueView.counts()));
         Admission admission = judge.judge(spec, target);
-        if (admission instanceof Admission.Queue) {
-            gate.require(scheduler.admitToQueue(spec.targetId(), queueView.schedulingView(limits, clock.instant(), limits.queueCapacity().value())));
+        Runnable room = admission instanceof Admission.Queue ? () -> requireRoomInQueue(spec) : () -> { };
+        room.run();
+        OperationId id = ids.next();
+        Instant at = clock.instant();
+        auditBeforeStoring(id, spec, admission);
+        JournalInsert inserted;
+        try {
+            inserted = journal.accept(spec, admission, id, at, room);
+        } catch (RuntimeException e) {
+            audit.appendAfter(new AuditEvent(AuditAction.FAILED, id, "not stored: " + (e instanceof RequestRefusedException refused ? refused.code().name() : e.getClass().getSimpleName())));
+            throw e;
         }
-        return switch (journal.accept(spec, admission)) {
-            case JournalInsert.Existing existing -> existing.operation();
-            case JournalInsert.Inserted inserted -> {
-                Operation stored = inserted.operation();
-                outcomes.recordEvent(stored, new AuditEvent(AuditAction.SUBMITTED, stored.id(), "kind " + stored.kind().wire()));
-                switch (admission) {
-                    case Admission.Queue queue -> {
-                        // Fail-closed (decision D3-14): the audit of the queueing must be durable before the dispatcher is woken. An operation that cannot be audited is
-                        // cancelled, so it cannot start later, and the refusal is the caller's.
-                        try {
-                            audit.appendBefore(DispatchStage.START_AUDIT, new AuditEvent(AuditAction.EXECUTION_QUEUED, stored.id(), "authority " + queue.authority().mode().wire()));
-                        } catch (DispatchRefusedException e) {
-                            Operation current = journal.find(stored.id()).orElse(stored);
-                            outcomes.recordOutcome(writes.store(current.requestCancel(clock.instant()), current.version()));
-                            throw e;
-                        }
-                    }
-                    case Admission.Deny deny -> outcomes.recordOutcome(journal.find(stored.id()).orElse(stored));
-                    case Admission.Review review -> {
-                        // Waits for the owner; nothing more to audit.
-                    }
-                }
-                Operation current = journal.find(stored.id()).orElse(stored);
-                writes.announce(current);
-                yield current;
+        return switch (inserted) {
+            case JournalInsert.Existing existing -> {
+                audit.appendAfter(new AuditEvent(AuditAction.FAILED, id, "not stored: the key was stored by another request"));
+                yield existing.operation();
+            }
+            case JournalInsert.Inserted stored -> {
+                writes.announce(stored.operation());
+                yield stored.operation();
             }
         };
+    }
+
+    private void auditBeforeStoring(OperationId id, NewOperation spec, Admission admission) {
+        audit.appendBefore(DispatchStage.DECISION_AUDIT, new AuditEvent(AuditAction.SUBMITTED, id, "kind " + spec.kind().wire()));
+        switch (admission) {
+            case Admission.Queue queue ->
+                audit.appendBefore(DispatchStage.DECISION_AUDIT, new AuditEvent(AuditAction.EXECUTION_QUEUED, id, "authority " + queue.authority().mode().wire()));
+            case Admission.Deny deny -> audit.appendBefore(DispatchStage.DECISION_AUDIT, new AuditEvent(AuditAction.DENIED, id, ""));
+            case Admission.Review review -> {
+                // Waits for the owner; nothing more to audit.
+            }
+        }
+    }
+
+    private void requireRoomInQueue(NewOperation spec) {
+        gate.require(scheduler.admitToQueue(spec.targetId(), queueView.schedulingView(limits, clock.instant(), limits.queueCapacity().value())));
     }
 
     /**

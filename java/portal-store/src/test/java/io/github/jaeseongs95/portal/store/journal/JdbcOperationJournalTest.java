@@ -280,6 +280,32 @@ class JdbcOperationJournalTest {
         }
     }
 
+    @Test
+    @DisplayName("S-D0119-11 D3 the check of the insert runs before the row and what it throws stops the insert; a known key is answered without running it (D4)")
+    void theCheckOfTheInsertStopsTheInsert() {
+        NewOperation spec = fx.command("check-first", "alpha", "touch a", new ConflictKey.None());
+        io.github.jaeseongs95.portal.domain.operation.Admission queued = io.github.jaeseongs95.portal.domain.operation.Admission.of(
+            io.github.jaeseongs95.portal.domain.operation.DecisionReason.COMMAND_SET, io.github.jaeseongs95.portal.domain.operation.OperationKind.COMMAND, 0L);
+        long before = operations.count();
+
+        assertThatThrownBy(() -> journal.accept(spec, queued, ids.next(), clock.instant(), () -> {
+            throw new RequestRefusedException(OperationErrorCode.OPERATION_QUEUE_FULL);
+        })).isInstanceOfSatisfying(RequestRefusedException.class, e -> assertThat(e.code()).isEqualTo(OperationErrorCode.OPERATION_QUEUE_FULL));
+        assertThat(operations.count()).as("nothing was stored").isEqualTo(before);
+        assertThat(journal.findByRequestKey(spec.requestKey())).isEmpty();
+
+        JournalInsert inserted = journal.accept(spec, queued, ids.next(), clock.instant(), () -> { });
+        assertThat(inserted).isInstanceOf(JournalInsert.Inserted.class);
+        assertThat(inserted.operation().state()).isEqualTo(OperationState.QUEUED);
+        assertThat(jdbc.queryForObject("SELECT ready_sequence FROM operation WHERE request_key = ?", Long.class, spec.requestKey().value())).as("a queued insert takes its place").isNotNull();
+
+        JournalInsert again = journal.accept(spec, queued, ids.next(), clock.instant(), () -> {
+            throw new AssertionError("a known key does not run the check");
+        });
+        assertThat(again).isInstanceOf(JournalInsert.Existing.class);
+        assertThat(again.operation().id()).isEqualTo(inserted.operation().id());
+    }
+
     private Operation running(String key) {
         Operation queued = fx.queued(journal, fx.command(key, "alpha", "echo " + key, new ConflictKey.None()));
         ClaimResult claimed = claims.claim(queued.id(), queued.version(), ConcurrencyLimits.defaults(), JournalFixture.NOW.plusSeconds(2));

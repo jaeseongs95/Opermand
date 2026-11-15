@@ -189,7 +189,9 @@ class RuleIntakeTest {
             for (Operation running : held) {
                 kit.await(running.id(), operation -> operation.state() == OperationState.RUNNING);
             }
-            for (int number = 0; number < 32; number++) {
+            NewOperation firstQueued = kit.command("touch hold queued 0");
+            held.add(intake.submit(firstQueued));
+            for (int number = 1; number < 32; number++) {
                 held.add(intake.submit(kit.command("touch hold queued " + number)));
             }
             NewOperation overflow = kit.command("touch hold overflow");
@@ -197,6 +199,7 @@ class RuleIntakeTest {
             assertThatThrownBy(() -> intake.submit(overflow)).isInstanceOfSatisfying(RequestRefusedException.class,
                 e -> assertThat(e.code()).isEqualTo(OperationErrorCode.OPERATION_QUEUE_FULL));
             assertThat(journal.findByRequestKey(overflow.requestKey())).as("nothing was stored, not even a failed row").isEmpty();
+            assertThat(intake.submit(firstQueued).id()).as("S-D0119-11 D4 the same key and contract is answered before the room in the queue is looked at").isEqualTo(held.get(2).id());
 
             release.countDown();
             for (Operation operation : held) {
@@ -238,5 +241,98 @@ class RuleIntakeTest {
             e -> assertThat(e.code()).isEqualTo(RequestErrorCode.READ_COMMAND_NOT_STARTED));
         assertThat(journal.findByRequestKey(key).orElseThrow().state()).isEqualTo(OperationState.DENIED);
         assertThat(executor.requestsSent()).isZero();
+    }
+
+    @Test
+    @DisplayName("S-D0119-16 the audit of a new operation is durable before its row exists: submitted and then execution-queued or denied are written while the journal does not yet hold it")
+    void theAuditComesBeforeTheRow() throws Exception {
+        rule(List.of("touch"), List.of("rm"));
+        java.util.Map<AuditAction, Boolean> rowThere = new java.util.concurrent.ConcurrentHashMap<>();
+        audit.whenWritten(event -> {
+            if (event.action() == AuditAction.SUBMITTED || event.action() == AuditAction.EXECUTION_QUEUED || event.action() == AuditAction.DENIED) {
+                rowThere.put(event.action(), journal.find(event.operationId()).isPresent());
+            }
+        });
+
+        Operation queued = intake.submit(kit.command("touch audited-first"));
+        assertThat(rowThere).containsEntry(AuditAction.SUBMITTED, false).containsEntry(AuditAction.EXECUTION_QUEUED, false);
+        kit.awaitTerminal(queued.id());
+
+        rowThere.clear();
+        Operation denied = intake.submit(kit.command("rm audited-first"));
+        assertThat(denied.state()).isEqualTo(OperationState.DENIED);
+        assertThat(rowThere).containsEntry(AuditAction.SUBMITTED, false).containsEntry(AuditAction.DENIED, false);
+
+        rowThere.clear();
+        Operation pending = intake.submit(kit.command("uname audited-first"));
+        assertThat(pending.state()).isEqualTo(OperationState.PENDING);
+        assertThat(rowThere).containsEntry(AuditAction.SUBMITTED, false);
+        intake.deny(pending.id());
+    }
+
+    @Test
+    @DisplayName("S-D0119-16 an audit that does not become durable stores nothing and refuses at DECISION_AUDIT, on every path: queued, denied and pending")
+    void anAuditThatFailsStoresNothing() {
+        rule(List.of("touch"), List.of("rm"));
+        record Case(AuditAction failing, String command) {
+        }
+        for (Case attempt : List.of(new Case(AuditAction.SUBMITTED, "touch no-audit"), new Case(AuditAction.EXECUTION_QUEUED, "touch no-queued-audit"),
+            new Case(AuditAction.DENIED, "rm no-denied-audit"), new Case(AuditAction.SUBMITTED, "uname no-review-audit"))) {
+            audit.failNothing();
+            audit.failOn(attempt.failing());
+            NewOperation spec = kit.command(attempt.command());
+
+            assertThatThrownBy(() -> intake.submit(spec)).as(attempt.command()).isInstanceOfSatisfying(DispatchRefusedException.class, e -> {
+                assertThat(e.failure()).isEqualTo(DispatchFailure.stepFailed(DispatchStage.DECISION_AUDIT, DispatchReason.AUDIT_FAILED));
+                assertThat(e.getMessage()).doesNotContain("SECRET-AUDIT-DETAIL");
+            });
+            assertThat(journal.findByRequestKey(spec.requestKey())).as(attempt.command()).isEmpty();
+        }
+        assertThat(executor.requestsSent()).isZero();
+    }
+
+    @Test
+    @DisplayName("S-D0119-16 an audit that was written for a row that could not be stored gets one more line that ends it: the room in the queue was gone at the moment of the insert")
+    void aRowThatIsNotStoredAfterItsAuditEndsItsLines() throws Exception {
+        rule(List.of("touch"), List.of());
+        CountDownLatch release = new CountDownLatch(1);
+        executor.when("hold", executor.blocksUntil(release));
+        List<Operation> held = new ArrayList<>();
+        try {
+            for (int number = 0; number < 2; number++) {
+                held.add(intake.submit(kit.command("touch hold running " + number)));
+            }
+            for (Operation running : held) {
+                kit.await(running.id(), operation -> operation.state() == OperationState.RUNNING);
+            }
+            for (int number = 0; number < 30; number++) {
+                held.add(intake.submit(kit.command("touch hold queued " + number)));
+            }
+            NewOperation late = kit.command("touch hold late");
+            java.util.concurrent.atomic.AtomicReference<io.github.jaeseongs95.portal.domain.id.OperationId> orphan = new java.util.concurrent.atomic.AtomicReference<>();
+            java.util.concurrent.atomic.AtomicBoolean filled = new java.util.concurrent.atomic.AtomicBoolean();
+            // The room was there when the intake looked (30 of 32); while its audit is written, two other operations take it.
+            audit.whenWritten(event -> {
+                if (event.action() == AuditAction.EXECUTION_QUEUED && filled.compareAndSet(false, true)) {
+                    orphan.set(event.operationId());
+                    for (int number = 0; number < 2; number++) {
+                        held.add(intake.submit(kit.command("touch hold filler " + number)));
+                    }
+                }
+            });
+
+            assertThatThrownBy(() -> intake.submit(late)).isInstanceOfSatisfying(RequestRefusedException.class,
+                e -> assertThat(e.code()).isEqualTo(OperationErrorCode.OPERATION_QUEUE_FULL));
+
+            assertThat(journal.findByRequestKey(late.requestKey())).isEmpty();
+            assertThat(audit.actionsOf(orphan.get())).as("the lines of the operation that was never stored have an end")
+                .containsExactly(AuditAction.SUBMITTED, AuditAction.EXECUTION_QUEUED, AuditAction.FAILED);
+        } finally {
+            release.countDown();
+            audit.failNothing();
+        }
+        for (Operation operation : held) {
+            kit.awaitTerminal(operation.id());
+        }
     }
 }
