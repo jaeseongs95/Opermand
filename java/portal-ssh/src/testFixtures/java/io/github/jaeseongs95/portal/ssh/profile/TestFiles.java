@@ -203,7 +203,7 @@ public final class TestFiles {
         } catch (IOException e) {
             blocked = true;
         }
-        Assumptions.assumeTrue(blocked, "this account bypasses the delete rights of an access control list (an elevated administrator token), so no removal can be made to fail for it");
+        Assumptions.assumeTrue(blocked, "this account could delete the probe, so no removal can be made to fail for it here");
     }
 
     /** Takes the denial of {@link #forbidChangingTheListOfWhatIsMadeIn} away again: the list of the folder is full control for the owner, inheritable. What was made in it before keeps what it inherited. */
