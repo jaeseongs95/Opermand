@@ -6,10 +6,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CyclicBarrier;
@@ -94,6 +96,26 @@ class PrivateStoragesTest {
 
         assertThatCode(() -> storages.requireRegularFile(file)).doesNotThrowAnyException();
         assertThatCode(() -> storages.requireFolder(directory)).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("S-D0117-11: a file is created only with CREATE_NEW (CREATE alone is refused and creates nothing), and an existing file that is opened with CREATE_NEW is not taken for created: it stays as it is, with its rights")
+    void theFileSystemDecidesWhetherTheCallCreatedTheFile(@TempDir Path directory) throws IOException {
+        PrivateStorages storages = TestStorage.rules();
+        Path file = directory.resolve("payload.part");
+
+        assertThatThrownBy(() -> storages.open(file, Set.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE))).isInstanceOf(IllegalArgumentException.class);
+        assertThat(file).doesNotExist();
+
+        Files.writeString(file, "kept");
+        TestStorage.openUp(file);
+        assertThatThrownBy(() -> storages.open(file, Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE))).isInstanceOf(FileAlreadyExistsException.class);
+
+        assertThat(Files.readString(file)).isEqualTo("kept");
+        assertThatThrownBy(() -> TestStorage.assertOwnerOnly(file)).as("the rights that others have are not taken away, as nobody created the file").isInstanceOf(AssertionError.class);
+        try (FileChannel channel = storages.open(file, Set.of(StandardOpenOption.WRITE, StandardOpenOption.APPEND))) {
+            assertThat(channel.size()).isEqualTo(4);
+        }
     }
 
     @Test

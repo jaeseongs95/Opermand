@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.AclEntry;
 import java.nio.file.attribute.AclEntryFlag;
 import java.nio.file.attribute.AclEntryPermission;
@@ -88,9 +89,12 @@ public final class AclPrivateStorage implements PrivateStorage {
 
     @Override
     public FileChannel open(Path file, Set<? extends OpenOption> options) throws IOException {
-        boolean existed = Files.exists(file, LinkOption.NOFOLLOW_LINKS);
+        if (options.contains(StandardOpenOption.CREATE)) {
+            throw new IllegalArgumentException("A file is created with CREATE_NEW, so that the file system decides whether this call created it: " + options);
+        }
+        boolean created = options.contains(StandardOpenOption.CREATE_NEW);
         FileChannel channel = FileChannel.open(file, options);
-        if (existed) {
+        if (!created) {
             return channel;
         }
         try {

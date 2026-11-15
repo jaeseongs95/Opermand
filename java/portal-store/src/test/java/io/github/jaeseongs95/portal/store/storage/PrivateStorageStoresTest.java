@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
+
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -12,7 +13,12 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -178,6 +184,43 @@ class PrivateStorageStoresTest {
 
         String text = Files.readString(created, StandardCharsets.UTF_8);
         assertThat(text).contains("\"note\":\"kept\"").contains("\"note\":\"and more\"");
+    }
+
+    @Test
+    @DisplayName("S-D0117-11: several first opens of the same new output file and of the same new audit file at the same moment all succeed; the file system decides who created each, and each file is owner only")
+    void severalFirstOpensOfOneFileAllSucceed(@TempDir Path directory) throws Exception {
+        OutputFiles files = new OutputFiles(new StorageRoots(directory, directory.resolve("outputs")), TestStorage.rules());
+        int threads = 8;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            for (int round = 0; round < 15; round++) {
+                Path output = files.path(new OutputId(Integer.toHexString(round).repeat(48).substring(0, 48)), OutputFiles.PayloadKind.STREAM);
+                Path audit = directory.resolve("audit-" + round).resolve("audit.jsonl");
+                CyclicBarrier together = new CyclicBarrier(threads);
+                List<Future<Void>> results = new ArrayList<>();
+                for (int thread = 0; thread < threads; thread++) {
+                    results.add(pool.submit(() -> {
+                        together.await();
+                        try (FileChannel channel = files.openAppend(output)) {
+                            channel.write(java.nio.ByteBuffer.wrap(new byte[] {1}));
+                        }
+                        try (JsonlAuditLog log = new JsonlAuditLog(new AuditFileLocation(audit), CLOCK, mapper, TestStorage.rules())) {
+                            log.append(new AuditEvent(AuditAction.SUBMITTED, OPERATION, "x"));
+                        }
+                        return null;
+                    }));
+                }
+                for (Future<Void> result : results) {
+                    result.get(); // an ExecutionException here is an open that failed
+                }
+                assertThat(Files.size(output)).isEqualTo(threads);
+                TestStorage.assertOwnerOnly(output);
+                TestStorage.assertOwnerOnly(audit);
+                assertThat(Files.readAllLines(audit)).hasSize(threads);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     @Test

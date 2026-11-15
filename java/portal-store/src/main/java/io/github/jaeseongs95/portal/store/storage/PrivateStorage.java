@@ -36,7 +36,10 @@ public interface PrivateStorage {
     void createFolder(Path folder) throws IOException;
 
     /**
-     * Opens a file like {@link FileChannel#open(Path, Set, java.nio.file.attribute.FileAttribute[])}; a file that this call creates is private to its owner (when it
+     * Opens a file like {@link FileChannel#open(Path, Set, java.nio.file.attribute.FileAttribute[])}. A file is created only with {@code CREATE_NEW} ({@code CREATE} without it
+     * is refused with an {@link IllegalArgumentException}), so that the file system, not a check made before the call, decides whether this call created the file: a caller
+     * that may meet an existing file opens with {@code CREATE_NEW} first and, when that throws {@link java.nio.file.FileAlreadyExistsException}, opens the existing file without
+     * it. A file that this call creates is private to its owner (when it
      * cannot be made private, or its rights are not what was asked, it is removed again, or named in the message when it cannot be removed, and {@link UnsafeStorageException} is thrown). A file that exists is opened as it is, a link is followed.
      */
     FileChannel open(Path file, Set<? extends OpenOption> options) throws IOException;

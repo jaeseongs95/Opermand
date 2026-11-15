@@ -108,12 +108,12 @@ public class OutputFiles {
 
     /** Opens the file for appending (created owner only when it is new); an existing file must be a regular file. */
     public FileChannel openAppend(Path file) {
-        return open(file, Set.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.APPEND));
+        return open(file, Set.of(StandardOpenOption.WRITE, StandardOpenOption.APPEND), Set.of(StandardOpenOption.WRITE, StandardOpenOption.APPEND));
     }
 
     /** Opens the file for writing from the start, dropping what an earlier crash left in it. */
     public FileChannel openFresh(Path file) {
-        return open(file, Set.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING));
+        return open(file, Set.of(StandardOpenOption.WRITE), Set.of(StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING));
     }
 
     /** Opens a regular file for reading. */
@@ -205,13 +205,24 @@ public class OutputFiles {
         return ids;
     }
 
-    private FileChannel open(Path file, Set<? extends OpenOption> options) {
+    /**
+     * Opens the file for writing. The file system decides whether this call creates it: the first try is with {@code CREATE_NEW}; when the file is already there that throws
+     * {@link java.nio.file.FileAlreadyExistsException} (or, for a folder on Windows, an access denial), the path must be a regular file, and it is opened as it is with {@code existingOptions}.
+     */
+    private FileChannel open(Path file, Set<? extends OpenOption> newOptions, Set<? extends OpenOption> existingOptions) {
         try {
-            if (exists(file)) {
-                requireRegular(file);
-            }
             directory();
-            return storages.open(file, options);
+            Set<OpenOption> creating = new HashSet<>(newOptions);
+            creating.add(StandardOpenOption.CREATE_NEW);
+            try {
+                return storages.open(file, creating);
+            } catch (IOException notCreated) { // FileAlreadyExistsException, and on Windows an AccessDeniedException for a folder
+                if (!exists(file)) {
+                    throw notCreated;
+                }
+                requireRegular(file);
+                return storages.open(file, existingOptions);
+            }
         } catch (UnsafeStorageException e) {
             throw unsafe(file, e);
         } catch (IOException e) {
