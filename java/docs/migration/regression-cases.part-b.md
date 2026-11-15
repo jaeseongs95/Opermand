@@ -839,6 +839,13 @@
 | RC-B-946 | 동시 구성 변경은 감지해 maintenance를 유지하고 실패 | update 도중 환경 파일에 줄 추가(env-change 주입) | 종료 코드 0이 아님, stderr에 `Compose configuration changed; maintenance retained.`, 서비스 health maintenance `true` | 종료 코드, stderr 문구, health | packaging | test/compose-update-ci.sh:261, test/compose-update-ci.sh:265 | D-0047(후보) |
 | RC-B-947 | 정상 갱신: 내구 이미지 교체·재시작 비교·release 성공 | 신뢰 기록·구성이 모두 정상인 후보로 update | 출력에 `"commandRequestsChecked":1`, 새 인스턴스 ID가 이전과 다름, 이미지 == candidate, 서비스 delivery-runtime 점검 통과, maintenance 해제 후 PASS 요약 `Actual Compose durable image replacement, restart comparison and release` | 출력 문자열, 인스턴스 ID, 이미지 ID | packaging | test/compose-update-ci.sh:270 | - |
 
+### S 사례 (3.0에서 새로 정한 행동. RC 사례 수에 넣지 않음)
+
+| 사례 ID | 대상 기능 | 입력·조건 | 기대 결과 | 판정 방법 | 3.0 모듈 | 원 시험 | 연결 결함 |
+|---|---|---|---|---|---|---|---|
+| S-D0013-01 | 다운로드는 내용을 모두 읽고 크기·SHA-256이 맞으면 읽기 스트림 `close()` 실패와 무관하게 `Fetched`(성공을 실패로 덮지 않음. 2.x `transfers.mjs:203-212`의 finally 안 return이 성공 결과를 `OPERATION_FAILED`·`transport_lost`·`requiresReconciliation`으로 덮던 결함의 3.0 대응. 3.0에는 같은 메커니즘이 없었으나 `SftpDownloader`의 try-with-resources가 `close()` 예외를 읽기 실패로 처리해 같은 결과를 낼 수 있었다) | 대상 `SftpDownloader`(`MinaRemoteFileTransfer.download`). 서버의 850바이트 파일을 전부 읽은 뒤 읽기 스트림의 `close()`가 `IOException`을 던지도록 실패를 주입(`SftpDoubles.failingToCloseWhenReading`) | `DownloadResult.Fetched`(size 850, SHA-256은 원본 바이트의 값). `Failed(TRANSPORT_LOST)` 아님. 세션은 폐기되지 않음. close 실패는 debug 로그로만 남음 | 반환 종류, `size`, `sha256`, 싱크에 전달된 바이트 == 원본, 세션 폐기 수 0, 서버 디렉터리 항목 수 불변(1) | portal-ssh | (2.x 시험 없음. 수정 전 3.0 코드에서 `Failed(TRANSPORT_LOST)`와 세션 폐기 1로 실패) | SSH_PORTAL-D-0013 |
+| S-D0013-02 | 권한 거절 시험(S3-RO-08)은 Windows 서버에서 권한 거절을 관찰하지 않는다. 단언이 없는 채로 통과하지 않도록, Windows 실행은 자기 파일을 읽을 수 있음(`Fetched`, 바이트 일치)만 확인한 뒤 권한 거절 부분을 assumption(미실행)으로 보고한다 | 대상 `RealSftpTest`(실제 OpenSSH, Gradle `realOpenSshTest`). 서버가 Windows이면 `chmod 000`과 `/dev/full`에 해당하는 설정을 이 시험에서 만들지 않는다(ACL deny 항목은 시도하지 않음) | POSIX 서버: 읽을 수 없는 파일은 `Refused(PERMISSION_DENIED)`이고 transport 오류가 아니며 쓰기 실패는 `NO_SPACE`·`PLAIN_FAILURE`(기존 단언). Windows 서버: 자기 파일은 `Fetched`, 이후 시험은 `assumeFalse` 사유와 함께 미실행으로 보고됨 | POSIX는 기존 단언. Windows는 `Fetched` 종류와 바이트 일치, 건너뜀 사유 메시지 | portal-ssh | RC 원 시험 없음(검수 ac751106 지적: S3-RO-08 Windows 분기 단언 없음) | SSH_PORTAL-D-0013 |
+
 ## 3. 삭제 표
 
 3.0에 옮기지 않는 원 시험이다. 사유는 「Node 런타임 고유」「Python helper 언어 고유 세부」「Windows helper 언어 고유 세부」「cloudflared 실행」「agentapi·codex queue CLI 깨우기」「vendor ssh-mcp/ssh2」「기존 install.sh·compose 셸 시험」 중 하나와 근거 한 줄이다. 삭제가 없는 묶음은 「없음」으로 적는다.
