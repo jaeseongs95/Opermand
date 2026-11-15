@@ -2,7 +2,6 @@ package io.github.jaeseongs95.portal.store.storage;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
-import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -83,11 +82,11 @@ public final class PosixPrivateStorage implements PrivateStorage {
         for (Path path : missing) {
             try {
                 Files.createDirectory(path, FOLDER_MODE);
-            } catch (FileAlreadyExistsException e) {
+            } catch (IOException notCreated) { // FileAlreadyExistsException, and possibly an access denial for a path that appeared in between
                 if (Files.isDirectory(path)) {
                     continue; // somebody made it between the check and the call: it is not ours, and it is not judged
                 }
-                throw e;
+                throw notCreated;
             }
             created.add(path);
             requireOwnerOnly(path, created.reversed());

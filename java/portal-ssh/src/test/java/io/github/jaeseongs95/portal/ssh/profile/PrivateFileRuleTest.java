@@ -93,6 +93,17 @@ class PrivateFileRuleTest {
     }
 
     @Test
+    @DisplayName("S-D0117-04: a folder in the way of the file is not an error of the creator on any file system (Windows answers an access denial, not 'exists'): it is left as it is and judged by the caller")
+    void aFolderInTheWayOfTheFileIsLeftForTheCaller() throws IOException {
+        Path folder = Files.createDirectories(directory.resolve("state").resolve("known_hosts"));
+
+        TestFiles.privateFiles().createPrivateFile(folder);
+
+        assertThat(folder).isDirectory();
+        assertThat(Files.isRegularFile(folder)).isFalse();
+    }
+
+    @Test
     @DisplayName("S-D0117-07: a file store that no rule supports is refused with an IOException that says why, and nothing is created")
     void aFileStoreWithoutARuleIsRefused() {
         Path file = directory.resolve("new").resolve("known_hosts");
