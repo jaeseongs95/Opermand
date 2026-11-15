@@ -67,10 +67,14 @@ public class JdbcOperationJournal implements OperationJournal {
         if (known.isPresent()) {
             return answerFor(known.orElseThrow(), spec);
         }
+        // The place in the ready order is read before the check runs. A check that counts the queue (the room in it) therefore sees every insert whose place this
+        // transaction can see; an insert that commits after the place was read takes the same place, and the unique position makes one of the two lose (READ_COMMITTED is
+        // enough: the loser is told OPERATION_VERSION_CONFLICT below and decides again). Reading it after the check left a window in which the queue could exceed its room.
+        Long place = admission instanceof Admission.Queue ? operations.maxReadySequence() + 1 : null;
         beforeInsert.run();
         Operation created = Operation.admit(spec, id, at, admission);
         try {
-            savepoints.run(() -> storage.insertNew(created));
+            savepoints.run(() -> storage.insertNew(created, place));
             return new JournalInsert.Inserted(created);
         } catch (DuplicateKeyException e) {
             // Either another intake stored the same key first (this one answers with that operation), or two operations were queued in the same instant and took the same

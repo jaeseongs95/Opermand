@@ -90,12 +90,15 @@ class OperationStorage {
 
     /**
      * Inserts a new operation in the state its admission decided: its row, its input rows, its decision and the event of its first version. A queued operation also
-     * takes its place in the ready order, as a transition into {@code QUEUED} does in {@link #persist}.
+     * takes the place it was given in the ready order; the caller read it before it counted what the place has to respect (see {@code JdbcOperationJournal#accept}).
      */
-    void insertNew(Operation operation) {
+    void insertNew(Operation operation, Long readySequence) {
         OperationSnapshot s = operation.snapshot();
         boolean queued = s.state() == OperationState.QUEUED;
-        aggregates.insert(mapper.operationRow(s, queued ? operations.maxReadySequence() + 1 : null, queued ? s.updatedAt() : null, null));
+        if (queued != (readySequence != null)) {
+            throw new IllegalArgumentException("A queued operation takes a place in the ready order and no other does");
+        }
+        aggregates.insert(mapper.operationRow(s, readySequence, queued ? s.updatedAt() : null, null));
         switch (s.input()) {
             case CommandInput command -> aggregates.insert(mapper.commandRow(s.id(), command));
             case SourceInput source -> aggregates.insert(mapper.sourceRow(s.id(), source));

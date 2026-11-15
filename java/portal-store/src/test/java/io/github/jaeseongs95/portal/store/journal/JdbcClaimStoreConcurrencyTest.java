@@ -128,39 +128,88 @@ class JdbcClaimStoreConcurrencyTest {
         }
     }
 
-    @Test
-    @DisplayName("S-D0119-11 D3 two queued inserts at the same moment meet at the ready position: each is stored with a place of its own or told OPERATION_VERSION_CONFLICT, never OPERATION_STORE_FAILED")
-    void twoQueuedInsertsAtTheSameMomentNeverFailAsAStoreFailure() throws Exception {
-        io.github.jaeseongs95.portal.domain.operation.Admission queued = io.github.jaeseongs95.portal.domain.operation.Admission.of(
-            io.github.jaeseongs95.portal.domain.operation.DecisionReason.COMMAND_SET, io.github.jaeseongs95.portal.domain.operation.OperationKind.COMMAND, 0L);
-        java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newFixedThreadPool(2);
+    private static final io.github.jaeseongs95.portal.domain.operation.Admission QUEUED = io.github.jaeseongs95.portal.domain.operation.Admission.of(
+        io.github.jaeseongs95.portal.domain.operation.DecisionReason.COMMAND_SET, io.github.jaeseongs95.portal.domain.operation.OperationKind.COMMAND, 0L);
+
+    private static io.github.jaeseongs95.portal.domain.id.OperationId id(int number) {
+        return new io.github.jaeseongs95.portal.domain.id.OperationId(String.format("%048x", number));
+    }
+
+    private Object accept(String key, int number, Runnable beforeInsert) {
+        io.github.jaeseongs95.portal.domain.operation.NewOperation spec = fx.command(key, "alpha", "touch " + key, new io.github.jaeseongs95.portal.domain.operation.ConflictKey.None());
         try {
-            for (int round = 0; round < 25; round++) {
-                java.util.concurrent.CyclicBarrier together = new java.util.concurrent.CyclicBarrier(2);
-                List<java.util.concurrent.Future<Object>> answers = new java.util.ArrayList<>();
-                for (int writer = 0; writer < 2; writer++) {
-                    io.github.jaeseongs95.portal.domain.operation.NewOperation spec = fx.command("race-" + round + "-" + writer, "alpha", "touch " + round + writer, new io.github.jaeseongs95.portal.domain.operation.ConflictKey.None());
-                    answers.add(pool.submit(() -> {
-                        together.await();
-                        try {
-                            return journal.accept(spec, queued);
-                        } catch (io.github.jaeseongs95.portal.domain.error.RequestRefusedException e) {
-                            return e;
-                        }
-                    }));
-                }
-                for (java.util.concurrent.Future<Object> answer : answers) {
-                    Object result = answer.get();
-                    if (result instanceof io.github.jaeseongs95.portal.domain.error.RequestRefusedException refused) {
-                        assertThat(refused.code()).isEqualTo(io.github.jaeseongs95.portal.domain.error.OperationErrorCode.OPERATION_VERSION_CONFLICT);
-                    } else {
-                        assertThat(result).isInstanceOf(io.github.jaeseongs95.portal.app.journal.JournalInsert.Inserted.class);
-                    }
-                }
+            return journal.accept(spec, QUEUED, id(number), JournalFixture.NOW, beforeInsert);
+        } catch (io.github.jaeseongs95.portal.domain.error.RequestRefusedException refused) {
+            return refused;
+        }
+    }
+
+    private long queuedRows() {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM operation WHERE state = 'QUEUED'", Long.class);
+    }
+
+    @Test
+    @DisplayName("S-D0119-18 two queued inserts that took the same place meet at the unique ready position deterministically: one is stored, the other is told OPERATION_VERSION_CONFLICT, never OPERATION_STORE_FAILED")
+    void twoQueuedInsertsForTheSamePlaceConflictDeterministically() throws Exception {
+        // Both reach the check with the place they read, and neither inserts before both are there: the same place is taken twice, whatever the timing of the threads.
+        CyclicBarrier met = new CyclicBarrier(2);
+        Runnable meet = () -> {
+            try {
+                met.await(20, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
             }
+        };
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        try {
+            Future<Object> first = pool.submit(() -> accept("same-place-0", 1, meet));
+            Future<Object> second = pool.submit(() -> accept("same-place-1", 2, meet));
+            List<Object> answers = List.of(first.get(30, TimeUnit.SECONDS), second.get(30, TimeUnit.SECONDS));
+
+            assertThat(answers.stream().filter(answer -> answer instanceof io.github.jaeseongs95.portal.app.journal.JournalInsert.Inserted)).hasSize(1);
+            assertThat(answers.stream().filter(answer -> answer instanceof io.github.jaeseongs95.portal.domain.error.RequestRefusedException)).hasSize(1)
+                .allSatisfy(answer -> assertThat(((io.github.jaeseongs95.portal.domain.error.RequestRefusedException) answer).code())
+                    .isEqualTo(io.github.jaeseongs95.portal.domain.error.OperationErrorCode.OPERATION_VERSION_CONFLICT));
+            assertThat(queuedRows()).isEqualTo(1);
         } finally {
             pool.shutdownNow();
         }
-        assertThat(jdbc.queryForObject("SELECT COUNT(ready_sequence) - COUNT(DISTINCT ready_sequence) FROM operation", Long.class)).as("no two operations share a place").isZero();
+    }
+
+    @Test
+    @DisplayName("S-D0119-19 an insert that commits between the count of the queue and the insert of another cannot take the queue over its room: the late one loses the place and is told OPERATION_VERSION_CONFLICT")
+    void aCommitBetweenTheCountAndTheInsertCannotExceedTheRoom() throws Exception {
+        // The room is one. B counts the queue (0) and waits inside the check; A counts (0), is stored and commits; B goes on. With the place read after the count B would take the
+        // next place after A's and both would be queued (two in a queue of one); read before the count, B holds the place A took and loses it.
+        Runnable roomOfOne = () -> {
+            if (queuedRows() >= 1) {
+                throw new io.github.jaeseongs95.portal.domain.error.RequestRefusedException(io.github.jaeseongs95.portal.domain.error.OperationErrorCode.OPERATION_QUEUE_FULL);
+            }
+        };
+        java.util.concurrent.CountDownLatch counted = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch otherStored = new java.util.concurrent.CountDownLatch(1);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<Object> late = pool.submit(() -> accept("late-after-count", 2, () -> {
+                roomOfOne.run();
+                counted.countDown();
+                try {
+                    otherStored.await(20, TimeUnit.SECONDS);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }));
+            assertThat(counted.await(20, TimeUnit.SECONDS)).isTrue();
+
+            Object early = accept("early-before-insert", 1, roomOfOne);
+            otherStored.countDown();
+
+            assertThat(early).isInstanceOf(io.github.jaeseongs95.portal.app.journal.JournalInsert.Inserted.class);
+            assertThat(late.get(30, TimeUnit.SECONDS)).isInstanceOfSatisfying(io.github.jaeseongs95.portal.domain.error.RequestRefusedException.class,
+                refused -> assertThat(refused.code()).isEqualTo(io.github.jaeseongs95.portal.domain.error.OperationErrorCode.OPERATION_VERSION_CONFLICT));
+            assertThat(queuedRows()).as("the room of one was not exceeded").isEqualTo(1);
+        } finally {
+            pool.shutdownNow();
+        }
     }
 }
