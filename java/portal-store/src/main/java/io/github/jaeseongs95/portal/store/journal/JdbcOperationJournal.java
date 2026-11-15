@@ -36,18 +36,16 @@ public class JdbcOperationJournal implements OperationJournal {
 
     private final OperationRowRepository operations;
     private final OperationEventRowRepository events;
-    private final OperationLegacyRowRepository legacy;
     private final OperationStorage storage;
     private final OperationIdGenerator ids;
     private final Clock clock;
     private final Savepoints savepoints;
 
     @Autowired
-    public JdbcOperationJournal(OperationRowRepository operations, OperationEventRowRepository events, OperationLegacyRowRepository legacy, OperationStorage storage,
+    public JdbcOperationJournal(OperationRowRepository operations, OperationEventRowRepository events, OperationStorage storage,
                                 OperationIdGenerator ids, Clock clock, Savepoints savepoints) {
         this.operations = operations;
         this.events = events;
-        this.legacy = legacy;
         this.storage = storage;
         this.ids = ids;
         this.clock = clock;
