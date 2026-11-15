@@ -19,16 +19,18 @@ allprojects {
 // the command line or in the gradle.properties of the Gradle user home it dedicates to this project: -Pportal.test.cpus=<n> (-XX:ActiveProcessorCount), -Pportal.test.heap=<size>
 // (maxHeapSize, for example 512m or 1g) and -Pportal.test.forks=<n> (maxParallelForks). Without them the JVM and Gradle defaults apply. A value that is not a positive
 // whole number (or, for the heap, a whole number with an optional k, m or g) stops the build while it is configured (cases S-D0111-01 to -05). The modules that must not
-// run their tests in parallel (portal-ssh, portal-store: a shared account, a shared schema) say so in their own build file.
-fun statedTestSize(name: String, valid: Regex, expected: String): String? = providers.gradleProperty("portal.test.$name").orNull?.also {
-    if (!valid.matches(it)) {
+// run their tests in parallel (the tasks realOpenSshTest of portal-ssh and externalDbmsTest of portal-store: a shared account on one server, a shared schema) say so in their own
+// build file. A count (cpus, forks) that the pattern accepts but that is larger than an int is refused here too, with the property name and the value; the smallest heap is
+// the JVM's to refuse, with its own message.
+fun statedTestSize(name: String, valid: Regex, expected: String, isCount: Boolean = false): String? = providers.gradleProperty("portal.test.$name").orNull?.also {
+    if (!valid.matches(it) || (isCount && it.toIntOrNull() == null)) {
         throw GradleException("-Pportal.test.$name must be $expected, but is '$it'")
     }
 }
 
-val testCpus: String? = statedTestSize("cpus", Regex("[1-9][0-9]*"), "a positive whole number (the processors a test JVM sees)")
+val testCpus: String? = statedTestSize("cpus", Regex("[1-9][0-9]*"), "a positive whole number that fits an int (the processors a test JVM sees)", isCount = true)
 val testHeap: String? = statedTestSize("heap", Regex("[1-9][0-9]*[kKmMgG]?"), "a positive whole number with an optional k, m or g, such as 512m (the heap of a test JVM)")
-val testForks: String? = statedTestSize("forks", Regex("[1-9][0-9]*"), "a positive whole number (the test JVMs Gradle runs at the same time)")
+val testForks: String? = statedTestSize("forks", Regex("[1-9][0-9]*"), "a positive whole number that fits an int (the test JVMs Gradle runs at the same time)", isCount = true)
 
 /** The variables the host agents set in their session (a test must not see them): the agent hosts' own, the governance suite's, and this product's BRIDGE_* / PORTAL_* settings. */
 val hostSessionVariable = Regex("(AGENT_GOVERNANCE|AGS_|CLAUDE|CODEX|GEMINI|ANTHROPIC|OPENAI|BRIDGE_|PORTAL_).*", RegexOption.IGNORE_CASE)
@@ -69,6 +71,9 @@ subprojects {
 
     fun <T> T.isolateFromHost() where T : Task, T : JavaForkOptions {
         environment.keys.removeIf { hostSessionVariable.matches(it) }
+        // The JVM reads these two on its own start and puts what they hold (-Xmx, -XX:ActiveProcessorCount ...) next to the test JVM's arguments; a host value must not size a test
+        // JVM behind the run's back (case S-D0111-09). Case-insensitive like the other removals: Windows names are.
+        environment.keys.removeIf { it.equals("JAVA_TOOL_OPTIONS", ignoreCase = true) || it.equals("JDK_JAVA_OPTIONS", ignoreCase = true) }
         val home = isolatedFolders.get().dir("$name/home").asFile
         val temporary = isolatedFolders.get().dir("$name/tmp").asFile
         val folders = mapOf(
@@ -114,7 +119,7 @@ subprojects {
         testCpus?.let { jvmArgs("-XX:ActiveProcessorCount=$it") }
         testHeap?.let { maxHeapSize = it }
         testForks?.let { maxParallelForks = it.toInt() }
-        // What the run stated, handed to the tests that check the JVM they run in (TestJvmSizeTest, ForkProbe: cases S-D0111-01 to -04); left out when not stated.
+        // What the run stated, handed to the tests that check the JVM they run in (TestJvmSizeTest: cases S-D0111-01 to -03; the fork count is read from the run's log, S-D0111-04); left out when not stated.
         testCpus?.let { systemProperty("portal.test.stated.cpus", it) }
         testHeap?.let { systemProperty("portal.test.stated.heap", it) }
         testForks?.let { systemProperty("portal.test.stated.forks", it) }

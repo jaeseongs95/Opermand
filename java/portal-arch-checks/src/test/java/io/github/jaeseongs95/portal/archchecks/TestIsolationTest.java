@@ -44,5 +44,12 @@ class TestIsolationTest {
         assertThat(Path.of(System.getenv("GIT_CEILING_DIRECTORIES")).toRealPath()).isEqualTo(isolated);
         assertThat(System.getenv("GIT_CONFIG_NOSYSTEM")).isEqualTo("1");
     }
-    // The size of the test JVM (processors, heap, forks) is checked by TestJvmSizeTest and ForkProbe (S-D0111-01 to S-D0111-04); it is no longer fixed here.
+
+    /** S-D0111-09: the host's JAVA_TOOL_OPTIONS and JDK_JAVA_OPTIONS do not reach the test JVM (they could add -Xmx or -XX:ActiveProcessorCount to it). */
+    @Test
+    void hostJavaOptionsDoNotReachTheTest() {
+        // System.getenv is allowed here: a JUnit test outside Spring checks the environment of the test JVM; A-ENV binds the product code.
+        assertThat(System.getenv().keySet()).noneMatch(name -> name.equalsIgnoreCase("JAVA_TOOL_OPTIONS") || name.equalsIgnoreCase("JDK_JAVA_OPTIONS"));
+    }
+    // The size of the test JVM (processors, heap) is checked by TestJvmSizeTest (S-D0111-01 to S-D0111-03); the fork count by the run's log (S-D0111-04). None is fixed here.
 }
