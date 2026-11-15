@@ -22,7 +22,9 @@ public interface PrivateFileRule {
 
     /**
      * Creates the folder, with its missing parents, so that only its owner can use it. A folder that exists is left as it is. A folder that cannot be made private is
-     * removed again and the failure is an {@link IOException}.
+     * removed again, with the folders that this call made before it, and the failure is an {@link IOException}. A failure to create a folder at all (the disk is full, a name is
+     * refused) is an {@link IOException} too, but it is handled differently: the folders that this call made before it and made private stay, because they are owner only and
+     * nothing about them is wrong.
      */
     void createFolder(Path folder) throws IOException;
 

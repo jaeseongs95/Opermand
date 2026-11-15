@@ -31,7 +31,9 @@ public interface PrivateStorage {
     /**
      * Creates the folder, with its missing parents, so that only its owner can use it. A folder that exists is left as it is. When making a folder that this call created
      * private fails (the rights cannot be set, or they are not what was asked), the folders this call created are removed again and {@link UnsafeStorageException} is thrown;
-     * a folder that cannot be removed stays and is named in the message. A failure to create a folder at all is an {@link IOException}.
+     * a folder that cannot be removed stays and is named in the message. A failure to create a folder at all (the disk is full, a name is refused) is an {@link IOException}
+     * and is handled differently: the folders that this call made before it and made private stay, because they are owner only and nothing about them is wrong; only a failure to
+     * make a folder private removes the folders of the call.
      */
     void createFolder(Path folder) throws IOException;
 
