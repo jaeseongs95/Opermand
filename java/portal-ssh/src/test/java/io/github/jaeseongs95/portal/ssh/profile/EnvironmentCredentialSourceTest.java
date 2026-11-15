@@ -14,8 +14,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.StandardEnvironment;
+
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 import io.github.jaeseongs95.portal.app.remote.CredentialLookup;
 import io.github.jaeseongs95.portal.app.remote.CredentialMiss;
@@ -216,7 +221,7 @@ class EnvironmentCredentialSourceTest {
     }
 
     @Test
-    @DisplayName("VR-388 (2.x와 다름: 2.x skipped a missing key file and went on with the other sources; a key profile with no key is a failure that names where the key was set, not a silent fallback to a weaker method): a profile that uses a key and whose key file does not exist gets a miss that names the file")
+    @DisplayName("VR-388 (2.x와 다름: 2.x skipped a missing key file and went on with the other sources; a key profile with no key is a failure that names where the key was set, not a silent fallback to a weaker method): a profile that uses a key and whose key file does not exist gets a miss that names the source of the key, not the path")
     void aMissingKeyFileIsAMiss() throws IOException {
         Path missing = directory.resolve("no-such-key");
 
@@ -373,7 +378,7 @@ class EnvironmentCredentialSourceTest {
     }
 
     @Test
-    @DisplayName("S-D0137-05 (2.x와 다름: 2.x skipped a named key file that did not exist and went on; a named key that is not there is a miss that names the file, never a quiet fallback to the password): an agent profile whose named key file does not exist gets a miss that names where the key was set")
+    @DisplayName("S-D0137-05 (2.x와 다름: 2.x skipped a named key file that did not exist and went on; a named key that is not there is a miss that names the source of the key, never a quiet fallback to the password): an agent profile whose named key file does not exist gets a miss that names the source of the key, not the path")
     void aNamedKeyFileThatIsMissingIsAMiss() throws IOException {
         Path missing = directory.resolve("no-such-key");
 
@@ -433,6 +438,43 @@ class EnvironmentCredentialSourceTest {
             assertThat(lookup.toString()).doesNotContain("SECRETBODY").doesNotContain("BEGIN");
             assertThat(missesOf(lookup)).singleElement().satisfies(miss -> assertThat(miss.place()).contains("SSH_MCP_KEY"));
         }
+    }
+
+    @Test
+    @DisplayName("S-D0137-12: a certificate file that cannot be read is a miss that names where it was set, for a variable and for the file next to the key")
+    void anUnreadableCertificateNamesItsSource() throws IOException {
+        Path key = file("keys/id", "the key\n");
+        Files.createDirectories(directory.resolve("keys/id-cert.pub"));
+        Path folder = Files.createDirectory(directory.resolve("cert-folder"));
+
+        CredentialLookup next = resolve("aws-local", "cert = true", Map.of("SSH_MCP_AWS_LOCAL_KEY", key.toString()));
+        CredentialLookup named = resolve("aws-local", "cert = true", Map.of("SSH_MCP_AWS_LOCAL_KEY", key.toString(), "SSH_MCP_AWS_LOCAL_CERT", folder.toString()));
+
+        assertThat(missesOf(next)).singleElement().satisfies(miss -> {
+            assertThat(miss.part()).isEqualTo(CredentialPart.CERTIFICATE);
+            assertThat(miss.place()).contains("next to the key named by SSH_MCP_AWS_LOCAL_KEY").contains("cannot be read");
+        });
+        assertThat(missesOf(named)).singleElement().satisfies(miss -> assertThat(miss.place()).contains("named by SSH_MCP_AWS_LOCAL_CERT").contains("cannot be read"));
+    }
+
+    @Test
+    @DisplayName("S-D0137-13: the warning for a key path that is not valid names the source and never holds the value, in the message or in its arguments")
+    void theLogNeverHoldsTheKeyValue() throws IOException {
+        Logger logger = (Logger) LoggerFactory.getLogger(EnvironmentCredentialSource.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            resolve("aws-local", "", Map.of("SSH_MCP_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\nSECRETBODY\0\n-----END OPENSSH PRIVATE KEY-----\n"));
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        assertThat(appender.list).isNotEmpty().allSatisfy(event -> {
+            assertThat(event.getFormattedMessage()).contains("SSH_MCP_KEY").doesNotContain("SECRETBODY").doesNotContain("BEGIN");
+            assertThat(String.valueOf(java.util.Arrays.asList(event.getArgumentArray()))).doesNotContain("SECRETBODY");
+            assertThat(event.getThrowableProxy()).isNull();
+        });
     }
 
     @Test

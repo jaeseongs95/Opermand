@@ -51,11 +51,7 @@ import io.github.jaeseongs95.portal.domain.target.Setting;
 @Component
 public final class EnvironmentCredentialSource implements SshCredentialSource {
 
-    /** A key setting: the text it holds (a path) and the name of the place where it was set. Only the name goes into a message or a log. */
-    private record NamedKey(String value, String source) {
-    }
-
-    private static final Logger LOG =LoggerFactory.getLogger(EnvironmentCredentialSource.class);
+    private static final Logger LOG = LoggerFactory.getLogger(EnvironmentCredentialSource.class);
     private static final String GLOBAL_PASSWORD = "SSH_MCP_PASSWORD";
     private static final String GLOBAL_PASSPHRASE = "SSH_MCP_PASSPHRASE";
     private static final String GLOBAL_KEY = "SSH_MCP_KEY";
@@ -64,6 +60,15 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
     private static final String KEY_REFERENCE_SOURCE = "keyRef of the profile";
     private static final String CERTIFICATE_SUFFIX = "-cert.pub";
     private static final String PUBLIC_KEY_SUFFIX = ".pub";
+
+    /** A key setting: the text it holds (a path, or by mistake a key text) and the name of the place where it was set. Only the name goes into a message or a log. */
+    private record NamedKey(String value, String source) {
+
+        @Override
+        public String toString() {
+            return source;
+        }
+    }
 
     /** What reading a file gave. */
     private sealed interface FileRead permits FileRead.Text, FileRead.Absent, FileRead.Unreadable {
@@ -156,29 +161,31 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
         }
         return switch (read(keyFile, named.source())) {
             case FileRead.Text key when key.text().isEmpty() -> missing(CredentialPart.PRIVATE_KEY, place + " is empty");
-            case FileRead.Text key -> withPassphraseAndCertificate(SecretValue.of(key.text()), alias, prefix, keyFile);
+            case FileRead.Text key -> withPassphraseAndCertificate(SecretValue.of(key.text()), alias, prefix, keyFile, named.source());
             case FileRead.Absent absent -> missing(CredentialPart.PRIVATE_KEY, place + " does not exist");
             case FileRead.Unreadable unreadable -> missing(CredentialPart.PRIVATE_KEY, place + " cannot be read");
         };
     }
 
-    private CredentialLookup withPassphraseAndCertificate(SecretValue pem, ProfileAlias alias, CredentialPrefix prefix, Path keyFile) {
+    private CredentialLookup withPassphraseAndCertificate(SecretValue pem, ProfileAlias alias, CredentialPrefix prefix, Path keyFile, String keySource) {
         Setting<SecretValue> passphrase = secret(prefix.variable("PASSPHRASE")).or(() -> secret(GLOBAL_PASSPHRASE)).<Setting<SecretValue>>map(Setting::given)
             .orElseGet(Setting::unset);
         if (!catalog.wantsCertificate(alias)) {
             return new CredentialLookup.Resolved(new SshCredential.PrivateKey(pem, passphrase, Setting.unset()));
         }
+        String certSource = text(prefix.variable("CERT")).isPresent() ? "the certificate file named by " + prefix.variable("CERT")
+            : "the certificate next to the key named by " + keySource;
         Path certFile;
         try {
             certFile = text(prefix.variable("CERT")).map(this::locate).orElseGet(() -> certificateNextTo(keyFile));
         } catch (InvalidPathException e) {
-            LOG.warn("The certificate path of the profile {} is not a valid path ({})", alias.value(), e.getReason());
-            return missing(CredentialPart.CERTIFICATE, "the certificate file cannot be read");
+            LOG.warn("{} is not a valid path ({})", certSource, e.getReason());
+            return missing(CredentialPart.CERTIFICATE, certSource + " cannot be read");
         }
-        return switch (read(certFile, "the certificate of the profile")) {
+        return switch (read(certFile, certSource)) {
             case FileRead.Text certificate -> new CredentialLookup.Resolved(new SshCredential.PrivateKey(pem, passphrase, Setting.given(certificate.text())));
             case FileRead.Absent absent -> new CredentialLookup.Resolved(new SshCredential.PrivateKey(pem, passphrase, Setting.unset()));
-            case FileRead.Unreadable unreadable -> missing(CredentialPart.CERTIFICATE, "the certificate file cannot be read");
+            case FileRead.Unreadable unreadable -> missing(CredentialPart.CERTIFICATE, certSource + " cannot be read");
         };
     }
 
