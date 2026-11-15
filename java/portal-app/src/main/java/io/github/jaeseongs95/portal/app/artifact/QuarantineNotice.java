@@ -11,8 +11,9 @@ import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
  * every reap run end with it, so the figure is in the log without the owner asking for it. It is the one place of the line, which reads {@link ArtifactRegistry#budget()}.
  *
  * <p>Stage 3 shows the figures in the log only. The administrator view and the owner's command that clears the quarantine belong to the administrator API of stage 4; nothing
- * is deleted automatically. The read of the folder is file I/O and the call is made outside a transaction (Principles 4.4). A read that fails does not undo the work that
- * called this: it is logged with its cause and the caller goes on.
+ * is deleted automatically. The read of the folder is file I/O and the call is made outside a transaction (Principles 4.4). A failed read of the quarantine folder, which
+ * {@code budget()} reports as a {@link RequestRefusedException}, does not undo the work that called this: it is logged with its cause and the caller goes on. The other read
+ * of {@code budget()}, the sum of the charged bytes of the rows, is not caught: a {@code DataAccessException} from it is thrown to the caller.
  */
 @Component
 public class QuarantineNotice {
