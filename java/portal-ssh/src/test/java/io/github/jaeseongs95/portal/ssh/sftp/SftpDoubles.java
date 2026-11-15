@@ -16,6 +16,7 @@ import java.util.function.UnaryOperator;
 import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.client.extensions.openssh.OpenSSHFsyncExtension;
+import org.apache.sshd.sftp.common.SftpException;
 import org.apache.sshd.sftp.common.extensions.openssh.FsyncExtensionParser;
 
 /**
@@ -97,6 +98,33 @@ final class SftpDoubles {
             if ("lstat".equals(method.getName()) && ended.compareAndSet(false, true)) {
                 atTheLook.run();
                 throw new ClosedChannelException();
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client whose {@code close()} fails with an {@link IOException} after the real client was closed: a close that fails by itself while the work with the client is
+     * done (the channel that only looked for the server program of an elevated transfer). Every other call goes to the real client.
+     */
+    SftpClient failingToClose(SftpClient real) {
+        return proxy(real, (method, arguments) -> {
+            if ("close".equals(method.getName()) && (arguments == null || arguments.length == 0)) {
+                real.close();
+                throw new IOException("injected: closing the channel failed");
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client whose {@code stat} of a path that ends with the suffix is answered with the SFTP status: a server that refuses to say whether a file is there. Every other
+     * call goes to the real client.
+     */
+    SftpClient refusingToStat(SftpClient real, String pathSuffix, int status) {
+        return proxy(real, (method, arguments) -> {
+            if ("stat".equals(method.getName()) && arguments != null && arguments.length == 1 && arguments[0] instanceof String path && path.endsWith(pathSuffix)) {
+                throw new SftpException(status, "injected: the status of " + path + " is refused");
             }
             return passThrough(real, method, arguments);
         });

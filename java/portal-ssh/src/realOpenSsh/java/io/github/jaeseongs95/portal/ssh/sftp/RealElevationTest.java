@@ -31,7 +31,7 @@ class RealElevationTest {
         try (RealServer server = RealServer.open()) {
             boolean sudoWorks = server.exec("sudo -n true").exitStatus() == 0;
 
-            SudoSftpChannels.Opening opening = new SudoSftpChannels(new SftpChannels()).open(server.session());
+            SudoSftpChannels.Opening opening = new SudoSftpChannels(new SftpChannels(), new SftpFailureClassifier()).open(server.session());
 
             if (sudoWorks && !server.isWindows()) {
                 assertThat(opening).as("the account may use sudo -n: the server program is found and starts").isInstanceOf(SudoSftpChannels.Opening.Opened.class);

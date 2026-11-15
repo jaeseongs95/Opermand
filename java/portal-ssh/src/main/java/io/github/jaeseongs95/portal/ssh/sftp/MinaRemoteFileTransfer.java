@@ -348,6 +348,10 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
                 case SudoSftpChannels.Opening.Opened opened -> new Attempt.Ready(opened.client());
                 case SudoSftpChannels.Opening.NoServer noServer -> new Attempt.Refused(TransferErrorCode.INVALID_REQUEST);
                 case SudoSftpChannels.Opening.NotStarted notStarted -> new Attempt.Refused(TransferErrorCode.PERMISSION_DENIED);
+                case SudoSftpChannels.Opening.LookRefused denied -> new Attempt.Refused(denied.code());
+                // The session lives and the server refused a channel: the same cause as the plain path gives (the session is kept).
+                case SudoSftpChannels.Opening.ChannelRefused refusedChannel ->
+                    new Attempt.Unreachable(watch.fired().orElse(TransferFailureCause.CHANNEL_OPEN_FAILED));
                 case SudoSftpChannels.Opening.Lost lost -> {
                     lease.discard();
                     yield new Attempt.Unreachable(watch.fired().orElse(TransferFailureCause.TRANSPORT_LOST));
