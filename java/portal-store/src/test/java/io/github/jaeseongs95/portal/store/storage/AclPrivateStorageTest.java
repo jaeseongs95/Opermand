@@ -196,6 +196,7 @@ class AclPrivateStorageTest {
         Path parent = Files.createDirectory(directory.resolve("no-delete"));
         TestStorage.forbidDeletingWhatIsMadeIn(parent);
         try {
+            TestStorage.assumeDeletingIsBlockedIn(parent);
             Path outer = parent.resolve("outer");
             assertThatThrownBy(() -> rule.createFolder(outer)).isInstanceOfSatisfying(UnsafeStorageException.class,
                 e -> assertThat(e).hasMessageContaining("could not be made private").hasMessageContaining(outer.toString()).hasMessageContaining("could not be removed again"));

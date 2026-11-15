@@ -188,6 +188,24 @@ public final class TestFiles {
         view.setAcl(acl);
     }
 
+    /**
+     * The precondition of a test that needs a removal to fail in a folder made by {@link #forbidDeletingWhatIsMadeIn}: a probe file is made in the folder and deleted. An account
+     * that bypasses the delete rights of the list (an elevated administrator token, which a CI runner has) deletes it, and then the test is skipped, because no removal can be made
+     * to fail for that account; for an account that does not bypass them the deletion fails, the probe stays in the folder and the test goes on (the cleanup of the test removes it
+     * after giving the rights back). This is a skip on a fact about the account, not about the file system, so the property {@code portal.test.require} does not turn it into a failure.
+     */
+    public static void assumeDeletingIsBlockedIn(Path folder) throws IOException {
+        Path probe = Files.createFile(folder.resolve("probe-" + System.nanoTime()));
+        boolean blocked;
+        try {
+            Files.delete(probe);
+            blocked = false;
+        } catch (IOException e) {
+            blocked = true;
+        }
+        Assumptions.assumeTrue(blocked, "this account bypasses the delete rights of an access control list (an elevated administrator token), so no removal can be made to fail for it");
+    }
+
     /** Takes the denial of {@link #forbidChangingTheListOfWhatIsMadeIn} away again: the list of the folder is full control for the owner, inheritable. What was made in it before keeps what it inherited. */
     public static void undoTheDenial(Path folder) throws IOException {
         AclFileAttributeView view = Files.getFileAttributeView(folder, AclFileAttributeView.class);

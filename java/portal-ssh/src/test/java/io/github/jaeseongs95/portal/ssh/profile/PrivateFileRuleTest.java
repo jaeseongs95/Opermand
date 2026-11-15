@@ -177,6 +177,7 @@ class PrivateFileRuleTest {
         Path parent = Files.createDirectory(directory.resolve("no-delete"));
         TestFiles.forbidDeletingWhatIsMadeIn(parent);
         try {
+            TestFiles.assumeDeletingIsBlockedIn(parent);
             Path nested = parent.resolve("outer").resolve("known_hosts");
             assertThatThrownBy(() -> TestFiles.privateFiles().createPrivateFile(nested)).isInstanceOf(IOException.class).hasMessageContaining("could not be made private")
                 .hasMessageContaining(parent.resolve("outer").toString()).hasMessageContaining("could not be removed again");

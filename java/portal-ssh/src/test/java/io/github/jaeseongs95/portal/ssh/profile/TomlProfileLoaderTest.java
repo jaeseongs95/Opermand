@@ -196,10 +196,10 @@ class TomlProfileLoaderTest {
     }
 
     @Test
-    @DisplayName("VR-324: a path that is a folder cannot be read: the error says so and keeps the cause, and it is not a not-found error")
+    @DisplayName("VR-324 (S-D0117-05, 2.x와 다름: the loader refuses a path that is not a regular file before it reads, so there is no read error and no cause): a path that is a folder is refused, and it is not a not-found error")
     void aFolderCannotBeRead() {
         assertThatThrownBy(() -> loader.load(directory)).isNotInstanceOf(ConfigNotFoundException.class).isInstanceOf(ProfileConfigException.class)
-            .hasMessageStartingWith("Config file " + directory).hasMessageContaining("could not be read").hasCauseInstanceOf(IOException.class);
+            .hasMessageStartingWith("Config file " + directory).hasMessageEndingWith("is not a regular file");
     }
 
     @Test
