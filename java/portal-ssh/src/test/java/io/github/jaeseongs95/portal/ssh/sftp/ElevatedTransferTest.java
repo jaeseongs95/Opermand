@@ -293,10 +293,11 @@ class ElevatedTransferTest {
     void deadlineDuringTheInitializationKeepsItsCause() throws IOException {
         TransferBed testBed = start(TransferBed.Sudo.HANGS, ScriptedExecutor.everythingSucceeds());
         testBed.sessions().sftpInitializationWait(LONG_WAIT);
-        DownloadRequest request = new DownloadRequest(TransferBed.TARGET, new PosixRemotePath("/x.bin"), new FileAccess.Elevated(SUDO), new PathPolicyBinding.NoRootPolicy(),
-            TransferBed.within(Duration.ofMillis(150)));
+        // The time limit is the default (it does not run by itself); it runs when the server has started the command, which happens after the channel was opened and so
+        // always while the version answer is awaited, however long the steps before it took.
+        testBed.server().startedCommands().whenAtLeast(1).thenRun(testBed::expireDeadline);
 
-        DownloadResult download = testBed.transfer().download(request, new TransferBed.Collecting(), testBed.control());
+        DownloadResult download = testBed.transfer().download(elevatedDownload("/x.bin"), new TransferBed.Collecting(), testBed.control());
 
         assertThat(download).isEqualTo(new DownloadResult.Failed(TransferFailureCause.DEADLINE));
         assertThat(testBed.sessions().discards()).isZero();

@@ -36,9 +36,13 @@ import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.nio.file.Files;
 import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import java.util.function.IntPredicate;
 import org.apache.sshd.common.channel.Channel;
@@ -61,7 +65,7 @@ final class TransferBed implements AutoCloseable {
     private final Path root;
     private final EmbeddedSshServer server;
     private final TestSessions sessions;
-    private final ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+    private final HeldDeadlineScheduler scheduler = new HeldDeadlineScheduler();
     private final AtomicReplacer replacer;
     private final MinaRemoteFileTransfer transfer;
     private final Sha256Digester digester = new Sha256Digester();
@@ -178,6 +182,32 @@ final class TransferBed implements AutoCloseable {
                 }
                 : factory).toList());
         };
+    }
+
+    /**
+     * The scheduler of the bed. It schedules as {@link ThreadPoolTaskScheduler} does and also keeps the task of the last time limit, so that a test can let the limit run at
+     * the moment of an event it waits for ({@link #expireDeadline()}) instead of guessing a duration that is longer than the steps before it (defect D-0013, case S-D0013-19).
+     */
+    private static final class HeldDeadlineScheduler extends ThreadPoolTaskScheduler {
+        private final AtomicReference<Runnable> lastTask = new AtomicReference<>();
+
+        @Override
+        public ScheduledFuture<?> schedule(Runnable task, Instant startTime) {
+            lastTask.set(task);
+            return super.schedule(task, startTime);
+        }
+
+        Runnable lastTask() {
+            return Objects.requireNonNull(lastTask.get(), "no time limit was scheduled yet");
+        }
+    }
+
+    /**
+     * Runs the task of the time limit of the transfer that was started last, now, as the scheduler does when the time is up. Use it from an event (the server started a
+     * command), not from a delay.
+     */
+    void expireDeadline() {
+        scheduler.lastTask().run();
     }
 
     Path root() {
