@@ -7,7 +7,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Set;
 
 import org.junit.jupiter.api.AfterEach;
@@ -119,6 +121,31 @@ class ArtifactBudgetRecoveryTest {
     @AfterEach
     void removeTheQuarantinedFile() throws IOException {
         Files.deleteIfExists(quarantined(LEGACY));
+    }
+
+    @Test
+    @DisplayName("S-D0012-01 (D-0012): a download holds only the size its file announced: twelve downloads that overlap are all stored, although twelve full reservations (12 x 10,000) are more than the 100,000 byte budget")
+    void overlappingDownloadsHoldOnlyTheSizeTheirFilesAnnounced() {
+        int downloadsToOverlap = 12;
+        remote.served = new byte[1_000];
+        List<DownloadExecution> executions = new ArrayList<>();
+        int[] started = {0};
+        long[] chargedWhenAllAreOpen = {-1L};
+        // Each download, once the size of its file is announced, starts the next one before it takes its own first block; the last one reads the budget.
+        remote.whileTransferring = () -> {
+            started[0]++;
+            if (started[0] < downloadsToOverlap) {
+                executions.add(downloads.download(downloadJob(), CONTROL));
+            } else {
+                chargedWhenAllAreOpen[0] = registry.budget().chargedBytes();
+            }
+        };
+
+        executions.add(downloads.download(downloadJob(), CONTROL));
+
+        assertThat(executions).as("none of the twelve is refused as over quota").hasSize(downloadsToOverlap).allSatisfy(execution -> assertThat(execution).isInstanceOf(DownloadExecution.Stored.class));
+        assertThat(chargedWhenAllAreOpen[0]).as("while all twelve are open each holds 1,000 bytes, not the 10,000 of the largest file").isEqualTo(12_000L);
+        assertThat(registry.budget().chargedBytes()).as("and each is charged its real size when it is ready").isEqualTo(12_000L);
     }
 
     @Test

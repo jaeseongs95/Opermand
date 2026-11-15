@@ -21,6 +21,14 @@ interface ArtifactRowRepository extends CrudRepository<ArtifactRow, String> {
     @Query("UPDATE artifact SET version = :next WHERE id = :id AND version = :expected")
     int bumpVersion(@Param("id") String id, @Param("expected") long expected, @Param("next") long next);
 
+    /**
+     * Shrinks the reserved size of a download that has received no byte, in one statement (the version moves with it, so a concurrent step of the optimistic lock loses). It
+     * changes one row when the artifact is such a download and the size is not above what it holds, and none otherwise.
+     */
+    @Modifying
+    @Query("UPDATE artifact SET size_bytes = :size, version = version + 1 WHERE id = :id AND direction = 'DOWNLOAD' AND state = 'STAGING' AND received_bytes = 0 AND size_bytes >= :size")
+    int narrowDownload(@Param("id") String id, @Param("size") long size);
+
     /** What the rows charge now: a consumed row and an empty file charge one byte each (2.x {@code artifacts.mjs:18}). */
     @Query("SELECT COALESCE(SUM(CASE WHEN state = 'CONSUMED' THEN 1 WHEN size_bytes < 1 THEN 1 ELSE size_bytes END), 0) FROM artifact")
     long chargedBytes();

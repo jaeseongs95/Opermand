@@ -157,6 +157,27 @@ class JdbcArtifactRegistryTest {
     }
 
     @Test
+    @DisplayName("S-D0012-01 (store half): the reservation of a download shrinks to the size the target announced, before any byte; a size above the reservation, an upload, a download that has received a byte and an unknown id are refused")
+    void aDownloadReservationShrinksToTheAnnouncedSize() {
+        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.download(64), fixtures.at()));
+
+        registry.narrowReservation(id, 10);
+
+        assertThat(registry.budget().chargedBytes()).as("the charge fell from 64 to the announced 10").isEqualTo(10);
+        assertThat(registry.find(id).orElseThrow().spec().sizeBytes()).isEqualTo(10L);
+        registry.narrowReservation(id, 10);
+        assertThat(registry.budget().chargedBytes()).as("the same size again changes nothing").isEqualTo(10);
+        assertRefused(() -> registry.narrowReservation(id, 11), ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
+        assertRefused(() -> registry.narrowReservation(id, -1), ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
+        ArtifactId upload = fixtures.reservedId(registry.reserve(fixtures.upload(4), fixtures.at()));
+        assertRefused(() -> registry.narrowReservation(upload, 1), ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
+        registry.append(id, 0, fixtures.chunk(fixtures.bytes(4, 7)));
+        assertRefused(() -> registry.narrowReservation(id, 4), ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
+        assertRefused(() -> registry.narrowReservation(new ArtifactId("9".repeat(48)), 1), ArtifactErrorCode.ARTIFACT_NOT_FOUND);
+        assertThat(registry.budget().chargedBytes()).as("the refusals changed nothing: 10 and 4").isEqualTo(14);
+    }
+
+    @Test
     @DisplayName("RC-A-161: chunks are acknowledged in order, the registry keeps the received count and every chunk digest, and a repeated or skipped chunk number is a conflict")
     void chunksAreAcknowledgedInOrder() {
         byte[] first = {1, 2};

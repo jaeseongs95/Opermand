@@ -47,7 +47,8 @@ import io.github.jaeseongs95.portal.domain.id.ArtifactId;
 
 /**
  * Reads a file from a target into a new artifact and says how it ended (design 4.1, defect D-0013, decisions D3-17 and D3-03). The order is the one 2.x had and design 5.2
- * fixes: the bytes are reserved first (the largest file a transfer carries, so a transfer that cannot be stored never touches the target), then the target is read into the
+ * fixes: the bytes are reserved first (the largest file a transfer carries, so a transfer that cannot be stored never touches the target; the reservation shrinks to the
+ * announced size as soon as the adapter has looked at the file, D-0012), then the target is read into the
  * artifact, then the stored bytes are checked against what the adapter confirmed, then the artifact is {@code READY} with its real size.
  *
  * <p>Every way to end without a verified artifact gives the reserved bytes back and answers an outcome that is {@code NOT_DISPATCHED}, needs no reconciliation and is
@@ -147,7 +148,11 @@ public class DownloadService {
         }
     }
 
-    /** The reservation: the largest file a transfer carries, bound to the target the operation was approved for; the name is the last part of the remote path. */
+    /**
+     * The reservation: the largest file a transfer carries (the size is not known before the target is looked at), bound to the target the operation was approved for; the
+     * name is the last part of the remote path. When the adapter announces the real size, before the first byte, the {@link ArtifactSink} shrinks the reservation to it
+     * (defect D-0012); until then, and for an adapter that announces nothing, the largest file stays reserved.
+     */
     private ArtifactSpec reservationOf(DownloadJob job) {
         DownloadInput input = job.input();
         BindingKind binding = input.binding() instanceof FileBinding.Bound ? BindingKind.BOUND : BindingKind.UNBOUND;

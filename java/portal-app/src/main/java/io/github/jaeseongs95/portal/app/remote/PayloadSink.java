@@ -7,5 +7,14 @@ package io.github.jaeseongs95.portal.app.remote;
  */
 public interface PayloadSink {
 
+    /**
+     * The size the target announced for the file, told once, before the first {@link #append}: the adapter has looked at the file and will read exactly that many bytes
+     * (defect D-0012: a download reserves the largest file a transfer carries until the real size is known, and gives the rest back at once). A sink that needs no size
+     * keeps this default; one that cannot take the size answers {@link SinkResult.Failed}, and the adapter ends the read without a byte, like a failed {@link #append}.
+     */
+    default SinkResult expect(long totalBytes) {
+        return new SinkResult.Accepted();
+    }
+
     SinkResult append(byte[] data);
 }

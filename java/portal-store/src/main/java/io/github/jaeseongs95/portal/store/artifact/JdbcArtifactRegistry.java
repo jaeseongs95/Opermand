@@ -205,6 +205,25 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
         return mapper.toRecord(updated);
     }
 
+    /**
+     * One conditional UPDATE, so no transaction is opened here (Principles 4.4) and the winner is told by the rows changed. When no row changed the artifact is read once to
+     * say why; nothing is written again and nothing is retried.
+     */
+    @Override
+    public void narrowReservation(ArtifactId id, long sizeBytes) {
+        if (sizeBytes < 0) {
+            throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
+        }
+        if (artifacts.narrowDownload(id.value(), sizeBytes) == 1) {
+            return;
+        }
+        ArtifactRow row = require(id);
+        if (row.direction() != ArtifactDirection.DOWNLOAD || row.state() != ArtifactState.STAGING || row.receivedBytes() != 0L) {
+            throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
+        }
+        throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
+    }
+
     @Override
     @Transactional(readOnly = true)
     public Optional<ArtifactRecord> find(ArtifactId id) {

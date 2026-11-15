@@ -6,6 +6,7 @@ import io.github.jaeseongs95.portal.app.remote.CancelSource;
 import io.github.jaeseongs95.portal.app.remote.DownloadRequest;
 import io.github.jaeseongs95.portal.app.remote.DownloadResult;
 import io.github.jaeseongs95.portal.app.remote.FileDiagnostic;
+import io.github.jaeseongs95.portal.app.remote.PayloadSink;
 import io.github.jaeseongs95.portal.app.remote.SinkResult;
 import io.github.jaeseongs95.portal.app.remote.TransferFailureCause;
 import io.github.jaeseongs95.portal.app.remote.TransferLimits;
@@ -81,6 +82,46 @@ class DownloadTest {
         assertThat(sink.bytes()).isEqualTo(content);
         assertThat(entriesInRoot()).as("a download creates nothing on the target").isEqualTo(1);
         assertThat(testBed.sessions().leases()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("S-D0012-01 (adapter half): the size the target announced is told to the sink once, before the first block; a file that is too large announces nothing; a sink that cannot take the size ends the read before a byte")
+    void announcesTheSizeBeforeTheFirstBlock() throws IOException {
+        TransferBed testBed = start();
+        Files.write(root.resolve("small.bin"), pattern(850));
+        Files.write(root.resolve("empty.bin"), new byte[0]);
+        Files.write(root.resolve("over.bin"), pattern(2_048));
+        TransferBed.Collecting small = new TransferBed.Collecting();
+        TransferBed.Collecting empty = new TransferBed.Collecting();
+        TransferBed.Collecting over = new TransferBed.Collecting();
+        TransferLimits limit = new TransferLimits(TransferLimits.DEFAULT_DEADLINE, DataSize.ofBytes(1024));
+        int[] blocksTaken = {0};
+        PayloadSink refusing = new PayloadSink() {
+            @Override
+            public SinkResult expect(long totalBytes) {
+                return new SinkResult.Failed(new IllegalStateException("no room"));
+            }
+
+            @Override
+            public SinkResult append(byte[] data) {
+                blocksTaken[0]++;
+                return new SinkResult.Accepted();
+            }
+        };
+
+        testBed.transfer().download(testBed.download("/small.bin"), small, testBed.control());
+        testBed.transfer().download(testBed.download("/empty.bin"), empty, testBed.control());
+        DownloadResult tooLarge = testBed.transfer().download(testBed.download("/over.bin", limit), over, testBed.control());
+        DownloadResult refused = testBed.transfer().download(testBed.download("/small.bin"), refusing, testBed.control());
+
+        assertThat(small.announced()).isEqualTo(850);
+        assertThat(small.announcements()).isEqualTo(1);
+        assertThat(small.announcedBeforeTheFirstBlock()).isTrue();
+        assertThat(empty.announced()).isZero();
+        assertThat(tooLarge).isInstanceOf(DownloadResult.TooLarge.class);
+        assertThat(over.announced()).as("a file that is too large is refused before the sink is asked").isEqualTo(-1L);
+        assertThat(refused).isEqualTo(new DownloadResult.Failed(TransferFailureCause.LOCAL_IO_FAILED));
+        assertThat(blocksTaken[0]).isZero();
     }
 
     @Test

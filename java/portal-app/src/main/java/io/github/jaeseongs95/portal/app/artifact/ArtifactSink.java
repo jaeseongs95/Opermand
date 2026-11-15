@@ -37,6 +37,23 @@ public final class ArtifactSink implements PayloadSink {
         this.digester = Objects.requireNonNull(digester, "digester");
     }
 
+    /**
+     * The target announced the size of the file: the reservation, which held the largest file a transfer carries, shrinks to that size at once, so a download holds no more
+     * of the budget than its file needs (defect D-0012). Only a download that has received nothing can shrink; any other artifact fails the sink.
+     */
+    @Override
+    public SinkResult expect(long totalBytes) {
+        if (state instanceof SinkResult.Failed) {
+            return state;
+        }
+        try {
+            registry.narrowReservation(id, totalBytes);
+        } catch (RuntimeException e) {
+            state = new SinkResult.Failed(e);
+        }
+        return state;
+    }
+
     @Override
     public SinkResult append(byte[] data) {
         Objects.requireNonNull(data, "data");
