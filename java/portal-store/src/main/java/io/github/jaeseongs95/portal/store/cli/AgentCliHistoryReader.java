@@ -7,7 +7,6 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.springframework.jdbc.core.ResultSetExtractor;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcOperations;
 import org.springframework.stereotype.Component;
@@ -18,12 +17,14 @@ import io.github.jaeseongs95.portal.app.journal.HistoryCursor;
 import io.github.jaeseongs95.portal.domain.error.HistoryErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
+import io.github.jaeseongs95.portal.store.sql.SqlBuilder;
 
 /**
  * The keyset page of the install history of one binding (A-027, A-028, A-029). The order is newest first by (created_at, id) of the joined {@code operation} row, the
- * same key the cursor carries, so a request that arrives between two page reads or shares a timestamp with others is neither repeated nor skipped. The statement has no
- * LIMIT (not common to H2, PostgreSQL, MariaDB and MySQL): the extractor stops reading after one row more than a page, and that extra row only tells whether a next page
- * exists. The caller owns the transaction. The {@code Operation} of each entry is not read here (the journal reads it, see {@code JdbcAgentCliRequestStore#history}).
+ * same key the cursor carries, so a request that arrives between two page reads or shares a timestamp with others is neither repeated nor skipped. The statement is
+ * written by the {@link SqlBuilder}, which adds the row limit in the syntax of the database in use (the limit is not common to the seven products: H2, PostgreSQL,
+ * Oracle, Db2, SQL Server, MariaDB and MySQL): the statement asks for one row more than a page, and that extra row only tells whether a next page exists. The caller owns the transaction. The {@code Operation} of
+ * each entry is not read here (the journal reads it, see {@code JdbcAgentCliRequestStore#history}).
  */
 @Component
 class AgentCliHistoryReader {
@@ -35,8 +36,8 @@ class AgentCliHistoryReader {
         SELECT o.id AS operation_id, o.created_at AS created_at
         FROM agent_cli_request r JOIN operation o ON o.id = r.operation_id
         WHERE r.provider = :provider AND o.target_id = :targetId AND o.target_revision = :targetRevision AND o.profile = :profile""";
-    private static final String KEYSET_PREDICATE = " AND (o.created_at < :createdAt OR (o.created_at = :createdAt AND o.id < :id))";
-    private static final String NEWEST_FIRST = " ORDER BY o.created_at DESC, o.id DESC";
+    private static final String KEYSET_PREDICATE = "(o.created_at < :createdAt OR (o.created_at = :createdAt AND o.id < :id))";
+    private static final String NEWEST_FIRST = "o.created_at DESC, o.id DESC";
     private static final String CURSOR_ROW = """
         SELECT COUNT(*) FROM agent_cli_request r JOIN operation o ON o.id = r.operation_id
         WHERE o.id = :id AND o.created_at = :createdAt""";
@@ -44,11 +45,13 @@ class AgentCliHistoryReader {
     private final NamedParameterJdbcOperations jdbc;
     private final AgentCliRequestRowRepository requests;
     private final AgentCliMapper mapper;
+    private final SqlBuilder sql;
 
-    AgentCliHistoryReader(NamedParameterJdbcOperations jdbc, AgentCliRequestRowRepository requests, AgentCliMapper mapper) {
+    AgentCliHistoryReader(NamedParameterJdbcOperations jdbc, AgentCliRequestRowRepository requests, AgentCliMapper mapper, SqlBuilder sql) {
         this.jdbc = jdbc;
         this.requests = requests;
         this.mapper = mapper;
+        this.sql = sql;
     }
 
     /** One entry of a page: the install record and the creation time of its operation. */
@@ -78,24 +81,25 @@ class AgentCliHistoryReader {
     private Slice page(AgentCliBinding binding, HistoryCursor.After cursor) {
         MapSqlParameterSource parameters = new MapSqlParameterSource().addValue("provider", binding.provider().name())
             .addValue("targetId", binding.targetId().value()).addValue("targetRevision", binding.targetRevision().hex())
-            .addValue("profile", binding.profile().value());
-        String sql = SELECT_KEYS + NEWEST_FIRST;
+            .addValue("profile", binding.profile().value()).addValue("limit", PAGE_SIZE + 1);
         if (cursor != null) {
             parameters.addValue("createdAt", Timestamp.from(cursor.createdAt())).addValue("id", cursor.id().value());
-            sql = SELECT_KEYS + KEYSET_PREDICATE + NEWEST_FIRST;
         }
-        ResultSetExtractor<List<Key>> firstRows = rows -> {
-            List<Key> keys = new ArrayList<>();
-            while (keys.size() <= PAGE_SIZE && rows.next()) {
-                keys.add(new Key(new OperationId(rows.getString("operation_id")), rows.getTimestamp("created_at").toInstant()));
-            }
-            return keys;
-        };
-        List<Key> keys = jdbc.query(sql, parameters, firstRows);
+        List<Key> keys = jdbc.query(statement(cursor != null), parameters,
+            (rows, number) -> new Key(new OperationId(rows.getString("operation_id")), rows.getTimestamp("created_at").toInstant()));
         boolean more = keys.size() > PAGE_SIZE;
         List<Key> pageKeys = more ? keys.subList(0, PAGE_SIZE) : keys;
         return new Slice(hits(pageKeys), more ? new HistoryCursor.After(pageKeys.get(pageKeys.size() - 1).createdAt(), pageKeys.get(pageKeys.size() - 1).id())
             : new HistoryCursor.End());
+    }
+
+    /** The key query of one page: the keyset condition only after a cursor, newest first, and the row limit of the database in use (the parameter {@code :limit} is a page and one more). */
+    String statement(boolean afterCursor) {
+        SqlBuilder.Statement select = sql.query(SELECT_KEYS);
+        if (afterCursor) {
+            select.and(KEYSET_PREDICATE);
+        }
+        return select.orderBy(NEWEST_FIRST).limit(":limit");
     }
 
     private List<Hit> hits(List<Key> keys) {
