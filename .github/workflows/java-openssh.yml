@@ -50,6 +50,11 @@ jobs:
             -Pportal.test.openssh.key-file="$PORTAL_OPENSSH_KEY_FILE" \
             -Pportal.test.openssh.known-hosts="$PORTAL_OPENSSH_KNOWN_HOSTS" \
             -Pportal.test.openssh.platform=linux
+      # Case S-D0111-01: without any -Pportal.test.* property the test JVM carries no processor limit and no heap of the repository's own (TestJvmSizeTest checks the JVM it runs in).
+      # No -P is given here on purpose.
+      - name: Test JVM sizes without -P properties
+        working-directory: java
+        run: ./gradlew --no-daemon --console=plain :portal-arch-checks:test
       - name: Stop the OpenSSH server and remove the account
         if: always()
         run: sh java/ci/openssh-linux.sh stop
