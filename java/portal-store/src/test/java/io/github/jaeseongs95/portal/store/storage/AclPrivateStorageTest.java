@@ -12,12 +12,9 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.AclEntry;
-import java.nio.file.attribute.AclEntryFlag;
-import java.nio.file.attribute.AclEntryPermission;
 import java.nio.file.attribute.AclEntryType;
 import java.nio.file.attribute.AclFileAttributeView;
 import java.nio.file.attribute.UserPrincipal;
-import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -150,42 +147,70 @@ class AclPrivateStorageTest {
         TestStorage.assertOwnerOnly(subfolder);
     }
 
-    /** A folder whose inheritable entry denies the owner the right to change the access control list: what is made in it cannot be made private (the well-known owner-rights group, S-1-3-4). */
+    /** A folder in which nothing can be made private, and that the account can still change and delete (see {@link TestStorage#forbidChangingTheListOfWhatIsMadeIn}). */
     private Path folderThatForbidsChangingTheList() throws IOException {
         Path parent = Files.createDirectory(directory.resolve("no-write-dac"));
-        UserPrincipal ownerRights = parent.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName("OWNER RIGHTS");
-        AclFileAttributeView view = view(parent);
-        // The list is exactly two entries, so that what is made in the folder inherits the same two on every machine: the denial, and full control for the owner (which keeps the
-        // owner able to delete what a failed call must remove again; the owner-rights entry takes away only the implicit rights of the owner, not the entries of the list).
-        List<AclEntry> acl = List.of(
-            AclEntry.newBuilder().setType(AclEntryType.DENY).setPrincipal(ownerRights).setPermissions(AclEntryPermission.WRITE_ACL, AclEntryPermission.WRITE_OWNER)
-                .setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT).build(),
-            AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(view.getOwner()).setPermissions(EnumSet.allOf(AclEntryPermission.class))
-                .setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT).build());
-        view.setAcl(acl);
+        TestStorage.forbidChangingTheListOfWhatIsMadeIn(parent);
         return parent;
     }
 
     @Test
-    @DisplayName("S-D0117-07: when the list of a new folder cannot be set, every folder that the call created is removed and the answer is UnsafeStorageException (a real denial of the right to change the list)")
+    @DisplayName("S-D0117-07: when the list of a new folder cannot be set, every folder that the call created is removed and the answer is UnsafeStorageException (a real denial of the right to change the list); the denial is not undone and the account still deletes the folder it made")
     void aFolderWhoseListCannotBeSetIsRemoved() throws IOException {
         Path parent = folderThatForbidsChangingTheList();
-        Path inner = parent.resolve("outer").resolve("inner");
+        try {
+            Path inner = parent.resolve("outer").resolve("inner");
 
-        assertThatThrownBy(() -> rule.createFolder(inner)).isInstanceOf(UnsafeStorageException.class).hasMessageContaining("could not be made private");
+            assertThatThrownBy(() -> rule.createFolder(inner)).isInstanceOf(UnsafeStorageException.class).hasMessageContaining("could not be made private");
 
-        assertThat(Files.exists(parent.resolve("outer"), LinkOption.NOFOLLOW_LINKS)).isFalse();
+            assertThat(Files.exists(parent.resolve("outer"), LinkOption.NOFOLLOW_LINKS)).isFalse();
+        } finally {
+            TestStorage.deleteTree(parent); // without undoing the denial: what a test that dies before its cleanup has to be able to rely on
+        }
     }
 
     @Test
     @DisplayName("S-D0117-07: when the list of a new file cannot be set, the file is closed and removed and the answer is UnsafeStorageException (a real denial of the right to change the list)")
     void aFileWhoseListCannotBeSetIsRemoved() throws IOException {
         Path parent = folderThatForbidsChangingTheList();
-        Path file = parent.resolve("payload.part");
+        try {
+            Path file = parent.resolve("payload.part");
 
-        assertThatThrownBy(() -> rule.open(file, Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE))).isInstanceOf(UnsafeStorageException.class);
+            assertThatThrownBy(() -> rule.open(file, Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE))).isInstanceOf(UnsafeStorageException.class);
 
-        assertThat(Files.exists(file, LinkOption.NOFOLLOW_LINKS)).isFalse();
+            assertThat(Files.exists(file, LinkOption.NOFOLLOW_LINKS)).isFalse();
+        } finally {
+            TestStorage.deleteTree(parent);
+        }
+    }
+
+    @Test
+    @DisplayName("S-D0117-07: the folder that forbids changing the list is never locked itself: with the denial still in place, the account deletes it with what was made below it (the proof for a test that dies before its cleanup)")
+    void theAccountDeletesAFolderThatStillHasTheDenial() throws IOException {
+        Path parent = folderThatForbidsChangingTheList();
+        Path child = Files.createDirectory(parent.resolve("outer"));
+        Files.writeString(Files.createDirectory(child.resolve("inner")).resolve("payload.part"), "bytes");
+        assertThatThrownBy(() -> TestStorage.undoTheDenial(child)).as("what is made below the folder has the denial").isInstanceOf(IOException.class);
+
+        TestStorage.deleteTree(parent);
+
+        assertThat(Files.exists(parent, LinkOption.NOFOLLOW_LINKS)).isFalse();
+    }
+
+    @Test
+    @DisplayName("S-D0117-07: when the denial is undone the same call makes the folder private, and the folder and what is below it are deleted afterwards (the control of the denial tests)")
+    void theCallWorksWhenTheDenialIsUndone() throws IOException {
+        Path parent = folderThatForbidsChangingTheList();
+        TestStorage.undoTheDenial(parent);
+        try {
+            Path inner = parent.resolve("outer").resolve("inner");
+
+            rule.createFolder(inner);
+
+            TestStorage.assertOwnerOnly(inner);
+        } finally {
+            TestStorage.deleteTree(parent);
+        }
     }
 
     @Test

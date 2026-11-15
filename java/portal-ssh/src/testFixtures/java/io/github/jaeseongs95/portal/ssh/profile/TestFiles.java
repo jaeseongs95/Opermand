@@ -6,14 +6,17 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileStore;
 import java.nio.file.FileSystems;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.AclEntry;
 import java.nio.file.attribute.AclEntryFlag;
 import java.nio.file.attribute.AclEntryPermission;
 import java.nio.file.attribute.AclEntryType;
 import java.nio.file.attribute.AclFileAttributeView;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.nio.file.attribute.UserPrincipal;
@@ -102,20 +105,49 @@ public final class TestFiles {
     }
 
     /**
-     * Makes the existing folder one whose inheritable entry denies the owner the right to change the access control list (the well-known owner-rights group, S-1-3-4), so that nothing
-     * made in it can be made private. Acl stores only.
+     * Makes the existing folder one in which nothing can be made private: its list gets an entry that denies the owner-rights group (the well-known S-1-3-4, the implicit rights
+     * of the owner) the right to change the list and the owner, and that entry is INHERIT_ONLY, so it applies to what is made in the folder and not to the folder itself. The
+     * second entry is full control for the owner, which includes deleting children. The folder itself is therefore never locked: the account that made it can change its list,
+     * undo the denial ({@link #undoTheDenial}) or delete the folder and everything below it without undoing anything ({@link #deleteTree}), which is what keeps a test that dies
+     * before its cleanup from leaving a folder that nobody can delete. Acl stores only.
      */
     public static void forbidChangingTheListOfWhatIsMadeIn(Path folder) throws IOException {
         UserPrincipal ownerRights = folder.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName("OWNER RIGHTS");
         AclFileAttributeView view = Files.getFileAttributeView(folder, AclFileAttributeView.class);
-        // The list is exactly two entries, so that what is made in the folder inherits the same two on every machine: the denial, and full control for the owner (which keeps the
-        // owner able to delete what a failed call must remove again; the owner-rights entry takes away only the implicit rights of the owner, not the entries of the list).
         List<AclEntry> acl = List.of(
             AclEntry.newBuilder().setType(AclEntryType.DENY).setPrincipal(ownerRights).setPermissions(AclEntryPermission.WRITE_ACL, AclEntryPermission.WRITE_OWNER)
-                .setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT).build(),
+                .setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT, AclEntryFlag.INHERIT_ONLY).build(),
             AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(view.getOwner()).setPermissions(EnumSet.allOf(AclEntryPermission.class))
                 .setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT).build());
         view.setAcl(acl);
+    }
+
+    /** Takes the denial of {@link #forbidChangingTheListOfWhatIsMadeIn} away again: the list of the folder is full control for the owner, inheritable. What was made in it before keeps what it inherited. */
+    public static void undoTheDenial(Path folder) throws IOException {
+        AclFileAttributeView view = Files.getFileAttributeView(folder, AclFileAttributeView.class);
+        view.setAcl(List.of(AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(view.getOwner()).setPermissions(EnumSet.allOf(AclEntryPermission.class))
+            .setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT).build()));
+    }
+
+    /** Deletes the folder and everything below it, following no link, and fails the test when something stays: the proof that the account can delete what it made. */
+    public static void deleteTree(Path root) throws IOException {
+        Files.walkFileTree(root, new SimpleFileVisitor<>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes) throws IOException {
+                Files.delete(file);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult postVisitDirectory(Path folder, IOException failure) throws IOException {
+                if (failure != null) {
+                    throw failure;
+                }
+                Files.delete(folder);
+                return FileVisitResult.CONTINUE;
+            }
+        });
+        assertThat(Files.exists(root, LinkOption.NOFOLLOW_LINKS)).as("%s is deleted", root).isFalse();
     }
 
     /**

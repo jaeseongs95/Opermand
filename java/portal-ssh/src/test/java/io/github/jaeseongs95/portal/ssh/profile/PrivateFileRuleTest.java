@@ -89,16 +89,44 @@ class PrivateFileRuleTest {
             "the file store of the test folder has no acl view (it is a posix store); a run on a machine with ACLs states -Pportal.test.require=acl and fails instead of skipping");
         Path parent = Files.createDirectory(directory.resolve("no-write-dac"));
         TestFiles.forbidChangingTheListOfWhatIsMadeIn(parent);
-        Path nested = parent.resolve("outer").resolve("known_hosts");
+        try {
+            Path nested = parent.resolve("outer").resolve("known_hosts");
 
-        assertThatThrownBy(() -> TestFiles.privateFiles().createPrivateFile(nested)).isInstanceOf(IOException.class).hasMessageContaining("could not be made private");
+            assertThatThrownBy(() -> TestFiles.privateFiles().createPrivateFile(nested)).isInstanceOf(IOException.class).hasMessageContaining("could not be made private");
 
-        assertThat(parent.resolve("outer")).doesNotExist();
+            assertThat(parent.resolve("outer")).doesNotExist();
 
-        Path inExisting = parent.resolve("known_hosts");
-        assertThatThrownBy(() -> new PrivateFiles(List.of(new AclPrivateFileRule())).createPrivateFile(inExisting)).isInstanceOf(IOException.class)
-            .hasMessageContaining("could not be made private");
-        assertThat(inExisting).doesNotExist();
+            Path inExisting = parent.resolve("known_hosts");
+            assertThatThrownBy(() -> new PrivateFiles(List.of(new AclPrivateFileRule())).createPrivateFile(inExisting)).isInstanceOf(IOException.class)
+                .hasMessageContaining("could not be made private");
+            assertThat(inExisting).doesNotExist();
+        } finally {
+            TestFiles.deleteTree(parent); // without undoing the denial: what a test that dies before its cleanup has to be able to rely on
+        }
+    }
+
+    @Test
+    @DisplayName("S-D0117-07: the folder that forbids changing the list is never locked itself: with the denial in place the account deletes it with what is below it; with the denial undone the same call works")
+    void theAccountDeletesAFolderThatForbidsChangingTheList() throws IOException {
+        TestFiles.requireOrSkip("acl", Files.getFileStore(directory).supportsFileAttributeView("acl"),
+            "the file store of the test folder has no acl view (it is a posix store); a run on a machine with ACLs states -Pportal.test.require=acl and fails instead of skipping");
+        Path locked = Files.createDirectory(directory.resolve("locked"));
+        TestFiles.forbidChangingTheListOfWhatIsMadeIn(locked);
+        Files.writeString(Files.createDirectory(locked.resolve("outer")).resolve("known_hosts"), "x");
+        TestFiles.deleteTree(locked);
+
+        Path undone = Files.createDirectory(directory.resolve("undone"));
+        TestFiles.forbidChangingTheListOfWhatIsMadeIn(undone);
+        TestFiles.undoTheDenial(undone);
+        try {
+            Path file = undone.resolve("outer").resolve("known_hosts");
+
+            TestFiles.privateFiles().createPrivateFile(file);
+
+            TestFiles.assertOwnerOnly(file);
+        } finally {
+            TestFiles.deleteTree(undone);
+        }
     }
 
     @Test
