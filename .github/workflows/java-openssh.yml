@@ -114,6 +114,7 @@ jobs:
           $out = Join-Path $env:RUNNER_TEMP 'idle-watch.log'
           $watch = [System.Diagnostics.Stopwatch]::StartNew()
           $last = ''
+          $lastProcs = ''
           $known = @{}
           while ($watch.Elapsed.TotalMinutes -lt 20) {
             $rows = @(Get-NetTCPConnection -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -eq $idle -or $_.RemotePort -eq $idle })
@@ -128,6 +129,13 @@ jobs:
                   if ($p) { Add-Content -LiteralPath $out -Value ('    pid ' + $p.ProcessId + ' = ' + $p.Name + ', parent ' + $p.ParentProcessId + ', ' + ([string] $p.CommandLine).Substring(0, [Math]::Min(120, ([string] $p.CommandLine).Length))) }
                 }
               }
+            }
+            # The processes that could hold the server end (children of sshd and of its sessions), each time the set changes.
+            $procs = (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -in @('sshd', 'ssh-shellhost', 'sftp-server', 'cmd', 'conhost', 'PING', 'python') } |
+              Sort-Object Id | ForEach-Object { '{0}={1}<{2}' -f $_.Id, $_.Name, $_.Parent.Id }) -join ' '
+            if ($procs -ne $lastProcs) {
+              Add-Content -LiteralPath $out -Value ((Get-Date).ToString('HH:mm:ss.fff') + '    processes (pid=name<parent): ' + $procs)
+              $lastProcs = $procs
             }
             Start-Sleep -Milliseconds 250
           }
