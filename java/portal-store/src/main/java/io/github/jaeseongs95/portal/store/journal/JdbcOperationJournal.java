@@ -12,6 +12,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import io.github.jaeseongs95.portal.app.journal.JournalInsert;
 import io.github.jaeseongs95.portal.app.journal.OperationJournal;
+import io.github.jaeseongs95.portal.domain.error.ExecutionAttempt;
 import io.github.jaeseongs95.portal.domain.error.OperationErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
@@ -81,7 +82,9 @@ public class JdbcOperationJournal implements OperationJournal {
             // ready position: this one is told to read again and decide again, as a transition into QUEUED is (save).
             Optional<OperationRow> winner = operations.findByRequestKey(spec.requestKey().value());
             if (winner.isEmpty()) {
-                throw new RequestRefusedException(OperationErrorCode.OPERATION_VERSION_CONFLICT, e);
+                // Nothing was stored and nothing was attempted: the same key may be sent again (it is idempotent), so this answer says so. The default of the code says
+                // retryable false and attempt unknown, and a client that does not resend what it cannot place would lose the request.
+                throw new RequestRefusedException(OperationErrorCode.OPERATION_VERSION_CONFLICT, true, ExecutionAttempt.NOT_ATTEMPTED, e);
             }
             return answerFor(winner.orElseThrow(), spec);
         }
@@ -102,6 +105,12 @@ public class JdbcOperationJournal implements OperationJournal {
     @Override
     @Transactional
     public Operation save(Operation next, long expectedVersion) {
+        return save(next, expectedVersion, () -> { });
+    }
+
+    @Override
+    @Transactional
+    public Operation save(Operation next, long expectedVersion, Runnable beforeWrite) {
         OperationRow before = operations.findById(next.id().value()).orElseThrow(() -> new RequestRefusedException(RequestErrorCode.OPERATION_NOT_FOUND));
         if (before.version() != expectedVersion) {
             throw new RequestRefusedException(OperationErrorCode.OPERATION_VERSION_CONFLICT);
@@ -110,11 +119,15 @@ public class JdbcOperationJournal implements OperationJournal {
             // The limits are kept by the claim; a transition into STARTING that did not pass it would take a slot nobody counted.
             throw new RequestRefusedException(OperationErrorCode.INVALID_OPERATION_TRANSITION);
         }
+        // The place in the ready order is read before the check of the room runs, as for a new operation (see accept): the one that loses the place is told below.
+        Long place = next.state() == OperationState.QUEUED ? operations.maxReadySequence() + 1 : null;
+        beforeWrite.run();
         try {
-            return storage.persist(before, next, expectedVersion);
+            return storage.persist(before, next, expectedVersion, place);
         } catch (DuplicateKeyException e) {
-            // Two operations were queued in the same instant and took the same ready position; this one is told to read again and decide again.
-            throw new RequestRefusedException(OperationErrorCode.OPERATION_VERSION_CONFLICT, e);
+            // Two operations were queued in the same instant and took the same ready position; the row is as it was and nothing was attempted, so this one is told to read
+            // again and decide again (a retry is safe).
+            throw new RequestRefusedException(OperationErrorCode.OPERATION_VERSION_CONFLICT, true, ExecutionAttempt.NOT_ATTEMPTED, e);
         }
     }
 

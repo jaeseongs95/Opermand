@@ -46,6 +46,13 @@ public interface OperationJournal {
      */
     Operation save(Operation next, long expectedVersion);
 
+    /**
+     * The same, with a check that runs inside the transaction before the new version is written: the room in the queue for a transition into queued. For such a transition the
+     * place in the ready order is read before the check, so the queue cannot exceed its room however the writers interleave; the one that loses the place throws
+     * {@code RequestRefusedException(OPERATION_VERSION_CONFLICT)} that is retryable and not attempted (the row is as it was).
+     */
+    Operation save(Operation next, long expectedVersion, Runnable beforeWrite);
+
     /** The transitions of one operation in version order. */
     List<OperationEvent> events(OperationId id);
 }

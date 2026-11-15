@@ -22,6 +22,7 @@ import io.github.jaeseongs95.portal.domain.error.RequestErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
 import io.github.jaeseongs95.portal.domain.id.OperationIdGenerator;
+import io.github.jaeseongs95.portal.domain.id.TargetId;
 import io.github.jaeseongs95.portal.domain.operation.Admission;
 import io.github.jaeseongs95.portal.domain.operation.NewOperation;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
@@ -96,7 +97,8 @@ public class OperationIntake {
      *
      * @throws RequestRefusedException {@code TARGET_UNAVAILABLE}, {@code TARGET_REVISION_CONFLICT}, {@code MAINTENANCE_ACTIVE}, {@code REQUEST_CAPACITY_EXCEEDED}, the code
      *     of the queue limit that is reached (for a judgement that queues, when the queue is full), {@code OPERATION_KEY_CONFLICT} (the key was used with another contract),
-     *     {@code OPERATION_VERSION_CONFLICT} (two operations took the same place in the queue; decide again)
+     *     {@code OPERATION_VERSION_CONFLICT} (two operations took the same place in the queue; nothing was stored and nothing was attempted, the answer is retryable, and
+     *     sending the same key again is safe because the key is idempotent)
      * @throws DispatchRefusedException the audit did not become durable ({@link DispatchStage#DECISION_AUDIT}); nothing is stored
      */
     public Operation submit(NewOperation spec) {
@@ -110,7 +112,7 @@ public class OperationIntake {
         }
         gate.require(approvalPolicy.admit(maintenance.state(), queueView.counts()));
         Admission admission = judge.judge(spec, target);
-        Runnable room = admission instanceof Admission.Queue ? () -> requireRoomInQueue(spec) : () -> { };
+        Runnable room = admission instanceof Admission.Queue ? () -> requireRoomInQueue(spec.targetId()) : () -> { };
         room.run();
         OperationId id = ids.next();
         Instant at = clock.instant();
@@ -159,8 +161,8 @@ public class OperationIntake {
         }
     }
 
-    private void requireRoomInQueue(NewOperation spec) {
-        gate.require(scheduler.admitToQueue(spec.targetId(), queueView.schedulingView(limits, clock.instant(), limits.queueCapacity().value())));
+    private void requireRoomInQueue(TargetId target) {
+        gate.require(scheduler.admitToQueue(target, queueView.schedulingView(limits, clock.instant(), limits.queueCapacity().value())));
     }
 
     /**
@@ -179,9 +181,11 @@ public class OperationIntake {
         if (approvalPolicy.checkStart(operation, authority, maintenance.state(), now) instanceof StartDecision.Refused refused) {
             throw new DispatchRefusedException(refused.failure());
         }
-        gate.require(scheduler.admitToQueue(operation.targetId(), queueView.schedulingView(limits, now, limits.queueCapacity().value())));
+        requireRoomInQueue(operation.targetId());
         audit.appendBefore(DispatchStage.START_AUDIT, new AuditEvent(AuditAction.EXECUTION_QUEUED, id, "authority " + authority.mode().wire()));
-        return writes.store(operation.enqueue(authority, now), operation.version());
+        // The room is counted again inside the transaction of the write, after the place in the queue was read: an approval, or an intake, that commits in between cannot
+        // push the queue over its room. The one that loses the place is told OPERATION_VERSION_CONFLICT (retryable, not attempted) and the operation stays pending.
+        return writes.store(operation.enqueue(authority, now), operation.version(), () -> requireRoomInQueue(operation.targetId()));
     }
 
     /** The owner refuses a pending operation; nothing ran. Any other state is refused at {@code REQUEST_STATE}: a queued operation is cancelled, not denied. */

@@ -117,6 +117,14 @@ class OperationStorage {
      * {@code RequestRefusedException(OPERATION_VERSION_CONFLICT)} when the stored version is another one.
      */
     Operation persist(OperationRow before, Operation next, long expectedVersion) {
+        return persist(before, next, expectedVersion, null);
+    }
+
+    /**
+     * The same, for a transition into {@code QUEUED} whose caller read the place in the ready order itself, before it counted the room in the queue ({@code place});
+     * without one the place is read here. See {@code JdbcOperationJournal#save}.
+     */
+    Operation persist(OperationRow before, Operation next, long expectedVersion, Long place) {
         OperationSnapshot s = next.snapshot();
         if (s.version() != expectedVersion + 1) {
             throw new IllegalArgumentException("The next version must be " + (expectedVersion + 1) + " but is " + s.version());
@@ -129,7 +137,7 @@ class OperationStorage {
         Instant startedAt = before.startedAt();
         switch (s.state()) {
             case QUEUED -> {
-                readySequence = operations.maxReadySequence() + 1;
+                readySequence = place != null ? place : operations.maxReadySequence() + 1;
                 readyAt = s.updatedAt();
             }
             case STARTING -> startedAt = s.updatedAt();

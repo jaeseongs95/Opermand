@@ -144,7 +144,14 @@ class JdbcClaimStoreConcurrencyTest {
         }
     }
 
-    private long queuedRows() {
+/** The answer of an insert or a write that lost its place: nothing was stored, nothing was attempted, and sending it again is safe (S-D0119-18, -19, -20). */
+private static void assertRetryableConflict(io.github.jaeseongs95.portal.domain.error.RequestRefusedException refused) {
+    assertThat(refused.code()).isEqualTo(io.github.jaeseongs95.portal.domain.error.OperationErrorCode.OPERATION_VERSION_CONFLICT);
+    assertThat(refused.retryable()).as("a client that does not resend what it cannot place would lose the request").isTrue();
+    assertThat(refused.attempt()).isEqualTo(io.github.jaeseongs95.portal.domain.error.ExecutionAttempt.NOT_ATTEMPTED);
+}
+
+private long queuedRows() {
         return jdbc.queryForObject("SELECT COUNT(*) FROM operation WHERE state = 'QUEUED'", Long.class);
     }
 
@@ -168,8 +175,7 @@ class JdbcClaimStoreConcurrencyTest {
 
             assertThat(answers.stream().filter(answer -> answer instanceof io.github.jaeseongs95.portal.app.journal.JournalInsert.Inserted)).hasSize(1);
             assertThat(answers.stream().filter(answer -> answer instanceof io.github.jaeseongs95.portal.domain.error.RequestRefusedException)).hasSize(1)
-                .allSatisfy(answer -> assertThat(((io.github.jaeseongs95.portal.domain.error.RequestRefusedException) answer).code())
-                    .isEqualTo(io.github.jaeseongs95.portal.domain.error.OperationErrorCode.OPERATION_VERSION_CONFLICT));
+                .allSatisfy(answer -> assertRetryableConflict((io.github.jaeseongs95.portal.domain.error.RequestRefusedException) answer));
             assertThat(queuedRows()).isEqualTo(1);
         } finally {
             pool.shutdownNow();
@@ -206,8 +212,52 @@ class JdbcClaimStoreConcurrencyTest {
 
             assertThat(early).isInstanceOf(io.github.jaeseongs95.portal.app.journal.JournalInsert.Inserted.class);
             assertThat(late.get(30, TimeUnit.SECONDS)).isInstanceOfSatisfying(io.github.jaeseongs95.portal.domain.error.RequestRefusedException.class,
-                refused -> assertThat(refused.code()).isEqualTo(io.github.jaeseongs95.portal.domain.error.OperationErrorCode.OPERATION_VERSION_CONFLICT));
+                refused -> assertRetryableConflict(refused));
             assertThat(queuedRows()).as("the room of one was not exceeded").isEqualTo(1);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test
+    @DisplayName("S-D0119-20 an owner's approval reads its place before it counts the queue: an intake that commits in between cannot push the queue over its room, the approval is told a retryable conflict and the operation stays pending")
+    void anApprovalCannotExceedTheRoomEither() throws Exception {
+        io.github.jaeseongs95.portal.domain.operation.Operation pending = fx.pending(journal, fx.command("waiting-for-the-owner", "alpha", "touch owner", new io.github.jaeseongs95.portal.domain.operation.ConflictKey.None()));
+        Runnable roomOfOne = () -> {
+            if (queuedRows() >= 1) {
+                throw new io.github.jaeseongs95.portal.domain.error.RequestRefusedException(io.github.jaeseongs95.portal.domain.error.OperationErrorCode.OPERATION_QUEUE_FULL);
+            }
+        };
+        java.util.concurrent.CountDownLatch counted = new java.util.concurrent.CountDownLatch(1);
+        java.util.concurrent.CountDownLatch intakeStored = new java.util.concurrent.CountDownLatch(1);
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        try {
+            Future<Object> approval = pool.submit(() -> {
+                try {
+                    return journal.save(pending.enqueue(new io.github.jaeseongs95.portal.domain.operation.StartAuthority.Owner(), JournalFixture.NOW.plusSeconds(1)), pending.version(), () -> {
+                        roomOfOne.run();
+                        counted.countDown();
+                        try {
+                            intakeStored.await(20, TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                    });
+                } catch (io.github.jaeseongs95.portal.domain.error.RequestRefusedException refused) {
+                    return refused;
+                }
+            });
+            assertThat(counted.await(20, TimeUnit.SECONDS)).isTrue();
+
+            Object intake = accept("intake-between", 1, roomOfOne);
+            intakeStored.countDown();
+
+            assertThat(intake).isInstanceOf(io.github.jaeseongs95.portal.app.journal.JournalInsert.Inserted.class);
+            assertThat(approval.get(30, TimeUnit.SECONDS)).isInstanceOfSatisfying(io.github.jaeseongs95.portal.domain.error.RequestRefusedException.class,
+                refused -> assertRetryableConflict(refused));
+            assertThat(queuedRows()).as("the room of one was not exceeded").isEqualTo(1);
+            assertThat(journal.find(pending.id()).orElseThrow().state()).as("the approval did not happen, so the owner may press the button again")
+                .isEqualTo(io.github.jaeseongs95.portal.domain.operation.OperationState.PENDING);
         } finally {
             pool.shutdownNow();
         }

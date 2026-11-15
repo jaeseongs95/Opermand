@@ -28,7 +28,12 @@ public class OperationWrites {
 
     /** Stores {@code next} when the stored version is {@code expectedVersion}, then announces it. Returns the stored operation. */
     public Operation store(Operation next, long expectedVersion) {
-        Operation stored = journal.save(next, expectedVersion);
+        return store(next, expectedVersion, () -> { });
+    }
+
+    /** The same, with a check that runs inside the transaction of the write, before it (the room in the queue; see {@link OperationJournal#save(Operation, long, Runnable)}). */
+    public Operation store(Operation next, long expectedVersion, Runnable beforeWrite) {
+        Operation stored = journal.save(next, expectedVersion, beforeWrite);
         announce(stored);
         return stored;
     }
