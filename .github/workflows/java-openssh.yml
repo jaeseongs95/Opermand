@@ -58,8 +58,8 @@ jobs:
       # Case S-D0117-09: the unit tests of the file rules need permission bits and symbolic links, which this runner has and a Windows user token does not. The property says so:
       # a test that needs one of them and does not find it fails here instead of skipping (the build hands the property to the test JVM, the test code reads it). The property
       # is not one of the sizes of the test JVM (portal.test.cpus, heap, forks), so the step above is not affected. The whole of portal-store is run; of portal-ssh the two packages
-      # that use the file rules (profile and hostkey): the rest of the module has a Linux-only race of its own that is reported as a defect and not hidden here (UploadTest
-      # S3-SF-16 / RC-B-924, two concurrent uploads to one new name were both published once on this runner).
+      # that use the file rules (profile and hostkey): the rest of the module has a Linux-only race of its own that is reported as a defect and not hidden here (defect
+      # SSH_PORTAL-D-0131: UploadTest S3-SF-16 / RC-B-924, two concurrent uploads to one new name were both published once on this runner).
       - name: Unit tests of portal-store and the file rules of portal-ssh with permission bits and symbolic links required
         working-directory: java
         run: >-

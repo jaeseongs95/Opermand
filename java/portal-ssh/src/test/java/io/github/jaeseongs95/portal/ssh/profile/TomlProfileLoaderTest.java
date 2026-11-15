@@ -129,6 +129,17 @@ class TomlProfileLoaderTest {
     }
 
     @Test
+    @DisplayName("S-D0117-03: a profile path that is a symbolic link to the profile file is followed and the profiles load (runs where symbolic links can be made)")
+    void aProfileFileReachedByALinkLoads() throws IOException {
+        Path real = write(document(null, ""));
+        Path link = directory.resolve("profiles-link.toml");
+        TestFiles.requireOrSkip("links", TestFiles.canLink(link, real),
+            "the file store or the account of the test cannot make symbolic links (a Windows user token); the Linux CI requires them (-Pportal.test.require=posix,links) and fails instead of skipping");
+
+        assertThat(loader.load(link).entries()).extracting(entry -> entry.alias().value()).containsExactly("a");
+    }
+
+    @Test
     @DisplayName("S-D0117-04: a folder in place of the profile file is UNREADABLE and a file that is not TOML is reported for its text, never for its rights")
     void aFolderInPlaceOfTheFileIsUnreadable() throws IOException {
         Path folder = Files.createDirectory(directory.resolve("profiles.toml"));

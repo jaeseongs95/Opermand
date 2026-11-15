@@ -256,6 +256,17 @@ class EnvironmentCredentialSourceTest {
     }
 
     @Test
+    @DisplayName("S-D0117-03: a key path that is a symbolic link to a key file is followed and the key is used (runs where symbolic links can be made)")
+    void aKeyReachedByALinkIsUsed() throws IOException {
+        Path real = file("keys/real", "key by link\n");
+        Path link = directory.resolve("keys").resolve("link");
+        TestFiles.requireOrSkip("links", TestFiles.canLink(link, real),
+            "the file store or the account of the test cannot make symbolic links (a Windows user token); the Linux CI requires them (-Pportal.test.require=posix,links) and fails instead of skipping");
+
+        assertThat(revealed(keyOf(resolve("aws-local", "auth = \"key\"\nkeyRef = " + literal(link), Map.of())).pem())).isEqualTo("key by link\n");
+    }
+
+    @Test
     @DisplayName("S-D0117-02: a key file that another account owns is used (a system file stands in for the key: only whether it is read is asserted)")
     void aKeyFileOfAnotherOwnerIsUsed() throws IOException {
         Path foreign = TestFiles.foreignOwnedFile();

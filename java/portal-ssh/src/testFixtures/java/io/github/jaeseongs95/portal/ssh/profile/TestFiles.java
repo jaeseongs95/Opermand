@@ -66,6 +66,16 @@ public final class TestFiles {
         }
     }
 
+    /** Tries to make {@code link} a symbolic link to {@code target}; false where the file store or the account may not (a Windows user token), which {@link #requireOrSkip} turns into a skip or a failure. */
+    public static boolean canLink(Path link, Path target) {
+        try {
+            Files.createSymbolicLink(link, target);
+            return true;
+        } catch (IOException | UnsupportedOperationException e) {
+            return false;
+        }
+    }
+
     /** The creator with both rules, in the order of the product. */
     public static PrivateFiles privateFiles() {
         return new PrivateFiles(List.of(new PosixPrivateFileRule(), new AclPrivateFileRule()));
