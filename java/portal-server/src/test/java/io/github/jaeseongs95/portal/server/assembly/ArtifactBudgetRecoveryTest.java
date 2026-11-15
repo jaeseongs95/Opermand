@@ -186,8 +186,11 @@ class ArtifactBudgetRecoveryTest {
         assertThat(upload).as("a 1090 byte upload is not refused as over quota").isInstanceOf(ArtifactReservation.Reserved.class);
         assertThat(download).isInstanceOf(DownloadExecution.Stored.class);
         assertThat(registry.budget().chargedBytes()).as("the budget counts the two transfers only").isEqualTo(1_090 + 850);
+        assertThat(registry.budget().retainedBytes()).as("the quarantined bytes are shown apart, not charged").isEqualTo(150_000L);
+        assertThat(registry.budget().retainedFiles()).isEqualTo(1L);
         assertThat(reaper.reap()).isInstanceOf(ReapReport.Reaped.class);
         assertThat(Files.readAllBytes(quarantined(LEGACY))).as("nothing deletes the quarantined bytes").isEqualTo(held);
+        assertThat(registry.budget().retainedBytes()).as("and a reap leaves the figure as it was").isEqualTo(150_000L);
     }
 
     @Test
