@@ -53,7 +53,6 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.util.EnumSet;
 import java.util.List;
-import java.util.regex.Pattern;
 import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.client.session.ClientSession.ClientSessionEvent;
 import org.junit.jupiter.api.AfterEach;
@@ -66,27 +65,23 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 /**
  * Case S-D0038-01 (docs/migration/regression-cases.part-b.md, section 2, "S cases"): the session pool of the product ({@link SshSessionPool} with its
- * {@link SessionConnector} and the {@link MinaRemoteExecutor}, wired as the Spring context wires them) against a real OpenSSH server whose own process of an established
- * session is ended by the server side.
+ * {@link SessionConnector} and the {@link MinaRemoteExecutor}, wired as the Spring context wires them) against a real OpenSSH server that closes an idle session by itself.
  *
  * <p><b>This test fixes a category; it does not explain the defect.</b> Defect SSH_PORTAL-D-0038 was recorded against 2.x as "the next request fails after the SSH session
  * was closed on the server side". Its cause was never confirmed: the 2.x test asserted only a hypothesis, and the CI pilot of stage 3 (OpenSshSessionPilotTest) used a bare MINA
  * session and never passed through the pool. This test is the first one that runs the 3.0 pool against a real {@code sshd} that closed a session: after the close, the next request must
  * make one new connection and succeed, and nothing may be replayed. A green result shows that this scenario works on the 3.0 pool; it does not show what went wrong in 2.x.
  *
- * <p><b>How the server closes the session (both platforms, one method).</b> The CI jobs run the OpenSSH server on the same machine as the test JVM ({@code java/ci/openssh-linux.sh},
- * {@code java/ci/openssh-windows.cmd}: a second {@code sshd} of its own with the configuration folder {@code portal-openssh-ci}, on a loopback port). The test finds that listener
- * with {@link ProcessHandle#allProcesses()} and ends every descendant of it with {@link ProcessHandle#destroyForcibly()}; the listener stays, so the next connection is accepted.
- * No external program is started and no command is sent to the server. The processes that hold the connection are the descendants of the listener: on a POSIX {@code sshd} the
- * listener forks one process per connection (the monitor, {@code sshd: user [priv]}, or {@code sshd-session} from OpenSSH 9.8), which forks the unprivileged child of the
- * session ({@code sshd: user@notty}) that starts the shell of an exec request; on Win32-OpenSSH the listener starts a {@code sshd.exe} per connection, which starts the session
- * process and the shell. The TCP connection closes when no process holds its socket, so all descendants are ended, not one. They are the only connections of this server, because
- * the tests of the task run one after another and close their sessions. The server then closes the connection without an SSH disconnect message, which is what a client sees
- * when a server, a restart or a firewall ends a session. If no listener or no session process is found, or the operating system refuses to end one (the test JVM needs the right
- * to signal the processes of the server), the test fails with that fact. It is not skipped on either platform. Nothing the product does closes the session: the test never
- * calls close on it.
+ * <p><b>How the server closes the session (both platforms, one method).</b> The test connects to the idle port of the prepared server ({@code java/ci/openssh-linux.sh},
+ * {@code java/ci/openssh-windows.cmd}: the same {@code sshd} listens on a second loopback port, and a {@code Match LocalPort} block gives only that port
+ * {@code UnusedConnectionTimeout 3}, OpenSSH 9.2 and later, sshd_config(5): "close client connections with no open channels"). The first request runs a command and its channel
+ * closes; the connection then has no open channel, and after the timeout the <i>server</i> ends it, without an SSH disconnect message, which is what a client sees when a server,
+ * a restart or a firewall ends an idle session. The test waits for the {@code CLOSED} event of the client session with a time limit, no fixed sleep. No process is looked for or
+ * ended, no external program is started, no command is sent to the server, and the code does not branch on the operating system. The product does not close the session either: the
+ * test never calls close on it, and the pool's own idle sweep (15 minutes) is far beyond the timeout. If the idle port is missing or the server does not close the connection, the
+ * test fails: it is not skipped on either platform.
  *
- * <p>They run only through the Gradle task {@code realOpenSshTest}; nothing here was run on the machine that wrote it.
+ * <p>They run only through the Gradle task {@code realOpenSshTest}.
  */
 @Timeout(300)
 class OpenSshSessionPoolTest {
@@ -124,7 +119,7 @@ class OpenSshSessionPoolTest {
         SshSettings settings = new SshSettings(defaults.connectTimeout(), defaults.heartbeatInterval(), defaults.heartbeatNoReplyMax(), defaults.idleProbeAfter(),
             defaults.execReplyTimeout(), defaults.channelPermits(), defaults.consecutiveOpenRejections(), HostKeyMode.STRICT, record);
 
-        ConnectionProfile profile = new ConnectionProfile(target.host(), target.port(), target.user(), Setting.unset(), Setting.unset(), AuthMethod.KEY, Setting.unset(),
+        ConnectionProfile profile = new ConnectionProfile(target.host(), target.idlePort(), target.user(), Setting.unset(), Setting.unset(), AuthMethod.KEY, Setting.unset(),
             Setting.unset(), AccessMode.READ_WRITE, TtyMode.NO_TTY);
         SecretValue key = SecretValue.of(Files.readString(target.keyFile()));
         ProxyJumpResolver resolver = new ProxyJumpResolver(alias -> new ProfileLookup.Found(profile),
@@ -178,48 +173,8 @@ class OpenSshSessionPoolTest {
         return ((AcquireResult.Leased) result).lease();
     }
 
-    /**
-     * A word of a command line that is the sshd executable (Linux {@code sshd} or {@code /usr/sbin/sshd}, Windows {@code sshd.exe}), also as the process title that a POSIX
-     * {@code sshd} sets for its listener ({@code sshd: /usr/sbin/sshd -f ... [listener]}); the sshd jar of a class path ({@code sshd-core-...jar}) is not such a word.
-     */
-    private static final Pattern SSHD_WORD = Pattern.compile("(^|[\\s/\\\\\"])sshd(\\.exe)?:?\"?(\\s|$)");
-
-    private static boolean namesSshd(ProcessHandle process) {
-        return process.info().command().map(command -> {
-            String name = Path.of(command).getFileName().toString();
-            return name.equalsIgnoreCase("sshd") || name.equalsIgnoreCase("sshd.exe");
-        }).orElse(false);
-    }
-
-    /**
-     * A process of the server that the CI preparation script started: an sshd whose command line names the configuration folder {@code portal-openssh-ci}. A Win32-OpenSSH
-     * listener starts its connection processes with the same command line, so the listener is the one of these processes that none of them started ({@link #endTheSessionOnTheServer}).
-     * When the operating system does not give the command line of a process of another account, the sshd that no sshd started stands for it.
-     */
-    private static boolean isOfPreparedServer(ProcessHandle process) {
-        return process.info().commandLine()
-            .map(line -> line.contains("portal-openssh-ci") && SSHD_WORD.matcher(line).find())
-            .orElseGet(() -> namesSshd(process) && process.parent().map(parent -> !namesSshd(parent)).orElse(true));
-    }
-
-    /** The server side ends the session: every process of a connection of the prepared listener is ended; what was done, as text for the failure message. */
-    private static String endTheSessionOnTheServer() {
-        List<ProcessHandle> ofServer = ProcessHandle.allProcesses().filter(OpenSshSessionPoolTest::isOfPreparedServer).toList();
-        List<ProcessHandle> listeners = ofServer.stream().filter(process -> process.parent().map(parent -> ofServer.stream().noneMatch(other -> other.pid() == parent.pid())).orElse(true)).toList();
-        assertThat(listeners).as("the listener of the sshd that the CI preparation script started on this machine (processes of that server: " + ofServer + "; processes whose command line names sshd: "
-            + ProcessHandle.allProcesses().filter(process -> process.info().commandLine().map(line -> line.contains("sshd")).orElse(false))
-                .map(process -> process.pid() + " " + process.info().commandLine().orElse("")).toList() + ")").isNotEmpty();
-        // Without the command line (Windows, SYSTEM processes) more than one sshd.exe may have no sshd parent, such as one the machine started itself; only the listener of the
-        // prepared server has connection processes, and the connections of this server are the only ones, so the descendants of all of them are the connections to end.
-        List<ProcessHandle> connections = listeners.stream().flatMap(ProcessHandle::descendants).toList();
-        assertThat(connections).as("the processes of the connections of the listener(s) " + listeners).isNotEmpty();
-        long refused = connections.stream().filter(process -> !process.destroyForcibly() && process.isAlive()).count(); // false for a process that ended already (its parent was ended first) is no refusal
-        assertThat(refused).as("processes of the server that the operating system refused to end (the test JVM needs the right to signal them): " + connections).isZero();
-        return "ended " + connections.size() + " process(es) of the connections of the sshd listener(s) " + listeners + " with ProcessHandle.destroyForcibly, " + refused + " refused";
-    }
-
     @Test
-    @DisplayName("S-D0038-01 (cause of D-0038 not confirmed; this fixes the category) a real sshd ends the session of the pool: the next request through the pool makes one new connection and runs once")
+    @DisplayName("S-D0038-01 (cause of D-0038 not confirmed; this fixes the category) the real sshd closes the idle session of the pool: the next request through the pool makes one new connection and runs once")
     void aRequestAfterTheServerClosedTheSession() throws Exception {
         startAdapter();
 
@@ -227,13 +182,12 @@ class OpenSshSessionPoolTest {
         assertThat(before.outcome().verdict()).as("the first request, which makes the session of the pool: " + before.outcome()).isEqualTo(OperationState.COMPLETED);
         assertThat(before.stdout()).contains(BEFORE);
 
+        // Every channel is closed now. The server closes the connection by itself after its UnusedConnectionTimeout; the test only observes the end of the client session.
         ClientSession closedByServer;
         try (ChannelLease lease = lease()) {
             closedByServer = lease.session();
-            assertThat(closedByServer.isOpen()).as("the session of the pool is open before the server ends it").isTrue();
-            String how = endTheSessionOnTheServer();
             assertThat(closedByServer.waitFor(EnumSet.of(ClientSessionEvent.CLOSED), OpenSshClient.LIMIT.toMillis()))
-                .as("the server ended its session process, so the client session is closed (the test never closes it); the server side did: " + how)
+                .as("the server closed the connection that had no open channel (UnusedConnectionTimeout of the idle port), so the client session is closed (the test never closes it)")
                 .contains(ClientSessionEvent.CLOSED);
         }
 
@@ -242,9 +196,9 @@ class OpenSshSessionPoolTest {
         assertThat(after.outcome().verdict()).as("the request after the server closed the session: " + after.outcome()).isEqualTo(OperationState.COMPLETED);
         assertThat(after.stdout()).as("the command ran once on the new connection").contains(AFTER).doesNotContain(BEFORE);
 
+        // The new connection is idle for the same timeout, so whether it is still open is not asserted here; it is a different object from the closed one.
         try (ChannelLease next = lease()) {
             assertThat(next.session()).as("the pool holds a new session, not the closed one").isNotSameAs(closedByServer);
-            assertThat(next.session().isOpen()).isTrue();
         }
     }
 }

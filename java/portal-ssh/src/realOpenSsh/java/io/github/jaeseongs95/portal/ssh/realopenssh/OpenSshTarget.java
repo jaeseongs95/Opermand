@@ -9,12 +9,14 @@ import java.nio.file.Path;
  *
  * @param host       the host name or address of the server
  * @param port       its port
+ * @param idlePort   a second port of the same server on which sshd closes a connection that has had no open channel for a few seconds ({@code Match LocalPort} with
+ *                   {@code UnusedConnectionTimeout}, set up by the CI preparation scripts); only case S-D0038-01 connects to it
  * @param user       the account the tests log in as
  * @param keyFile    the private key file of that account (an unencrypted key)
  * @param knownHosts the known_hosts file that holds the server's host key
  * @param platform   the operating system of the server
  */
-record OpenSshTarget(String host, int port, String user, Path keyFile, Path knownHosts, Platform platform) {
+record OpenSshTarget(String host, int port, int idlePort, String user, Path keyFile, Path knownHosts, Platform platform) {
 
     /** The operating system of the server; the tests choose the commands of that system's default shell by it. */
     enum Platform {
@@ -36,6 +38,7 @@ record OpenSshTarget(String host, int port, String user, Path keyFile, Path know
         return new OpenSshTarget(
             required("host"),
             Integer.parseInt(required("port")),
+            Integer.parseInt(required("idle-port")),
             required("user"),
             Path.of(required("key-file")),
             Path.of(required("known-hosts")),

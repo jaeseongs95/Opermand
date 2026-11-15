@@ -45,6 +45,7 @@ jobs:
           ./gradlew --no-daemon --console=plain :portal-ssh:realOpenSshTest \
             -Pportal.test.openssh.host=127.0.0.1 \
             -Pportal.test.openssh.port="$PORTAL_OPENSSH_PORT" \
+            -Pportal.test.openssh.idle-port="$PORTAL_OPENSSH_IDLE_PORT" \
             -Pportal.test.openssh.user="$PORTAL_OPENSSH_USER" \
             -Pportal.test.openssh.key-file="$PORTAL_OPENSSH_KEY_FILE" \
             -Pportal.test.openssh.known-hosts="$PORTAL_OPENSSH_KNOWN_HOSTS" \
@@ -86,6 +87,7 @@ jobs:
           ./gradlew --no-daemon --console=plain :portal-ssh:realOpenSshTest \
             -Pportal.test.openssh.host=127.0.0.1 \
             -Pportal.test.openssh.port="$PORTAL_OPENSSH_PORT" \
+            -Pportal.test.openssh.idle-port="$PORTAL_OPENSSH_IDLE_PORT" \
             -Pportal.test.openssh.user="$PORTAL_OPENSSH_USER" \
             -Pportal.test.openssh.key-file="$PORTAL_OPENSSH_KEY_FILE" \
             -Pportal.test.openssh.known-hosts="$PORTAL_OPENSSH_KNOWN_HOSTS" \

@@ -12,10 +12,13 @@ rem   1. installs the OpenSSH Server capability when sshd.exe is missing;
 rem   2. creates a throw-away non-administrator account (portalci + a number) with a random password that no line of this script or of the log contains;
 rem   3. generates an ed25519 client key pair (in %RUNNER_TEMP%\portal-openssh-ci, with known_hosts) and an ed25519 host key (in %ProgramData%\portal-openssh-ci, readable
 rem      by SYSTEM and Administrators only, as sshd requires; the account must also be able to reach authorized_keys, which is why the server side is not in the runner temp);
-rem   4. writes an sshd_config for a random loopback port and starts that sshd as SYSTEM in a scheduled task; the system sshd service is not touched;
-rem   5. writes known_hosts with the host public key only, so that host key checking stays on in the tests;
+rem   4. writes an sshd_config for a random loopback port and a second one, the idle port, with a "Match LocalPort <idle port>" block that sets "UnusedConnectionTimeout 3"
+rem      for the connections to the idle port only (the server closes a connection that has no open channel for 3 s; case S-D0038-01 uses it), prints the OpenSSH version
+rem      and what "sshd -T -C" resolves for both ports (3 on the idle port, 0 on the other, or the script fails), and starts that sshd as SYSTEM in a scheduled task;
+rem      the system sshd service is not touched;
+rem   5. writes known_hosts with the host public key only (for both ports), so that host key checking stays on in the tests;
 rem   6. appends the connection values (no secret: the key is named by its path) to %GITHUB_ENV% for the next workflow step:
-rem      PORTAL_OPENSSH_PORT, PORTAL_OPENSSH_USER, PORTAL_OPENSSH_KEY_FILE, PORTAL_OPENSSH_KNOWN_HOSTS, PORTAL_OPENSSH_WINDOWS_PYTHON (the path of the runner's python.exe)
+rem      PORTAL_OPENSSH_PORT, PORTAL_OPENSSH_IDLE_PORT, PORTAL_OPENSSH_USER, PORTAL_OPENSSH_KEY_FILE, PORTAL_OPENSSH_KNOWN_HOSTS, PORTAL_OPENSSH_WINDOWS_PYTHON (the path of the runner's python.exe)
 rem   and gives the account the right to create symbolic links (the policy "Create symbolic links"), for the link tests
 rem
 rem Usage: openssh-windows.cmd          prepare (default)
@@ -100,13 +103,14 @@ if errorlevel 1 goto :keyfail
 icacls "%SRV%\authorized_keys" /grant "%CI_USER%:(R)" >nul
 if errorlevel 1 goto :keyfail
 
-rem 4. A random loopback port that nothing listens on (bound to port 0 and released again).
+rem 4. Two random loopback ports that nothing listens on (bound to port 0 together, so they differ, and released again): the one of the tests and the idle port. The same sshd
+rem listens on both; a "Match LocalPort <idle port>" block (step 5) gives only the connections to the idle port "UnusedConnectionTimeout 3" (sshd_config(5), OpenSSH 9.2 and later:
+rem the server closes a connection that has had no open channel for that long). Case S-D0038-01 connects to the idle port, so the real server closes its session by itself.
 set "PORT="
-for /f %%p in ('powershell -NoProfile -NonInteractive -Command "$l = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $l.Start(); $l.LocalEndpoint.Port; $l.Stop()"') do set "PORT=%%p"
-if "%PORT%"=="" (
-    echo No free loopback port found.>&2
-    exit /b 1
-)
+set "IDLE_PORT="
+for /f %%p in ('powershell -NoProfile -NonInteractive -Command "$a = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $b = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0); $a.Start(); $b.Start(); $a.LocalEndpoint.Port; $b.LocalEndpoint.Port; $a.Stop(); $b.Stop()"') do if not defined PORT (set "PORT=%%p") else set "IDLE_PORT=%%p"
+if "%PORT%"=="" goto :noport
+if "%IDLE_PORT%"=="" goto :noport
 
 rem 5. sshd_config. Paths use forward slashes, as sshd_config does on Windows. StrictModes stays on; AllowUsers names the test account only.
 set "HOSTKEY_F=%SRV%\host_key"
@@ -116,6 +120,7 @@ set "AUTH_F=%AUTH_F:\=/%"
 set "SFTP_F=%OPENSSH%\sftp-server.exe"
 set "SFTP_F=%SFTP_F:\=/%"
 > "%SRV%\sshd_config" echo Port %PORT%
+>> "%SRV%\sshd_config" echo Port %IDLE_PORT%
 >> "%SRV%\sshd_config" echo ListenAddress 127.0.0.1
 >> "%SRV%\sshd_config" echo HostKey %HOSTKEY_F%
 >> "%SRV%\sshd_config" echo AuthorizedKeysFile %AUTH_F%
@@ -128,6 +133,10 @@ set "SFTP_F=%SFTP_F:\=/%"
 >> "%SRV%\sshd_config" echo StrictModes yes
 >> "%SRV%\sshd_config" echo LogLevel VERBOSE
 >> "%SRV%\sshd_config" echo Subsystem sftp %SFTP_F%
+rem Only the connections to the idle port: the server closes one that has no open channel for 3 s. The timer starts when authentication completes (sshd_config(5)), so the
+rem value is not shorter than 3 s. Match must stay the last block of the file.
+>> "%SRV%\sshd_config" echo Match LocalPort %IDLE_PORT%
+>> "%SRV%\sshd_config" echo UnusedConnectionTimeout 3
 rem sshd_config is checked like the host key (Repair-SshdConfigPermission: owners SYSTEM and Administrators, full access for SYSTEM): the directory's entry for the account
 rem must not reach it.
 call :secure "%SRV%\sshd_config"
@@ -137,10 +146,18 @@ if errorlevel 1 (
     echo The sshd configuration is not valid.>&2
     exit /b 1
 )
+"%SSHCLIENT%" -V
+call :checkidle %PORT% 0
+if errorlevel 1 exit /b 1
+call :checkidle %IDLE_PORT% 3
+if errorlevel 1 exit /b 1
 
 rem 6. known_hosts: the two fields of the host public key (without its comment), for exactly this host and port. Forward slashes for the ssh client options.
 type nul > "%CLIENT%\known_hosts"
-for /f "tokens=1,2" %%a in (%SRV%\host_key.pub) do >> "%CLIENT%\known_hosts" echo [127.0.0.1]:%PORT% %%a %%b
+for /f "tokens=1,2" %%a in (%SRV%\host_key.pub) do (
+    >> "%CLIENT%\known_hosts" echo [127.0.0.1]:%PORT% %%a %%b
+    >> "%CLIENT%\known_hosts" echo [127.0.0.1]:%IDLE_PORT% %%a %%b
+)
 set "KEY_F=%CLIENT%\client_key"
 set "KEY_F=%KEY_F:\=/%"
 set "KNOWN_F=%CLIENT%\known_hosts"
@@ -172,6 +189,7 @@ goto :wait
 
 :ready
 >> "%GITHUB_ENV%" echo PORTAL_OPENSSH_PORT=%PORT%
+>> "%GITHUB_ENV%" echo PORTAL_OPENSSH_IDLE_PORT=%IDLE_PORT%
 >> "%GITHUB_ENV%" echo PORTAL_OPENSSH_USER=%CI_USER%
 >> "%GITHUB_ENV%" echo PORTAL_OPENSSH_KEY_FILE=%KEY_F%
 >> "%GITHUB_ENV%" echo PORTAL_OPENSSH_KNOWN_HOSTS=%KNOWN_F%
@@ -209,6 +227,22 @@ if errorlevel 1 exit /b 1
 icacls "%~1" /setowner *S-1-5-32-544 >nul
 if errorlevel 1 exit /b 1
 exit /b 0
+
+:checkidle
+rem %1 is a local port, %2 the UnusedConnectionTimeout that sshd must resolve for a connection to it: sshd -T -C evaluates the Match blocks for that connection. The command
+rem starts with the executable name (not a quote) from its own folder, because for /f hands the text to cmd /c, which mangles a command that starts with a quote.
+set "UCT="
+pushd "%OPENSSH%"
+for /f "tokens=2" %%b in ('sshd.exe -T -f "%SRV%\sshd_config" -C "user=%CI_USER%,host=localhost,addr=127.0.0.1,laddr=127.0.0.1,lport=%~1" ^| findstr /b /i unusedconnectiontimeout') do set "UCT=%%b"
+popd
+echo sshd -T, local port %~1: unusedconnectiontimeout %UCT%
+if "%UCT%"=="%~2" exit /b 0
+echo sshd resolves unusedconnectiontimeout "%UCT%" for local port %~1, expected %~2.>&2
+exit /b 1
+
+:noport
+echo No free loopback port found.>&2
+exit /b 1
 
 :keyfail
 echo Preparing the keys failed.>&2

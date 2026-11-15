@@ -45,6 +45,8 @@ dependencies {
 // CI: -P or ORG_GRADLE_PROJECT_*), and nothing stands in for a missing server:
 //   portal.test.openssh.host         the host name or address of the server
 //   portal.test.openssh.port         its port
+//   portal.test.openssh.idle-port    a second port of the same server, with sshd_config "Match LocalPort <that port>" and "UnusedConnectionTimeout" of a few seconds: the
+//                                    server closes a connection to it that has no open channel (case S-D0038-01); the CI scripts set it up
 //   portal.test.openssh.user         the account the tests log in as
 //   portal.test.openssh.key-file     the PATH of the private key file of that account
 //   portal.test.openssh.known-hosts  the PATH of the known_hosts file that holds the server's host key
@@ -63,12 +65,12 @@ val realOpenSshSourceSet = javaSourceSets.create("realOpenSsh") {
 configurations.named("realOpenSshImplementation") { extendsFrom(configurations.getByName("testImplementation")) }
 configurations.named("realOpenSshRuntimeOnly") { extendsFrom(configurations.getByName("testRuntimeOnly")) }
 
-val openSshSettings = listOf("host", "port", "user", "key-file", "known-hosts", "platform")
+val openSshSettings = listOf("host", "port", "idle-port", "user", "key-file", "known-hosts", "platform")
     .associateWith { providers.gradleProperty("portal.test.openssh.$it") }
 val windowsPython = providers.gradleProperty("portal.test.openssh.windows-python")
 
 tasks.register<Test>("realOpenSshTest") {
-    description = "Runs the tests against a real OpenSSH server (Gradle properties portal.test.openssh.host, .port, .user, .key-file, .known-hosts, .platform); not part of check."
+    description = "Runs the tests against a real OpenSSH server (Gradle properties portal.test.openssh.host, .port, .idle-port, .user, .key-file, .known-hosts, .platform); not part of check."
     group = "verification"
     testClassesDirs = realOpenSshSourceSet.output.classesDirs
     classpath = realOpenSshSourceSet.runtimeClasspath
