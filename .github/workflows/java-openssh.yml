@@ -104,8 +104,16 @@ jobs:
         run: |
           $ErrorActionPreference = 'Continue'
           $log = Join-Path $env:ProgramData 'portal-openssh-ci\sshd.log'
-          Write-Host '--- sshd processes (before anything is ended)'
-          Get-CimInstance Win32_Process -Filter "Name = 'sshd.exe'" | Select-Object ProcessId, ParentProcessId, CreationDate, CommandLine | Format-List | Out-String -Width 300 | Write-Host
+          # Every process that started after the prepared sshd (the one with -E), by name and parent, because the log stayed locked when no sshd process was left:
+          # a child that sshd started (sftp-server, ssh-shellhost, a command of a test) may still hold the log handle it inherited.
+          $prepared = Get-CimInstance Win32_Process -Filter "Name = 'sshd.exe'" | Where-Object { $_.CommandLine -like '*portal-openssh-ci*' } | Select-Object -First 1
+          $since = if ($prepared) { $prepared.CreationDate } else { (Get-Date).AddMinutes(-30) }
+          function Show-Processes([string] $title) {
+            Write-Host ('--- ' + $title + ' (started since the prepared sshd, pid ' + $prepared.ProcessId + ')')
+            Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -ge $since } | Sort-Object CreationDate |
+              ForEach-Object { '{0,6} parent {1,6} {2:HH:mm:ss} {3} {4}' -f $_.ProcessId, $_.ParentProcessId, $_.CreationDate, $_.Name, ([string] $_.CommandLine).Substring(0, [Math]::Min(160, ([string] $_.CommandLine).Length)) } | Write-Host
+          }
+          Show-Processes 'processes before anything is ended'
           function Read-SshdLog {
             $fs = [System.IO.File]::Open($log, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]'ReadWrite,Delete')
             try { $text = [System.IO.StreamReader]::new($fs).ReadToEnd() } finally { $fs.Dispose() }
@@ -120,6 +128,7 @@ jobs:
             Stop-ScheduledTask -TaskName PortalOpenSshCi -ErrorAction Continue
             Get-Process -Name sshd -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction Continue
             Get-Process -Name sshd -ErrorAction SilentlyContinue | Wait-Process -Timeout 15 -ErrorAction Continue
+            Show-Processes 'processes after every sshd process was ended'
             Read-SshdLog
           }
       - name: Stop the OpenSSH server and remove the account
