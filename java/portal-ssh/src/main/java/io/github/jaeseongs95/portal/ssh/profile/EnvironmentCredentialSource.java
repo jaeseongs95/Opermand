@@ -39,23 +39,29 @@ import io.github.jaeseongs95.portal.domain.target.Setting;
  * profile says {@code cert = true}, the certificate ({@code <prefix>_CERT} or {@code <key file without .pub>-cert.pub} next to the key); {@code keychain} is
  * {@link CredentialLookup.Unsupported}. {@code agent}, which is also the method of a profile that names none, collects its sources like 2.x did (EV-10): the key
  * (read as for {@code key}), else the password, else the agent when {@code SSH_AUTH_SOCK} is set, else a {@link CredentialLookup.Missing} that lists every place
- * searched. A profile with an explicit method gets only what that method uses. A key file that is missing, empty or unreadable is a {@link CredentialLookup.Missing}
- * that names the file (2.x skipped a missing file silently), and the lookup of an {@code agent} profile does not go on to the password then; an unreadable file is
- * logged with its cause. A leading {@code ~} name of a key path is the home folder ({@code HOME}, else
+ * searched. A profile whose method is {@code password}, {@code key} or {@code keychain} gets only what that method uses. A key file that is missing, empty or
+ * unreadable is a {@link CredentialLookup.Missing} that names the place where the key was named ({@code keyRef of the profile}, {@code <prefix>_KEY} or
+ * {@code SSH_MCP_KEY}) and never the value, which may be a key text (2.x skipped a missing file silently); the lookup of an {@code agent} profile does not go on to the
+ * password then. An unreadable file is logged with the name of that place and the kind of the error. A leading {@code ~} name of a key path is the home folder ({@code HOME}, else
  * {@code user.home}); a name that starts with {@code ~} and a user name is not expanded. Nothing is made of {@code SSH_MCP_SUDO_PASSWORD}: 2.x never read it (EV-03).
  *
  * <p>The secrets are {@link SecretValue}s from the moment they are read, and nothing here logs, prints or puts them in a message: a {@link CredentialMiss} names the
- * variable or the file that was searched.
+ * variable or the setting that was searched, never the value of a setting.
  */
 @Component
 public final class EnvironmentCredentialSource implements SshCredentialSource {
 
-    private static final Logger LOG = LoggerFactory.getLogger(EnvironmentCredentialSource.class);
+    /** A key setting: the text it holds (a path) and the name of the place where it was set. Only the name goes into a message or a log. */
+    private record NamedKey(String value, String source) {
+    }
+
+    private static final Logger LOG =LoggerFactory.getLogger(EnvironmentCredentialSource.class);
     private static final String GLOBAL_PASSWORD = "SSH_MCP_PASSWORD";
     private static final String GLOBAL_PASSPHRASE = "SSH_MCP_PASSPHRASE";
     private static final String GLOBAL_KEY = "SSH_MCP_KEY";
     private static final String AGENT_SOCKET = "SSH_AUTH_SOCK";
     private static final String HOME_NAME = "~";
+    private static final String KEY_REFERENCE_SOURCE = "keyRef of the profile";
     private static final String CERTIFICATE_SUFFIX = "-cert.pub";
     private static final String PUBLIC_KEY_SUFFIX = ".pub";
 
@@ -98,21 +104,15 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
 
     /** The agent method: a named key, else a password, else the agent socket. A key that is named but cannot be used is a miss; it does not fall through to the password. */
     private CredentialLookup agent(ProfileAlias alias, CredentialPrefix prefix, ConnectionProfile profile) {
-        Optional<String> keyText = namedKey(profile, prefix);
-        if (keyText.isPresent()) {
-            return privateKeyAt(keyText.get(), alias, prefix);
-        }
-        Optional<SecretValue> password = ownOrGlobalPassword(prefix);
-        if (password.isPresent()) {
-            return new CredentialLookup.Resolved(new SshCredential.Password(password.get()));
-        }
-        if (text(AGENT_SOCKET).isPresent()) {
-            return new CredentialLookup.Resolved(new SshCredential.Agent());
-        }
-        List<CredentialMiss> misses = new ArrayList<>(keyMisses(prefix));
-        misses.addAll(passwordMisses(prefix));
-        misses.add(new CredentialMiss(CredentialPart.PRIVATE_KEY, AGENT_SOCKET));
-        return new CredentialLookup.Missing(misses);
+        return namedKey(profile, prefix).<CredentialLookup>map(key -> privateKeyAt(key, alias, prefix))
+            .or(() -> ownOrGlobalPassword(prefix).map(password -> new CredentialLookup.Resolved(new SshCredential.Password(password))))
+            .or(() -> text(AGENT_SOCKET).map(socket -> new CredentialLookup.Resolved(new SshCredential.Agent())))
+            .orElseGet(() -> {
+                List<CredentialMiss> misses = new ArrayList<>(keyMisses(prefix));
+                misses.addAll(passwordMisses(prefix));
+                misses.add(new CredentialMiss(CredentialPart.PRIVATE_KEY, AGENT_SOCKET));
+                return new CredentialLookup.Missing(misses);
+            });
     }
 
     private CredentialLookup password(CredentialPrefix prefix) {
@@ -121,12 +121,13 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
     }
 
     private CredentialLookup privateKey(ProfileAlias alias, CredentialPrefix prefix, ConnectionProfile profile) {
-        return namedKey(profile, prefix).map(keyText -> privateKeyAt(keyText, alias, prefix)).orElseGet(() -> new CredentialLookup.Missing(keyMisses(prefix)));
+        return namedKey(profile, prefix).map(key -> privateKeyAt(key, alias, prefix)).orElseGet(() -> new CredentialLookup.Missing(keyMisses(prefix)));
     }
 
     /** The key a profile names: its keyRef, else {@code <prefix>_KEY}, else {@code SSH_MCP_KEY}. */
-    private Optional<String> namedKey(ConnectionProfile profile, CredentialPrefix prefix) {
-        return keyReference(profile).or(() -> text(prefix.variable("KEY"))).or(() -> text(GLOBAL_KEY));
+    private Optional<NamedKey> namedKey(ConnectionProfile profile, CredentialPrefix prefix) {
+        return keyReference(profile).map(value -> new NamedKey(value, KEY_REFERENCE_SOURCE)).or(() -> text(prefix.variable("KEY")).map(value -> new NamedKey(value, prefix.variable("KEY"))))
+            .or(() -> text(GLOBAL_KEY).map(value -> new NamedKey(value, GLOBAL_KEY)));
     }
 
     private Optional<SecretValue> ownOrGlobalPassword(CredentialPrefix prefix) {
@@ -134,7 +135,7 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
     }
 
     private List<CredentialMiss> keyMisses(CredentialPrefix prefix) {
-        return List.of(new CredentialMiss(CredentialPart.KEY_REFERENCE, "keyRef of the profile"), new CredentialMiss(CredentialPart.PRIVATE_KEY, prefix.variable("KEY")),
+        return List.of(new CredentialMiss(CredentialPart.KEY_REFERENCE, KEY_REFERENCE_SOURCE), new CredentialMiss(CredentialPart.PRIVATE_KEY, prefix.variable("KEY")),
             new CredentialMiss(CredentialPart.PRIVATE_KEY, GLOBAL_KEY));
     }
 
@@ -142,19 +143,22 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
         return List.of(new CredentialMiss(CredentialPart.PASSWORD, prefix.variable("PASSWORD")), new CredentialMiss(CredentialPart.PASSWORD, GLOBAL_PASSWORD));
     }
 
-    private CredentialLookup privateKeyAt(String keyText, ProfileAlias alias, CredentialPrefix prefix) {
+    private CredentialLookup privateKeyAt(NamedKey named, ProfileAlias alias, CredentialPrefix prefix) {
+        String keyText = named.value();
+        String place = "the key file named by " + named.source();
         Path keyFile;
         try {
             keyFile = locate(keyText);
         } catch (InvalidPathException e) {
-            LOG.warn("The key path {} of the profile {} is not a valid path", keyText, alias.value(), e);
-            return missing(CredentialPart.PRIVATE_KEY, "the key file " + keyText + " cannot be read");
+            // The reason only: the message of the exception holds the setting, which may be a key text.
+            LOG.warn("The key path named by {} for the profile {} is not a valid path ({})", named.source(), alias.value(), e.getReason());
+            return missing(CredentialPart.PRIVATE_KEY, place + " cannot be read");
         }
-        return switch (read(keyFile)) {
-            case FileRead.Text key when key.text().isEmpty() -> missing(CredentialPart.PRIVATE_KEY, "the key file " + keyText + " is empty");
+        return switch (read(keyFile, named.source())) {
+            case FileRead.Text key when key.text().isEmpty() -> missing(CredentialPart.PRIVATE_KEY, place + " is empty");
             case FileRead.Text key -> withPassphraseAndCertificate(SecretValue.of(key.text()), alias, prefix, keyFile);
-            case FileRead.Absent absent -> missing(CredentialPart.PRIVATE_KEY, "the key file " + keyText + " does not exist");
-            case FileRead.Unreadable unreadable -> missing(CredentialPart.PRIVATE_KEY, "the key file " + keyText + " cannot be read");
+            case FileRead.Absent absent -> missing(CredentialPart.PRIVATE_KEY, place + " does not exist");
+            case FileRead.Unreadable unreadable -> missing(CredentialPart.PRIVATE_KEY, place + " cannot be read");
         };
     }
 
@@ -168,13 +172,13 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
         try {
             certFile = text(prefix.variable("CERT")).map(this::locate).orElseGet(() -> certificateNextTo(keyFile));
         } catch (InvalidPathException e) {
-            LOG.warn("The certificate path of the profile {} is not a valid path", alias.value(), e);
+            LOG.warn("The certificate path of the profile {} is not a valid path ({})", alias.value(), e.getReason());
             return missing(CredentialPart.CERTIFICATE, "the certificate file cannot be read");
         }
-        return switch (read(certFile)) {
+        return switch (read(certFile, "the certificate of the profile")) {
             case FileRead.Text certificate -> new CredentialLookup.Resolved(new SshCredential.PrivateKey(pem, passphrase, Setting.given(certificate.text())));
             case FileRead.Absent absent -> new CredentialLookup.Resolved(new SshCredential.PrivateKey(pem, passphrase, Setting.unset()));
-            case FileRead.Unreadable unreadable -> missing(CredentialPart.CERTIFICATE, "the certificate file " + certFile + " cannot be read");
+            case FileRead.Unreadable unreadable -> missing(CredentialPart.CERTIFICATE, "the certificate file cannot be read");
         };
     }
 
@@ -214,14 +218,15 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
             .orElse(path);
     }
 
-    private FileRead read(Path file) {
+    /** Reads a file; {@code source} names where its path was set, because the path itself may be a secret text and is never logged. */
+    private FileRead read(Path file, String source) {
         if (!Files.exists(file)) {
             return new FileRead.Absent();
         }
         try {
             return new FileRead.Text(Files.readString(file, StandardCharsets.UTF_8));
         } catch (IOException e) {
-            LOG.warn("The file {} cannot be read", file, e);
+            LOG.warn("The file named by {} cannot be read ({})", source, e.getClass().getSimpleName());
             return new FileRead.Unreadable();
         }
     }
