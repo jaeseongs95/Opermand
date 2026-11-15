@@ -90,13 +90,10 @@ public final class PosixPrivateFileRule implements PrivateFileRule {
 
     @Override
     public void createFile(Path file) throws IOException {
-        if (Files.exists(file)) {
-            return;
-        }
         try {
-            Files.createFile(file, FILE_MODE);
+            Files.createFile(file, FILE_MODE); // the file system decides whether this call creates the file: there is no check before it
         } catch (FileAlreadyExistsException e) {
-            return; // somebody made it between the check and the call: it is not ours, and it is not judged
+            return; // it was there already (or somebody made it just now): it is not ours, and it is not judged
         }
         requireOwnerOnly(file, List.of(file));
     }
