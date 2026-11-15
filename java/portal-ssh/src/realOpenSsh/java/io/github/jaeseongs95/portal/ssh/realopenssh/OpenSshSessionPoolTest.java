@@ -208,12 +208,14 @@ class OpenSshSessionPoolTest {
         List<ProcessHandle> listeners = ofServer.stream().filter(process -> process.parent().map(parent -> ofServer.stream().noneMatch(other -> other.pid() == parent.pid())).orElse(true)).toList();
         assertThat(listeners).as("the listener of the sshd that the CI preparation script started on this machine (processes of that server: " + ofServer + "; processes whose command line names sshd: "
             + ProcessHandle.allProcesses().filter(process -> process.info().commandLine().map(line -> line.contains("sshd")).orElse(false))
-                .map(process -> process.pid() + " " + process.info().commandLine().orElse("")).toList() + ")").hasSize(1);
-        List<ProcessHandle> connections = listeners.get(0).descendants().toList();
-        assertThat(connections).as("the processes of the connections of the listener (pid " + listeners.get(0).pid() + ")").isNotEmpty();
-        long refused = connections.stream().filter(process -> !process.destroyForcibly()).count();
-        return "ended " + connections.size() + " process(es) of the connections of the sshd listener (pid " + listeners.get(0).pid() + ") with ProcessHandle.destroyForcibly, "
-            + refused + " refused";
+                .map(process -> process.pid() + " " + process.info().commandLine().orElse("")).toList() + ")").isNotEmpty();
+        // Without the command line (Windows, SYSTEM processes) more than one sshd.exe may have no sshd parent, such as one the machine started itself; only the listener of the
+        // prepared server has connection processes, and the connections of this server are the only ones, so the descendants of all of them are the connections to end.
+        List<ProcessHandle> connections = listeners.stream().flatMap(ProcessHandle::descendants).toList();
+        assertThat(connections).as("the processes of the connections of the listener(s) " + listeners).isNotEmpty();
+        long refused = connections.stream().filter(process -> !process.destroyForcibly() && process.isAlive()).count(); // false for a process that ended already (its parent was ended first) is no refusal
+        assertThat(refused).as("processes of the server that the operating system refused to end (the test JVM needs the right to signal them): " + connections).isZero();
+        return "ended " + connections.size() + " process(es) of the connections of the sshd listener(s) " + listeners + " with ProcessHandle.destroyForcibly, " + refused + " refused";
     }
 
     @Test
