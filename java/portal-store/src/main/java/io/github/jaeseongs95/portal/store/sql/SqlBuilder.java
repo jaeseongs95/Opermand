@@ -15,7 +15,9 @@ import io.github.jaeseongs95.portal.store.sql.DatabaseProductException.Reason;
  * Builds SQL for the actual business database, resolving its product on first use. Ported from the SqlBuilder of AGS (Agent Governance Suite), as of commit 1ad1b8e7
  * (path {@code java/ags-api/src/main/java/io/github/jaeseongs95/ags/service/database/SqlBuilder.java};
  * same owner, AGPL-3.0-or-later), with the same structure, API, products and limit syntax: the only difference is the exception type, {@link DatabaseProductException}
- * in place of AGS {@code StoreException}. It opens no transaction: it joins the connection of the caller's transaction or borrows one for the single product read.
+ * in place of AGS {@code StoreException}; {@link #generateLongText} and {@link #generateEncodingProbe} are added in the shape of
+ * {@code generateLimit} (a switch over every product without a default), with the text of the common SqlBuilder (the AGS original has neither method at that commit).
+ * It opens no transaction: it joins the connection of the caller's transaction or borrows one for the single product read.
  */
 @Component
 public class SqlBuilder {
@@ -82,6 +84,61 @@ public class SqlBuilder {
             case H2, POSTGRESQL, ORACLE, DB2 -> "FETCH FIRST " + parameter + " ROWS ONLY";
             case SQLSERVER, MARIADB -> "OFFSET 0 ROWS FETCH NEXT " + parameter + " ROWS ONLY";
             case MYSQL -> "LIMIT " + parameter;
+        };
+    }
+
+    /**
+     * The declaration of a column that holds a text of no fixed size (the migration scripts' {@code ${LONG_TEXT}}), spelled as the product takes it. It is a fixed table, not a
+     * reading of the driver: a driver's {@code getTypeInfo()} CREATE_PARAMS is free text (MariaDB's driver reports the character set and collation options of LONGTEXT, not a length).
+     * Where an omitted length would make the limit small, the length is written.
+     */
+    public static String generateLongText(Database database) {
+        // PostgreSQL text, any length up to about 1 GB: https://www.postgresql.org/docs/current/datatype-character.html
+        // H2 CHARACTER LARGE OBJECT: the datatypes page does not state the limit of an omitted length (https://h2database.com/html/datatypes.html#character_large_object_type),
+        //     so the largest length is written (2147483647 is accepted by H2 2.4.240: measured by the SSH MCP, 400,000 Korean characters round trip).
+        // Oracle CLOB takes no length, (4 GB - 1) * block size: https://docs.oracle.com/en/database/oracle/oracle-database/23/sqlrf/Data-Types.html
+        // Db2 CLOB is up to 2,147,483,647 bytes, and 1,048,576 (1M) code units when the length is omitted:
+        //     https://www.ibm.com/docs/en/db2/12.1.x?topic=list-character-strings and https://www.ibm.com/docs/en/db2/12.1.x?topic=statements-create-table
+        // SQL Server NVARCHAR(MAX), up to 2^31-1 bytes, UTF-16 whatever the collation (VARCHAR(MAX) holds Korean only with a UTF-8 collation of 2019 or later):
+        //     https://learn.microsoft.com/en-us/sql/t-sql/data-types/nchar-and-nvarchar-transact-sql
+        // MariaDB LONGTEXT, 4,294,967,295 bytes, takes no length: https://mariadb.com/docs/server/reference/data-types/string-data-types/longtext
+        // MySQL LONGTEXT, 4,294,967,295 bytes, takes no length: https://dev.mysql.com/doc/refman/8.4/en/string-type-syntax.html
+        return switch (database) {
+            case POSTGRESQL -> "TEXT";
+            case H2 -> "CHARACTER LARGE OBJECT(2147483647)";
+            case ORACLE -> "CLOB";
+            case DB2 -> "CLOB(2147483647)";
+            case SQLSERVER -> "NVARCHAR(MAX)";
+            case MARIADB, MYSQL -> "LONGTEXT";
+        };
+    }
+
+    /**
+     * A query with two {@code ?} (the same text twice) for the start-up check that the database takes UTF-8 text in the character type the schema uses (the migration scripts'
+     * {@code VARCHAR}; {@code VARCHAR2} on Oracle). The text is cast to that type, and the query returns two columns: the number of characters the database counts in the cast
+     * value, and the cast value itself. The count catches a database that counts bytes (PostgreSQL's SQL_ASCII); the value catches a type that loses the text (a {@code VARCHAR}
+     * of a code page that has no Korean turns it into {@code ??}, and then the count is still 2). Both must equal the text.
+     *
+     * <p>It is a fixed table by dialect, not a JDBC scalar function escape ({@code {fn CHAR_LENGTH(...)}}): the escape's translation is each driver's own and a driver's
+     * documentation of it could not be confirmed for all seven products, and the products differ in more than the function name (a FROM clause, the type name). Where a cast
+     * to {@code CHAR(n)} would pad the value (PostgreSQL's value comes back padded), a variable-length type is used.
+     */
+    public static String generateEncodingProbe(Database database) {
+        // PostgreSQL char_length: https://www.postgresql.org/docs/current/functions-string.html
+        // H2 CHAR_LENGTH: https://h2database.com/html/functions.html#char_length
+        // MySQL CHAR_LENGTH (code points; CAST has CHAR, not VARCHAR, and CAST ... AS CHAR(n) is not padded): https://dev.mysql.com/doc/refman/8.4/en/string-functions.html
+        // MariaDB CHAR_LENGTH: https://mariadb.com/docs/server/reference/sql-functions/string-functions/char_length
+        // Oracle LENGTH (characters), VARCHAR2, FROM DUAL as before 23ai: https://docs.oracle.com/en/database/oracle/oracle-database/23/sqlrf/LENGTH.html
+        // Db2 CHARACTER_LENGTH(... USING CODEUNITS32), FROM SYSIBM.SYSDUMMY1: https://www.ibm.com/docs/en/db2/12.1.x?topic=functions-character-length
+        // SQL Server has no CHAR_LENGTH: LEN counts characters (and drops trailing spaces): https://learn.microsoft.com/en-us/sql/t-sql/functions/len-transact-sql
+        //     The cast is to VARCHAR, not NVARCHAR: NVARCHAR is UTF-16 whatever the collation and would always pass, while the schema's VARCHAR holds Korean only with a UTF-8 collation
+        //     (SQL Server 2019 or later), https://learn.microsoft.com/en-us/sql/t-sql/data-types/char-and-varchar-transact-sql
+        return switch (database) {
+            case POSTGRESQL, H2 -> "SELECT CHAR_LENGTH(CAST(? AS VARCHAR(10))), CAST(? AS VARCHAR(10))";
+            case MARIADB, MYSQL -> "SELECT CHAR_LENGTH(CAST(? AS CHAR(10))), CAST(? AS CHAR(10))";
+            case ORACLE -> "SELECT LENGTH(CAST(? AS VARCHAR2(10))), CAST(? AS VARCHAR2(10)) FROM DUAL";
+            case DB2 -> "SELECT CHARACTER_LENGTH(CAST(? AS VARCHAR(10)) USING CODEUNITS32), CAST(? AS VARCHAR(10)) FROM SYSIBM.SYSDUMMY1";
+            case SQLSERVER -> "SELECT LEN(CAST(? AS VARCHAR(10))), CAST(? AS VARCHAR(10))";
         };
     }
 

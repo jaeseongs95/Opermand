@@ -16,8 +16,8 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcOperations;
 import io.github.jaeseongs95.portal.store.StoreTest;
 
 /**
- * S-SQLB-10 (docs/migration/sqlbuilder-cases.md): the statement the builder writes runs on the actual DBMS of the storage slice. The default run is the embedded H2;
- * {@code :portal-store:externalDbmsTest} runs the same class on PostgreSQL, so the dialect text is executed there too and the configured URL is compared with the connected product.
+ * S-SQLB-10 (docs/migration/sqlbuilder-cases.md): the statement the builder writes runs on the actual DBMS of the storage slice, the embedded H2. The product does not test other
+ * DBMSs (Principles 7.3: the driver is the user's part), so the dialect text of the other products is checked as text in {@code SqlBuilderTest}.
  */
 @StoreTest
 @Import(SqlBuilder.class)

@@ -23,7 +23,7 @@ import io.github.jaeseongs95.portal.domain.operation.Truncation;
 /**
  * Table {@code operation_result}: how an operation ended, either as an executed outcome ({@code resultKind EXECUTED}) or as a refusal before dispatch
  * ({@code REFUSED}). The columns that do not apply to the kind are NULL; the table's CHECK constraints keep the two shapes apart. {@code resultTexts} is the long-text
- * column of the vendor script V1_1 and holds a JSON array written by the mapper with the Boot {@code JsonMapper}.
+ * column (${long_text}) of V1 and holds a JSON array written by the mapper with the Boot {@code JsonMapper}.
  */
 @Table("operation_result")
 public record OperationResultRow(@Id String operationId, ResultKind resultKind, ResultFlag resultFlag, ExecutionReason execReason, RemoteState remoteState, ExitKind exitKind,

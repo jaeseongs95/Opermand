@@ -7,7 +7,7 @@
 ## 1. 출처와 이식 범위
 
 - 출처: AGS(Agent Governance Suite)의 SqlBuilder, 커밋 1ad1b8e7 기준. 경로 `java/ags-api/src/main/java/io/github/jaeseongs95/ags/service/database/SqlBuilder.java`(168줄)와 같은 패키지 test의 `SqlBuilderTest.java`, `SqlBuilderConnectionTest.java`. AGS와 포털 3.0.0은 둘 다 AGPL-3.0-or-later이고 소유자가 같다.
-- 포털 위치: `portal-store`의 `io.github.jaeseongs95.portal.store.sql.SqlBuilder`. 세 제품(SSH 포털·장부·AGS)이 같은 SqlBuilder를 쓴다는 사용자 결정(「내가 sql builder도 다 똑같이 쓰라는 이유도 그 이유야.」「결국 차별점은 "맞춤형" 이거든.」)에 따라 클래스 구조·API·`Database` enum 7개·행 수 제한 분기·공식 문서 링크 주석이 AGS 원본 1ad1b8e7과 똑같다. 원본과 다른 곳은 예외 타입 하나뿐이다(패키지 이름과, 존재하지 않는 `StoreCode`를 가리키던 주석 문구는 포털에 맞게 고쳤다).
+- 포털 위치: `portal-store`의 `io.github.jaeseongs95.portal.store.sql.SqlBuilder`. 세 제품(SSH 포털·장부·AGS)이 같은 SqlBuilder를 쓴다는 사용자 결정(「내가 sql builder도 다 똑같이 쓰라는 이유도 그 이유야.」「결국 차별점은 "맞춤형" 이거든.」)에 따라 클래스 구조·API·`Database` enum 7개·행 수 제한 분기·공식 문서 링크 주석이 AGS 원본 1ad1b8e7과 똑같다. 원본 1ad1b8e7과 다른 곳은 예외 타입(패키지 이름과, 존재하지 않는 `StoreCode`를 가리키던 주석 문구는 포털에 맞게 고쳤다)과, 이 브랜치에서 `generateLongText`·`generateEncodingProbe` 두 메서드를 `generateLimit`과 같은 모양(제품마다 default 없는 완전 switch)으로 더하고 그 문구를 공통 SqlBuilder 그대로 옮긴 것이다. 원본 1ad1b8e7에는 두 메서드가 없다(S-SQLB-22·23).
   - 한때 개인판 범위를 이유로 Oracle·Db2·SQL Server를 뺐다가(커밋 b1594bf, 2dc6836) 리드 정정으로 되돌렸다. 되돌린 커밋이 정본이다.
 - 예외: AGS의 `StoreException`·`StoreCode`는 포털의 `DatabaseProductException`과 그 `Reason`으로 바뀐다.
   - 판단: 포털의 공개 오류 코드(`ErrorCode` 8개 범주)는 Contract 2.0의 와이어 값이고 `ErrorCodeBaselineTest`가 개수를 고정한다. 제품 판별 실패·미지원·불일치는 요청 거절이 아니라 시작·설정 실패이므로 `ArtifactStoreCorruptedException`(`IllegalStateException` + `Reason` enum, `PortalException` 아님)과 같은 방식으로 저장소 안의 예외로 둔다. 공개 코드 집합과 `ErrorCodeBaselineTest`는 바뀌지 않는다.
@@ -27,8 +27,10 @@
 | S-SQLB-07 | 제품 불일치 거부 | 설정 URL `jdbc:postgresql://…`와 연결 제품 `PostgreSQL`(일치)·`H2`(불일치)·지원 밖 URL | 일치는 통과; 불일치는 `DATABASE_PRODUCT_MISMATCH`이고 메시지에 `POSTGRESQL`과 `H2` 둘 다; 지원 밖 URL은 `UNSUPPORTED_DATABASE_PRODUCT` | `Reason`, 메시지 | `SqlBuilderTest#checksTheConnectedProduct` |
 | S-SQLB-08 | 인스턴스 `requireSame(productName)` | 실제 `DataSource`(H2)에 `H2`·`PostgreSQL` | `H2`는 통과, `PostgreSQL`은 `DATABASE_PRODUCT_MISMATCH` | `Reason` | `SqlBuilderTest#recognizesTheEmbeddedH2Database` |
 | S-SQLB-09 | URL로 제품 선택(`ofJdbcUrl`) | `h2`·`postgresql`·`oracle`·`db2`·`sqlserver`·`mariadb`·`mysql` URL과 제품 이름 `PostgreSQL` | 각각 대응 `Database` | 값 일치 | `SqlBuilderTest#selectsTheDialectFromTheConfiguredUrl` |
-| S-SQLB-10 | 실제 DBMS에서 행 수 제한 실행(`SqlBuilderStoreTest`, `@StoreTest`) | 슬라이스의 실제 `DataSource`에 행 5개를 넣고 `query("SELECT …").orderBy(…).limit(:limit)`에 3 | 3행만 읽고 그 행은 정렬 앞쪽 3행. 같은 슬라이스에서 연결이 알리는 URL과 제품 이름으로 `requireSame(url, product)`·`requireSame(product)`가 통과한다. 기본 실행은 H2, `externalDbmsTest`는 PostgreSQL에서 같은 시험이 돈다 | 읽은 행 목록, 예외 없음 | `SqlBuilderStoreTest#theLimitRunsOnTheActualDatabase`, `#theConfiguredUrlMatchesTheConnectedProduct` |
+| S-SQLB-10 | 실제 DBMS에서 행 수 제한 실행(`SqlBuilderStoreTest`, `@StoreTest`) | 슬라이스의 실제 `DataSource`에 행 5개를 넣고 `query("SELECT …").orderBy(…).limit(:limit)`에 3 | 3행만 읽고 그 행은 정렬 앞쪽 3행. 같은 슬라이스에서 연결이 알리는 URL과 제품 이름으로 `requireSame(url, product)`·`requireSame(product)`가 통과한다. 시험은 H2에서만 돈다(다른 DBMS 시험은 개발원칙 7.3에 따라 하지 않는다. `externalDbmsTest`는 D-0103으로 지웠다) | 읽은 행 목록, 예외 없음 | `SqlBuilderStoreTest#theLimitRunsOnTheActualDatabase`, `#theConfiguredUrlMatchesTheConnectedProduct` |
 | S-SQLB-21 | 제품 이름으로 제품 선택(`ofProductName`, `requireSame(url, product)`) | 연결 없이 제품 이름 문자열만: `H2`, `PostgreSQL`, `Oracle`, `DB2/NT64`, `Microsoft SQL Server`, `MariaDB`, `MySQL` | 각각 `H2`·`POSTGRESQL`·`ORACLE`·`DB2`·`SQLSERVER`·`MARIADB`·`MYSQL`; Oracle·Db2·SQL Server·MariaDB·MySQL은 같은 제품의 URL과 짝지으면 `requireSame`이 통과한다(PostgreSQL 짝은 S-SQLB-07, H2 짝은 S-SQLB-10이 맡는다) | 값 일치 | `SqlBuilderTest#selectsTheDialectFromEachProductName` |
+| S-SQLB-22 | 긴 텍스트 열의 선언(`generateLongText(Database)`, 마이그레이션 스크립트의 `${long_text}`, 공통 형식 판 4) | 연결 없이 7개 제품마다 | H2 `CHARACTER LARGE OBJECT(2147483647)`, PostgreSQL `TEXT`, Oracle `CLOB`, Db2 `CLOB(2147483647)`, SQL Server `NVARCHAR(MAX)`, MariaDB·MySQL `LONGTEXT`. 길이를 생략하면 한도가 작아지는 Db2는 길이를 적는다. 근거 주소는 메서드의 주석에 있다 | 값 일치 | `SqlBuilderTest#generatesTheLongTextDeclarationOfEveryProduct` |
+| S-SQLB-23 | 시작 때 UTF-8 검사 질의(`generateEncodingProbe(Database)`, 공통 SqlBuilder와 같은 이름·모양) | 연결 없이 7개 제품마다 | 스키마의 가변 문자 형(`VARCHAR`, Oracle `VARCHAR2`)으로 형변환한 같은 텍스트 둘(`?` 2개)로 문자 수와 값 두 열을 돌려주는 방언별 질의. PostgreSQL·H2 `SELECT CHAR_LENGTH(CAST(? AS VARCHAR(10))), CAST(? AS VARCHAR(10))`, MariaDB·MySQL `... CHAR(10) ...`, Oracle `LENGTH`·`VARCHAR2`·`FROM DUAL`, Db2 `CHARACTER_LENGTH(... USING CODEUNITS32)`·`FROM SYSIBM.SYSDUMMY1`, SQL Server `LEN(CAST(? AS VARCHAR(10)))`(`CHAR_LENGTH`가 없다). 모든 제품의 질의가 `?`를 정확히 2개 가진다 | 값 일치, `?` 개수 | `SqlBuilderTest#probesTheEncodingWithTheCharacterCountAndTheValueOfEachDialect` |
 
 ## 3. AgentCliHistoryReader (자리 1)
 
@@ -61,7 +63,7 @@
 
 ## 6. 건드리지 않는 것
 
-- Flyway DBMS별 폴더(장부 D-0088)는 이번 범위가 아니다.
+- Flyway DBMS별 폴더(장부 D-0088)는 이번 범위가 아니었고, D-0109 단위에서 Flyway와 함께 없앴다(`migration-runner.md`).
 - 저장소에 `@Transactional`·`TransactionTemplate`을 새로 두지 않는다. `SqlBuilder`는 트랜잭션을 열지 않는다.
 
 ## 7. 실 DBMS 확인과 증명 수단
@@ -69,9 +71,9 @@
 - 실 DBMS 시험은 하지 않는다. 개발원칙 7.3(「다른 DBMS 지원 확인 시험을 하지 않는다(드라이버는 사용자 몫)」)에 따른다. 다른 DBMS 연결 시험을 늘리지도, 서비스 컨테이너를 기다리지도 않는다.
 - 증명 수단은 제품에 따라 둘이다.
   - H2: 실제 연결로 증명한다(S-SQLB-03·04·05·06·08, 그리고 S-SQLB-10·11~15는 `@StoreTest` 슬라이스의 실제 H2 `DataSource`).
-  - 나머지 6개 제품(Oracle, Db2, SQL Server, MariaDB, MySQL, PostgreSQL): 연결 없이 문자열 시험으로 증명한다. 행 수 제한 구문은 S-SQLB-01, URL로 제품 선택은 S-SQLB-09, 제품 이름으로 제품 선택은 S-SQLB-21이 문자열을 단언한다. 구문의 근거는 `SqlBuilder`의 제품별 공식 문서 링크 주석이다.
+  - 나머지 6개 제품(Oracle, Db2, SQL Server, MariaDB, MySQL, PostgreSQL): 연결 없이 문자열 시험으로 증명한다. 행 수 제한 구문은 S-SQLB-01, URL로 제품 선택은 S-SQLB-09, 제품 이름으로 제품 선택은 S-SQLB-21, 긴 텍스트 선언은 S-SQLB-22, 시작 때 UTF-8 검사 질의는 S-SQLB-23이 문자열을 단언한다. 구문의 근거는 `SqlBuilder`의 제품별 공식 문서 링크 주석이다.
 - 범위 밖: 실제 Oracle, Db2, SQL Server, MariaDB, MySQL, PostgreSQL에서 그 구문이 받아들여지는지는 이 작업이 확인하지 않는다(드라이버와 DBMS는 사용자 몫).
-- 이 브랜치에 남은 `SqlBuilderStoreTest`의 PostgreSQL 문구와 `externalDbmsTest`는 D-0109 브랜치가 지운다.
+- `SqlBuilderStoreTest`의 PostgreSQL 문구와 `externalDbmsTest`는 지웠다(장부 D-0103, `migration-runner.md`의 「지운 시험」).
 
 ## 8. 시험 절차
 
@@ -107,5 +109,5 @@
 | `portal-store/.../journal/OperationRowRepository.java:32` | `@Query` 고정 상수의 `NOT IN (SELECT ...)` | 그대로. 값이 없는 고정 ANSI 문장이다 |
 | `portal-store/.../*/…RowRepository.java`의 나머지 `@Query` | 모두 고정 상수 문장(`UPDATE … WHERE version = :expected`, `DELETE`, `SELECT … ORDER BY`) | 그대로. 이어 붙임·행 수 제한·제품 분기가 없다 |
 | `portal-app/.../history/HistoryService.java:73` | `listed.subList(0, min(PAGE_SIZE, listed.size()))` | 그대로. 저장소가 아닌 사용 사례 계층에서, 이미 걸러진 항목에서 응답 크기 한도와 페이지 크기로 나누는 업무 규칙이다(RC-B-394, RC-B-399). DB 행 수 제한이 아니다 |
-| `portal-*/src/main` 전체 | 제품명 분기(`getDatabaseProductName`, `DatabaseDriver`, `getTypeInfo`, `setMaxRows`) | `SqlBuilder` 밖에는 0건(`grep` 확인). 새로 들어온 곳은 `SqlBuilder`뿐이다 |
+| `portal-*/src/main` 전체 | 제품명 분기(`getDatabaseProductName`, `DatabaseDriver`, `getTypeInfo`, `setMaxRows`) | 제품에 따라 갈리는 문장은 `SqlBuilder`가 정한다(행 수 제한, 긴 텍스트 선언). `getDatabaseProductName`은 `SqlBuilder`와 `MigrationRunner`(연결의 제품 이름을 `SqlBuilder.ofProductName`에 넘겨 `${long_text}`를 치환하고 오류 번역기를 만든다)에만 있고, `DatabaseDriver`·`getTypeInfo`·`setMaxRows`는 `store.sql` 패키지(`SqlBuilder`, 그 예외의 주석) 밖에 0건이다(`grep` 확인) |
 | 시작 시 설정 URL ↔ 실제 연결 제품 대조 | 포털에는 `DataSource`를 시작에서 점검하는 자리가 없다(`ArtifactStartupCheck`·`OutputStartupCheck`는 파일 쪽만 본다) | 만들지 않았다. `SqlBuilder.requireSame(jdbcUrl, productName)`은 이식되어 있고 `SqlBuilderStoreTest`가 실제 연결로 호출한다. 시작 점검에 연결하는 것은 별도 결정이다 |

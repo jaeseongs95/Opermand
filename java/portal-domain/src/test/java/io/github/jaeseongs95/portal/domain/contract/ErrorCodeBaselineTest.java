@@ -31,7 +31,7 @@ import tools.jackson.databind.json.JsonMapper;
  */
 class ErrorCodeBaselineTest {
 
-    /** 2.x storage and Node internals: SQLite file opening, schema versions, transaction poisoning (they become Flyway and JDBC transactions). */
+    /** 2.x storage and Node internals: SQLite file opening, schema versions, transaction poisoning (they become the migration runner and JDBC transactions). */
     private static final Set<String> GONE = Set.of("INVALID_OPERATION_BUDGET", "OPERATION_PATH", "OPERATION_TRANSACTION_UNCERTAIN", "UNSAFE_CAPACITY_STORE",
         "UNSAFE_OPERATION_STORE", "UNSUPPORTED_OPERATION_SCHEMA");
 

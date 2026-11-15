@@ -2,20 +2,22 @@ package io.github.jaeseongs95.portal.store;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-import java.util.Arrays;
+import java.time.Clock;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 
-import org.flywaydb.core.Flyway;
-import org.flywaydb.core.api.MigrationInfo;
+import javax.sql.DataSource;
+
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import io.github.jaeseongs95.portal.store.migration.Migrations;
+
 /**
- * S2-DB-01: the real Flyway migration of the product on an empty embedded H2 database (no compatibility mode): the 28 tables of design 8.2 and 13.2 exist, the scripts
- * are the common ones plus the two of the vendor {@code h2}, and a second run changes nothing.
+ * S2-DB-01: the real migration of the product (the runner of {@code ...store.migration}, the scripts of {@code db/expand}) on an empty embedded H2 database (no compatibility
+ * mode): the 28 tables of design 8.2 and 13.2 exist, the history holds the seven scripts as attempt 1, and a second run changes nothing.
  */
 @StoreTest
 class SchemaMigrationTest {
@@ -28,11 +30,11 @@ class SchemaMigrationTest {
         "runtime_capacity_target");
 
     private final JdbcTemplate jdbc;
-    private final Flyway flyway;
+    private final DataSource dataSource;
 
-    SchemaMigrationTest(JdbcTemplate jdbc, Flyway flyway) {
+    SchemaMigrationTest(JdbcTemplate jdbc, DataSource dataSource) {
         this.jdbc = jdbc;
-        this.flyway = flyway;
+        this.dataSource = dataSource;
     }
 
     @Test
@@ -41,21 +43,20 @@ class SchemaMigrationTest {
         List<String> names = jdbc.queryForList(
             "SELECT LOWER(TABLE_NAME) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = CURRENT_SCHEMA AND TABLE_TYPE = 'BASE TABLE'", String.class);
         Set<String> product = new TreeSet<>(names);
-        product.remove("flyway_schema_history");
 
         assertThat(TABLES).hasSize(28);
         assertThat(product).isEqualTo(new TreeSet<>(TABLES));
     }
 
     @Test
-    @DisplayName("S2-DB-01 / D3-04: the applied scripts are V1, V1.1, V2 to V6, V6.1 and V7 (the execution timeline), and a second migration runs nothing")
+    @DisplayName("S2-DB-01 / D3-04: the applied scripts are V1 to V7 (V7 is the execution timeline), each once as attempt 1, and a second migration runs nothing")
     void aSecondRunChangesNothing() {
-        List<String> applied = Arrays.stream(flyway.info().applied()).map(info -> info.getVersion().getVersion()).toList();
-        assertThat(applied).containsExactly("1", "1.1", "2", "3", "4", "5", "6", "6.1", "7");
-        assertThat(Arrays.stream(flyway.info().applied()).map(MigrationInfo::getState).allMatch(state -> state.isApplied())).isTrue();
-        assertThat(flyway.info().pending()).isEmpty();
+        List<String> applied = jdbc.query("SELECT version, attempt, outcome FROM portal_meta.expand_history ORDER BY version, attempt",
+            (rows, number) -> rows.getLong("version") + "/" + rows.getInt("attempt") + "/" + rows.getString("outcome"));
+        assertThat(applied).containsExactly("1/1/SUCCEEDED", "2/1/SUCCEEDED", "3/1/SUCCEEDED", "4/1/SUCCEEDED", "5/1/SUCCEEDED", "6/1/SUCCEEDED", "7/1/SUCCEEDED");
 
-        assertThat(flyway.migrate().migrationsExecuted).isZero();
+        assertThat(new Migrations(Clock.systemUTC(), dataSource).expand()).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM portal_meta.expand_history", Long.class)).isEqualTo(7L);
     }
 
     @Test
