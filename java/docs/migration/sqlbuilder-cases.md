@@ -1,7 +1,7 @@
 # 3.0.0 SqlBuilder 이식 사례표 (S-SQLB)
 
 작성 기준: 시험을 만들기 전에 이 표를 먼저 쓴다(개발원칙 7.1). 열은 대상·입력·기대·판정이다. 「실행 결과」는 구현 뒤 9절에 채운다.
-저장 정책(사용자 2026-11-12): 「h2 기반이긴하지만 dbms 연동 가능하다. <- 이 정책 고수해.」 H2·PostgreSQL·MariaDB(·MySQL) 모두 같은 SQL 문장 구조로 돌고, 달라지는 것은 행 수 제한 구문 하나다.
+저장 정책(사용자 2026-11-12): 「h2 기반이긴하지만 dbms 연동 가능하다. <- 이 정책 고수해.」 `SqlBuilder.Database`의 7개 제품(H2, PostgreSQL, Oracle, Db2, SQL Server, MariaDB, MySQL)이 모두 같은 SQL 문장 구조로 돌고, 달라지는 것은 행 수 제한 구문 하나다.
 사용자 지시(2026-11-15): 「sqlBuilder 좋은말할때 써라.」 SQL을 이어 붙이거나 Java에서 결과를 잘라 행 수를 제한하는 자리는 `SqlBuilder`로 바꾼다.
 
 ## 1. 출처와 이식 범위
@@ -28,7 +28,7 @@
 | S-SQLB-08 | 인스턴스 `requireSame(productName)` | 실제 `DataSource`(H2)에 `H2`·`PostgreSQL` | `H2`는 통과, `PostgreSQL`은 `DATABASE_PRODUCT_MISMATCH` | `Reason` | `SqlBuilderTest#recognizesTheEmbeddedH2Database` |
 | S-SQLB-09 | URL로 제품 선택(`ofJdbcUrl`) | `h2`·`postgresql`·`oracle`·`db2`·`sqlserver`·`mariadb`·`mysql` URL과 제품 이름 `PostgreSQL` | 각각 대응 `Database` | 값 일치 | `SqlBuilderTest#selectsTheDialectFromTheConfiguredUrl` |
 | S-SQLB-10 | 실제 DBMS에서 행 수 제한 실행(`SqlBuilderStoreTest`, `@StoreTest`) | 슬라이스의 실제 `DataSource`에 행 5개를 넣고 `query("SELECT …").orderBy(…).limit(:limit)`에 3 | 3행만 읽고 그 행은 정렬 앞쪽 3행. 같은 슬라이스에서 연결이 알리는 URL과 제품 이름으로 `requireSame(url, product)`·`requireSame(product)`가 통과한다. 기본 실행은 H2, `externalDbmsTest`는 PostgreSQL에서 같은 시험이 돈다 | 읽은 행 목록, 예외 없음 | `SqlBuilderStoreTest#theLimitRunsOnTheActualDatabase`, `#theConfiguredUrlMatchesTheConnectedProduct` |
-| S-SQLB-21 | 제품 이름으로 제품 선택(`ofProductName`, `requireSame(url, product)`) | 연결 없이 제품 이름 문자열만: `H2`, `PostgreSQL`, `Oracle`, `DB2/NT64`, `Microsoft SQL Server`, `MariaDB`, `MySQL` | 각각 `H2`·`POSTGRESQL`·`ORACLE`·`DB2`·`SQLSERVER`·`MARIADB`·`MYSQL`; 같은 제품의 URL과 짝지으면 `requireSame`이 통과한다 | 값 일치 | `SqlBuilderTest#selectsTheDialectFromEachProductName` |
+| S-SQLB-21 | 제품 이름으로 제품 선택(`ofProductName`, `requireSame(url, product)`) | 연결 없이 제품 이름 문자열만: `H2`, `PostgreSQL`, `Oracle`, `DB2/NT64`, `Microsoft SQL Server`, `MariaDB`, `MySQL` | 각각 `H2`·`POSTGRESQL`·`ORACLE`·`DB2`·`SQLSERVER`·`MARIADB`·`MYSQL`; Oracle·Db2·SQL Server·MariaDB·MySQL은 같은 제품의 URL과 짝지으면 `requireSame`이 통과한다(PostgreSQL 짝은 S-SQLB-07, H2 짝은 S-SQLB-10이 맡는다) | 값 일치 | `SqlBuilderTest#selectsTheDialectFromEachProductName` |
 
 ## 3. AgentCliHistoryReader (자리 1)
 
