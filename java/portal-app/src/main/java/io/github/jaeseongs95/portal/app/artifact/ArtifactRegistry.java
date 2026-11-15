@@ -43,7 +43,7 @@ public interface ArtifactRegistry {
      * largest file a transfer carries to the real size, so a download no longer holds more of the budget than its file needs. It is one conditional update, so it opens no
      * transaction and the loser of a race is told by the number of rows it changed. Only a {@code DOWNLOAD} that is {@code STAGING} and has received no byte can shrink,
      * and only to a size not above what it holds; any other artifact throws {@code ARTIFACT_NOT_WRITABLE}, a size above the reservation {@code ARTIFACT_SEQUENCE_OR_SIZE}
-     * and an unknown id {@code ARTIFACT_NOT_FOUND}. The same size again changes nothing.
+     * and an unknown id {@code ARTIFACT_NOT_FOUND}. The same size again is accepted: the charge stays, but the row is updated, so its {@code version} rises by one.
      */
     void narrowReservation(ArtifactId id, long sizeBytes);
 

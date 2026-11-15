@@ -68,7 +68,7 @@
 | 미룬 사례 A-173(유지보수 중 reap 정책) | `ArtifactReaper`(portal-app `@Component`, `@Scheduled`)가 유지보수 상태를 보고 reap을 보류한다 | 구현 D | A-173 |
 | A-182·A-183(스트림 가져오기 예약·해시·정리) | SFTP 다운로드 유스케이스가 출력 포트 `openStream`·`streamDigest`를 쓴다(아래 「출력 포트」) | 구현 D | A-182, A-183 |
 | B-004(보호 장치 실패 시 출력 reap 금지·시작 거절) | 조립 로직: `PrivateStorage` 검사 실패 시 reap 금지 + 시작 거절 | 구현 D | B-004 |
-| `BudgetExceeded`가 보유분과 라이브 예약분을 나눠 싣기 | `ArtifactReservation.BudgetExceeded(requestedBytes, ReservedSplit(holdingBytes, liveBytes), budgetBytes)`로 바꾼다(5.2절). `JdbcArtifactRegistry.reserveRows`(`JdbcArtifactRegistry.java:102-105`)가 이미 `artifacts.chargedBytes() + quarantined`를 합산하므로 합치기 전 두 값을 그대로 싣는다 | 구현 D | S3-AR-02, S3-AR-05 |
+| **[S-D0012-03으로 대체: 이행하지 않는다]** `BudgetExceeded`가 보유분과 라이브 예약분을 나눠 싣기 | `ArtifactReservation.BudgetExceeded(requestedBytes, ReservedSplit(holdingBytes, liveBytes), budgetBytes)`로 바꾼다(5.2절). `JdbcArtifactRegistry.reserveRows`(`JdbcArtifactRegistry.java:102-105`)가 이미 `artifacts.chargedBytes() + quarantined`를 합산하므로 합치기 전 두 값을 그대로 싣는다 | 구현 D | S3-AR-02, S3-AR-05 |
 | `cleanupFailures` 0의 의미 | 3.0에서 0은 「없음」이다(`JdbcAgentCliRequestStore`/`AgentCliMapper.java:53, 56-57`이 null→0으로 받음). 2.x는 helper가 낸 0을 거절해 unknown으로 만들었다(`test/agent-cli-delivery.test.mjs:112`). 3단계에서는 원격 helper가 없어 숫자를 낼 주체가 Java 설치기뿐이므로, 「정리 실패 횟수는 설치기가 센 0 이상의 값」으로 확정하고 0을 거절하는 시험은 뒤집는다 | 구현 B | S3-AG-08 |
 | 저장소 전용 오류 코드: 정책 개정 충돌·유지보수 소유자 재사용·출력 버전 충돌 | 현재 Javadoc에만 이름이 있다(`CommandPolicyStore.java:14` `POLICY_REVISION_CONFLICT`, `MaintenanceStore.java:18` `MAINTENANCE_OWNER_USED`). 값 enum에 없다. 3단계에서 추가하고 `envelope.schema.json`의 `x-portal-errorCodes`를 갱신한다(S2 D-19 방식, 결정 D3-13) | 구현 C | S3-UC-07 |
 | artifact 포트 보강: `holding/chunks/findStagedByKey`를 `ArtifactInventory`(`portal-store`)에서 `ArtifactRegistry`(`portal-app`)로 | 이동한다(`ArtifactInventory.java:20, 23, 26`). 소비자가 portal-app의 유스케이스라 store 내부 interface로 두면 DIP가 거꾸로다 | 구현 D | S3-AR-08 |
@@ -388,18 +388,18 @@ exec 한 번의 단계(`ExecPhase`, `ssh.exec` 내부 sealed 상태)와 결과 �
 - `ArtifactReservation`의 변형 정의: `ArtifactReservation.java`(`BudgetExceeded`, `DiskSpaceInsufficient`, `FileTooLarge`).
 
 ### 5.2 3단계 설계 [제안]
-1. **포트 모양 변경**: `BudgetExceeded(long requestedBytes, ReservedSplit reserved, long budgetBytes)`. `ReservedSplit(long liveBytes, long holdingBytes)`는 현재 합쳐 있는 `charged`와 `quarantined`를 나눠 싣는다(S2 13.6 이월). 이유: 사용자(또는 에이전트)가 「예산이 찬 것이 진행 중 예약 때문인지, 격리 보관분 때문인지」를 구분해야 풀 방법(기다림 대 운영자 정리)이 갈린다. `ArtifactReservation`은 portal-app 소유라 포트 변경이다.
-2. **값을 오류에 싣는다**: 예산 거절 → `ARTIFACT_QUOTA`에 `requestedBytes·liveBytes·holdingBytes·budgetBytes`, 디스크 부족 → `ARTIFACT_STORAGE_FULL`에 `requestedBytes·usableBytes`, 파일 한도 → `FILE_TOO_LARGE`에 `limitBytes`. 값은 `RequestRefusedException`의 `ErrorData` record로 싣고 문장은 `MessageSource`(ko·en)다. 이 데이터가 응답 봉투의 `error.data`에 들어가는 모양은 4단계가 정한다(계약의 `additionalProperties:false`와의 호환 확인 필요 `[미확인]`).
+1. **[S-D0012-03으로 대체: 이 항목은 이행하지 않는다. `ReservedSplit`은 없고 `BudgetExceeded(requestedBytes, liveBytes, budgetBytes)`다. 아래 5.3절 「정정」 참조]** **포트 모양 변경**: `BudgetExceeded(long requestedBytes, ReservedSplit reserved, long budgetBytes)`. `ReservedSplit(long liveBytes, long holdingBytes)`는 현재 합쳐 있는 `charged`와 `quarantined`를 나눠 싣는다(S2 13.6 이월). 이유: 사용자(또는 에이전트)가 「예산이 찬 것이 진행 중 예약 때문인지, 격리 보관분 때문인지」를 구분해야 풀 방법(기다림 대 운영자 정리)이 갈린다. `ArtifactReservation`은 portal-app 소유라 포트 변경이다.
+2. **값을 오류에 싣는다**: 예산 거절 → `ARTIFACT_QUOTA`에 `requestedBytes·liveBytes·holdingBytes·budgetBytes`(**[S-D0012-03으로 대체]** `holdingBytes`는 싣지 않는다. 값은 `requestedBytes·liveBytes·budgetBytes`다), 디스크 부족 → `ARTIFACT_STORAGE_FULL`에 `requestedBytes·usableBytes`, 파일 한도 → `FILE_TOO_LARGE`에 `limitBytes`. 값은 `RequestRefusedException`의 `ErrorData` record로 싣고 문장은 `MessageSource`(ko·en)다. 이 데이터가 응답 봉투의 `error.data`에 들어가는 모양은 4단계가 정한다(계약의 `additionalProperties:false`와의 호환 확인 필요 `[미확인]`).
 3. **판정 순서(고정)**: 파일 크기 한도 → 예산 → 디스크(`usable - 요청 크기 < diskMarginBytes`이면 부족, `JdbcArtifactRegistry.java:107-109`. 여유 여백 `diskMarginBytes`의 기본값·설정 이름은 `ArtifactLimits`가 가지며 거절 값에 함께 싣는다). 시험 S3-AR-01~04가 「예산 0 + 디스크 충분 + 1090B → `Reserved`」「예산 충분 + 디스크 부족 → `DiskSpaceInsufficient`」「예산 부족 + 디스크 충분 → `BudgetExceeded`」를 각각 고정한다(D-0012 계획 시험 「1KB 예약 수락, 예산 초과와 디스크 부족 구분」). 「87G 여유인데 1090B가 거절됨」 범주를 막는 직접 시험은 「디스크 읽기 값을 바꿔 가며 예산 판정이 디스크 값에 영향을 받지 않음」과 「`usable()`이 예외를 던지면 거절이 아니라 `ARTIFACT_STORAGE_IO_ERROR`」다(S3-AR-03).
 4. **다운로드 작업 경로**: 예약 거절은 SSH 효과 전이므로 `ExecutionFailure.Classified(stage=OUTPUT_RESERVATION|OPERATION, code, NOT_STARTED)`로 낸다(`ExecutionStage`의 허용 짝 `ExecutionStage.java:16, 18`). 예산 거절은 `ARTIFACT_QUOTA`(허용 짝). 디스크 부족은 `ExecutionErrorCode`에 대응 값이 없다 → 결정 D3-03: (a) `ExecutionErrorCode.ARTIFACT_STORAGE_FULL` 추가 + 허용 짝에 추가(어휘 확장, `envelope.schema.json`의 `x-portal-errorCodes`는 이미 이 이름을 가진다, 릴리스 노트 「새 오류 코드」), (b) `OPERATION_FAILED`+진단으로 둔다(D-0012의 구분이 다운로드 경로에서 빠진다). 추천 (a).
 5. **고정 해제와 소비**(1.3절): `submit`이 고정, 종료 상태가 풀기, `beginConsume(id, ConsumeReason)`.
-6. **보유분(격리)과 라이브 예약의 합산**은 유지한다(S2 13.6: 같은 디스크를 쓰므로 합산). 단 위 1번으로 값에는 나눠 보인다.
+6. **[S-D0012-03으로 대체: 합산하지 않는다. 격리 바이트는 새 전송 예산과 따로 집계하고 자동으로 지우지 않는다]** **보유분(격리)과 라이브 예약의 합산**은 유지한다(S2 13.6: 같은 디스크를 쓰므로 합산). 단 위 1번으로 값에는 나눠 보인다.
 7. **출력 예산**도 같은 모양이다(`OutputManifestStore.reserve`가 `OutputReservation`을 답하고 같은 구분이 필요한지는 이번에 읽지 않았다 `[미확인]`; 구현 D가 같은 변형을 쓰는지 확인).
 
 ### 5.3 시험으로 고정(D-0012) [제안]
 S3-AR-01~09(8.3절). 핵심: 「예산 거절과 디스크 거절은 다른 변형·다른 코드·다른 값」, 「1090B 예약은 예산에 여유가 있으면 항상 수락」, 「보유분이 예산을 먹어 거절될 때 값이 보유분과 라이브분을 나눠 보인다」.
 
-**정정(D-0012 재작업, 리드 판정 D).** 5.2절 6번(보유분과 라이브 예약의 합산)과 위 마지막 핵심(S3-AR-05)은 바뀌었다. 격리(보유) 바이트는 아무것도 지우지 않으므로 예산에 합산하면 새 전송을 영구히 막는다. 격리 바이트는 새 전송 예산과 따로 집계하고(`ArtifactBudget.retainedBytes`), 소유자에게 보이며, 새 전송을 막지 않고, 자동으로 지우지 않는다. 그래서 `ReservedSplit`은 없어졌고 `BudgetExceeded(requestedBytes, liveBytes, budgetBytes)`와 `ARTIFACT_QUOTA` 값에는 `holdingBytes`가 없다. S3-AR-05와 RC-A-169·170의 「보유분 합산」 단언은 S-D0012-03이 대체한다. `ARTIFACT_QUOTA`의 `retryable`은 Contract 2.0 공개 계약이므로 `false`로 유지한다.
+**정정(D-0012 재작업, 리드 판정 D).** 5.2절 6번(보유분과 라이브 예약의 합산)과 위 마지막 핵심(S3-AR-05)은 바뀌었다. 격리(보유) 바이트는 아무것도 지우지 않으므로 예산에 합산하면 새 전송을 영구히 막는다. 격리 바이트는 새 전송 예산과 따로 집계하고(`ArtifactBudget.retainedFiles`·`retainedBytes`), 소유자에게 보이며, 새 전송을 막지 않고, 자동으로 지우지 않는다. 3단계는 보이는 방법을 로그로 한정한다: 기동 점검(`ArtifactStartupCheck`)과 매 주기 정리(`ArtifactReaper`)가 끝날 때 격리 파일 수와 바이트를 INFO 한 줄로 남긴다(`QuarantineNotice`, S-D0012-06·07). 관리자 화면 표시와 소유자 정리 명령은 4단계 관리자 API 작업이다. 그래서 `ReservedSplit`은 없어졌고 `BudgetExceeded(requestedBytes, liveBytes, budgetBytes)`와 `ARTIFACT_QUOTA` 값에는 `holdingBytes`가 없다. S3-AR-05와 RC-A-169·170의 「보유분 합산」 단언은 S-D0012-03이 대체한다. `ARTIFACT_QUOTA`의 `retryable`은 Contract 2.0 공개 계약이므로 `false`로 유지한다.
 
 ---
 
@@ -601,10 +601,10 @@ Java 판에 같은 행동이 없다. 각 묶음의 대체 사례는 8.5절에서
 | S3-SF-19 | 오류 분류표 | `SftpException` 상태 2·3·4·6·7·8·11·14·15 | 4.5절 표의 코드(매개변수화) |
 | S3-SF-20 | 해시 대조 | 전송 도중 바이트 변조(서버 쪽) | 임시 재읽기 해시 불일치 → `FILE_CHANGED`, 대상 불변 |
 | S3-AR-01 | 1090B 예약(D-0012) | 예산 비어 있음, 디스크 충분 | `Reserved` |
-| S3-AR-02 | 예산 거절 값 | 예산 부족 | `BudgetExceeded`, `liveBytes`·`holdingBytes`가 따로, `ARTIFACT_QUOTA`에 값 포함 |
+| S3-AR-02 | 예산 거절 값 | 예산 부족 | `BudgetExceeded`, `liveBytes`·`holdingBytes`가 따로, `ARTIFACT_QUOTA`에 값 포함 **[S-D0012-03으로 대체: `holdingBytes`는 없다. `BudgetExceeded(requestedBytes, liveBytes, budgetBytes)`와 그 값만 확인]** |
 | S3-AR-03 | 디스크 부족 거절 | 예산 충분, `usable()` 작음 | `DiskSpaceInsufficient`, `ARTIFACT_STORAGE_FULL`에 `requested·usable`; `usable()` 예외 → `ARTIFACT_STORAGE_IO_ERROR` |
 | S3-AR-04 | 판정 순서 | 파일 한도·예산·디스크가 동시에 부족 | 한도 → 예산 → 디스크 순, 한 번에 하나만 |
-| S3-AR-05 | 보유분 합산 | 격리 파일이 예산을 채움 | 거절 + `holdingBytes>0`, 격리 파일 삭제 후 수락 |
+| S3-AR-05 | 보유분 합산 | 격리 파일이 예산을 채움 | 거절 + `holdingBytes>0`, 격리 파일 삭제 후 수락 **[S-D0012-03으로 대체: 격리 파일이 예산보다 커도 새 전송은 수락하고 격리 파일은 지우지 않는다. 격리 바이트는 `ArtifactBudget.retainedBytes`로 따로 보이고, 기동 점검과 매 주기 정리가 끝날 때 로그 한 줄(S-D0012-06·07)로 남는다]** |
 | S3-AR-06 | `openStream`·`streamDigest` | 스풀이 있는 출력 | 같은 입력에 해시 일치, 변조 시 불일치(A-182·A-183 연결) |
 | S3-AR-07 | 고정·해제 | `submit` 뒤 종료 상태 | 종료 전 만료 계산에서 제외, 종료 뒤 `unpin` → 만료 대상 |
 | S3-AR-08 | 포트 이동 | `ArtifactRegistry`에서 `holding/chunks/findStagedByKey` | 시작 점검·begin 재시도가 같은 공개 UUID를 받음(B-091), store 내부 interface 없이 |

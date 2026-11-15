@@ -1566,7 +1566,7 @@ A-228, A-249, A-460(브라우저·UI 입력, 4단계 portal-web), B-466(MCP subm
 
 ### 13.6 구현 보고 뒤 판정(2026-11-12)
 - **T19 철회.** `recoverAfterRestart`는 `QUEUED`를 바꾸지 않는다. 3.0 저널은 내구 저장이고 `QUEUED→STARTING` claim은 외부 효과 전에 같은 트랜잭션에서 일어나므로, `QUEUED`는 시도되지 않았음이 확정이다. 2.x approval-queue의 queued→unknown은 메모리 job 유실 때문이었고, 내구 저장소 시험 RC-B-203(`test/operation-store.test.mjs:44`)은 queued를 재시작 전과 같게 보존한다. `UNKNOWN`으로 바꾸면 시도하지 않은 작업에 소유자 대조를 강요한다. T18·T20·T21은 유지한다.
-- **RC-A-169·170 채택.** 복구한 레거시(격리) 보유 바이트는 공유 스테이징 예산에 넣는다(2.x와 같음). 같은 저장 루트의 디스크를 쓰므로, 빼면 실제 사용량이 설정 예산을 넘는다. D-0012 대응(8.5절)은 예산 거절과 디스크 부족 거절을 나누고, 예산 거절 값에 보유분·라이브 예약분을 따로 싣는다.
+- **[S-D0012-03으로 대체: 격리 바이트는 스테이징 예산에 넣지 않고 따로 집계한다(`ArtifactBudget.retainedBytes`). 이 판정과 아래 A-170 문단의 합산·`ReservedSplit` 이월은 이행하지 않는다. 3단계 설계 5.3절 「정정」 참조]** **RC-A-169·170 채택.** 복구한 레거시(격리) 보유 바이트는 공유 스테이징 예산에 넣는다(2.x와 같음). 같은 저장 루트의 디스크를 쓰므로, 빼면 실제 사용량이 설정 예산을 넘는다. D-0012 대응(8.5절)은 예산 거절과 디스크 부족 거절을 나누고, 예산 거절 값에 보유분·라이브 예약분을 따로 싣는다.
 - **Flyway 위치.** `db/migration/common`(ANSI 공통)과 `db/migration/{vendor}`(긴 텍스트 열만: H2 `CLOB`, PostgreSQL `TEXT`, MariaDB·MySQL `MEDIUMTEXT`)로 나눈 구현 3안을 채택한다. 서버 설정은 `spring.flyway.locations=classpath:db/migration/common,classpath:db/migration/{vendor}`를 기본값으로 둔다. 8.2절의 `db/migration/V1~V6` 경로는 이것으로 대체한다.
 - **`operation_fence`는 `conflict_digest`(SHA-256 hex) 열로 PK를 만든다.** MariaDB·MySQL InnoDB 색인 한도(3072바이트) 때문이다.
 - **`ReviewReason`은 통합 때 `command`에서 `operation`으로 옮긴다**(패키지 순환 `operation`↔`command` 제거).
@@ -1590,7 +1590,7 @@ A-228, A-249, A-460(브라우저·UI 입력, 4단계 portal-web), B-466(MCP subm
   - savepoint는 `store.Savepoints`(`@Component`, `PROPAGATION_NESTED`) 하나로 모았다. `JdbcClaimStore`·`JdbcOperationJournal`의 중복 `TransactionTemplate`을 이것으로 바꿨다. 새 사례는 S2-DB-11(따옴표 없는 이름), S2-DB-12(savepoint 슬롯 충돌), S2-DB-13(마이크로초), S2-DB-14(CHAR 공백 채움), S2-DB-15(vendor 폴더·스키마), S2-DB-16(접속 값 공급·비밀번호 비노출), S2-DB-17(거절 뒤 트랜잭션 계속)이다.
   - 2026-11-12 메인 실행: H2 전체 빌드는 tests 1191, failures 0, skipped 7, 경고 0이다. `externalDbmsTest`는 tests 267, failures 0, skipped 7(위 Linux 목록과 같음)이다. 실행 뒤 `portal_%` 스키마는 0개다. MariaDB·MySQL은 이 PC에 없어 8단계 CI에서 확인한다(미검증).
 - **사례 표기 대조(메인 2026-11-12).** 9.2절의 A-·B- ID와 9.5절의 S2- ID를 `portal-*/src/test`의 `.java`·`.tsv`와 대조했다. 이유 없이 빠졌던 A-047·A-170·A-485·A-486·S2-AR-01은 시험을 보강해 표기했다.
-  - A-170은 제품 결함이었다. 격리 바이트가 예산에 들어가지 않았는데, 이제 `RetainedPayloads`로 `orphans/` 일반 파일 크기를 예산에 더한다. 위의 「RC-A-169·170 채택」을 이행한 것이다. `BudgetExceeded`가 보유분과 라이브 예약분을 나눠 싣는 일은 3단계로 넘긴다(portal-app 포트 변경).
+  - **[S-D0012-03으로 대체]** A-170은 제품 결함이었다. 격리 바이트가 예산에 들어가지 않았는데, 이제 `RetainedPayloads`로 `orphans/` 일반 파일 크기를 예산에 더한다. 위의 「RC-A-169·170 채택」을 이행한 것이다. `BudgetExceeded`가 보유분과 라이브 예약분을 나눠 싣는 일은 3단계로 넘긴다(portal-app 포트 변경).
   - A-486은 T19 철회에 따라 QUEUED를 보존한다. A-485는 2.x의 UPDATE 거부 트리거(H2 전용) 대신, 모든 행을 전후로 비교하는 방식으로 DBMS 중립하게 확인한다.
   - A-047의 `cleanupFailures`는 3.0에서 0을 「없음」(null 저장)으로 받는다. 음수·문자열은 타입이 막는다. 2.x의 「0은 예외」와 다르므로 3단계 원격 결과 매핑 때 확인한다.
   - **미룬 사례(9.3 추가)**:
