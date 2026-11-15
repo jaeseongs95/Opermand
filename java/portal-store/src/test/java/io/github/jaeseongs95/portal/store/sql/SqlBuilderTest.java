@@ -90,8 +90,10 @@ class SqlBuilderTest {
     @Test
     @DisplayName("S-SQLB-05: a database the builder has no SQL for is refused with UNSUPPORTED_DATABASE_PRODUCT")
     void rejectsAnUnknownDatabase() {
-        assertThatThrownBy(() -> SqlBuilder.database(DatabaseDriver.UNKNOWN)).isInstanceOfSatisfying(DatabaseProductException.class,
-                failure -> assertThat(failure.reason()).isEqualTo(Reason.UNSUPPORTED_DATABASE_PRODUCT));
+        assertThatThrownBy(() -> SqlBuilder.database(DatabaseDriver.UNKNOWN)).isInstanceOfSatisfying(DatabaseProductException.class, failure -> {
+            assertThat(failure.reason()).isEqualTo(Reason.UNSUPPORTED_DATABASE_PRODUCT);
+            assertThat(failure.getMessage()).startsWith("UNSUPPORTED_DATABASE_PRODUCT: ");
+        });
     }
 
     /** A matching product is accepted; a mismatch identifies both the configured and actual products. */
@@ -101,6 +103,7 @@ class SqlBuilderTest {
         SqlBuilder.requireSame("jdbc:postgresql://localhost/db", "PostgreSQL");
         assertThatThrownBy(() -> SqlBuilder.requireSame("jdbc:postgresql://localhost/db", "H2")).isInstanceOfSatisfying(DatabaseProductException.class, mismatch -> {
             assertThat(mismatch.reason()).isEqualTo(Reason.DATABASE_PRODUCT_MISMATCH);
+            assertThat(mismatch.getMessage()).startsWith("DATABASE_PRODUCT_MISMATCH: ");
             assertThat(mismatch.getMessage()).contains("POSTGRESQL").contains("H2");
         });
         assertThatThrownBy(() -> SqlBuilder.requireSame("jdbc:derby:memory:db", "H2")).isInstanceOfSatisfying(DatabaseProductException.class,

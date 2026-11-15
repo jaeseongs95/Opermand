@@ -27,8 +27,8 @@ public final class DatabaseProductException extends IllegalStateException {
     private final Reason reason;
 
     DatabaseProductException(Reason reason, String message, Throwable cause) {
-        super(Objects.requireNonNull(message, "message"), cause);
-        this.reason = Objects.requireNonNull(reason, "reason");
+        super(Objects.requireNonNull(reason, "reason").name() + ": " + Objects.requireNonNull(message, "message"), cause);
+        this.reason = reason;
     }
 
     DatabaseProductException(Reason reason, String message) {

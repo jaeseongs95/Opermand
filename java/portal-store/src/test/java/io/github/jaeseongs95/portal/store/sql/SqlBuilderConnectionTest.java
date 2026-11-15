@@ -90,7 +90,10 @@ class SqlBuilderConnectionTest {
             SqlBuilder builder = new SqlBuilder(source);
             for (int i = 0; i < 2; i++) {
                 assertThatThrownBy(() -> builder.generateLimit("?")).isInstanceOfSatisfying(DatabaseProductException.class,
-                        failure -> assertThat(failure.reason()).isEqualTo(Reason.UNSUPPORTED_DATABASE_PRODUCT));
+                        failure -> {
+                            assertThat(failure.reason()).isEqualTo(Reason.UNSUPPORTED_DATABASE_PRODUCT);
+                            assertThat(failure.getMessage()).startsWith("UNSUPPORTED_DATABASE_PRODUCT: ");
+                        });
             }
             assertThat(source.metadataCalls.get()).isEqualTo(2);
         }
@@ -104,6 +107,7 @@ class SqlBuilderConnectionTest {
             SqlBuilder builder = new SqlBuilder(source);
             assertThatThrownBy(() -> builder.generateLimit("?")).isInstanceOfSatisfying(DatabaseProductException.class, failure -> {
                 assertThat(failure.reason()).isEqualTo(Reason.STORE_UNREACHABLE);
+                assertThat(failure.getMessage()).startsWith("STORE_UNREACHABLE: ");
                 assertThat(failure).hasCauseInstanceOf(SQLException.class);
             });
             assertThat(builder.generateLimit("?")).isEqualTo("FETCH FIRST ? ROWS ONLY");
