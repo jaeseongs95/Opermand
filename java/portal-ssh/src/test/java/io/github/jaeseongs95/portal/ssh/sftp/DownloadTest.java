@@ -2,6 +2,10 @@ package io.github.jaeseongs95.portal.ssh.sftp;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.github.jaeseongs95.portal.app.remote.CancelSource;
 import io.github.jaeseongs95.portal.app.remote.DownloadRequest;
 import io.github.jaeseongs95.portal.app.remote.DownloadResult;
@@ -16,17 +20,23 @@ import io.github.jaeseongs95.portal.domain.operation.CompletionEvidence;
 import io.github.jaeseongs95.portal.ssh.testkit.SftpFault;
 import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.channels.ClosedChannelException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
+import java.time.Duration;
+import java.util.List;
 import java.util.function.UnaryOperator;
+import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 import org.springframework.util.unit.DataSize;
 
 /**
@@ -40,9 +50,29 @@ class DownloadTest {
     Path root;
 
     private TransferBed bed;
+    private Logger downloaderLog;
+    private ListAppender<ILoggingEvent> appender;
+    private Logger transferLog;
+    private ListAppender<ILoggingEvent> transferAppender;
+
+    @BeforeEach
+    void listenToTheDownloader() {
+        downloaderLog = (Logger) LoggerFactory.getLogger(SftpDownloader.class);
+        appender = new ListAppender<>();
+        appender.start();
+        downloaderLog.addAppender(appender);
+        transferLog = (Logger) LoggerFactory.getLogger(MinaRemoteFileTransfer.class);
+        transferAppender = new ListAppender<>();
+        transferAppender.start();
+        transferLog.addAppender(transferAppender);
+    }
 
     @AfterEach
     void closeBed() throws IOException {
+        downloaderLog.detachAppender(appender);
+        appender.stop();
+        transferLog.detachAppender(transferAppender);
+        transferAppender.stop();
         if (bed != null) {
             bed.close();
         }
@@ -299,6 +329,141 @@ class DownloadTest {
         assertThat(result).isEqualTo(new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST));
         assertThat(testBed.sessions().discards()).isEqualTo(1);
         assertThat(testBed.sessions().leases()).as("no automatic second read").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("S-D0013-27 D-0013 a loss judged at the first look logs the cause at WARN with the throwable (no remote path in the message)")
+    void lossAtTheFirstLookIsLoggedWithItsCause() throws IOException, ClassNotFoundException {
+        TransferBed testBed = startWith(client -> new SftpDoubles().channelEndingAtTheFirstLook(client, () -> { }));
+        Files.write(root.resolve("small.bin"), pattern(850));
+
+        DownloadResult result = testBed.transfer().download(testBed.download("/small.bin"), new TransferBed.Collecting(), testBed.control());
+
+        assertThat(result).isEqualTo(new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST));
+        assertThat(testBed.sessions().discards()).isEqualTo(1);
+        assertTheLossIsLogged(ClosedChannelException.class);
+    }
+
+    @Test
+    @DisplayName("S-D0013-28 D-0013 a connection cut while the file is read logs the cause at WARN with the throwable (no remote path in the message)")
+    void lossWhileReadingIsLoggedWithItsCause() throws IOException, ClassNotFoundException {
+        TransferBed testBed = start();
+        Files.write(root.resolve("small.bin"), pattern(1024 * 1024));
+        testBed.server().injectSftpFault(SftpFault.of(SftpFault.Operation.OPEN_FOR_READ, "small.bin", SftpFault.Failure.CONNECTION_DROPPED).afterBytes(100_000));
+
+        DownloadResult result = testBed.transfer().download(testBed.download("/small.bin"), new TransferBed.Collecting(), testBed.control());
+
+        assertThat(result).isEqualTo(new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST));
+        assertThat(testBed.sessions().discards()).isEqualTo(1);
+        assertTheLossIsLogged(IOException.class);
+    }
+
+    @Test
+    @DisplayName("S-D0013-29 D-0013 a loss judged at the look after the last byte logs the cause at WARN with the throwable (no remote path in the message)")
+    void lossAfterTheLastByteIsLoggedWithItsCause() throws IOException, ClassNotFoundException {
+        TransferBed testBed = startWith(client -> new SftpDoubles().channelEndingAfterTheRead(client, ".bin", false, () -> { }));
+        Files.write(root.resolve("small.bin"), pattern(850));
+
+        DownloadResult result = testBed.transfer().download(testBed.download("/small.bin"), new TransferBed.Collecting(), testBed.control());
+
+        assertThat(result).isEqualTo(new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST));
+        assertThat(testBed.sessions().discards()).isEqualTo(1);
+        assertTheLossIsLogged(ClosedChannelException.class);
+    }
+
+    @Test
+    @DisplayName("S-D0013-30 (a) D-0013 a cancel that ends the channel at the first look is CANCELLED and logs no lost connection")
+    void aCancelAtTheFirstLookIsNotLoggedAsALoss() throws IOException {
+        CancelSource cancel = new CancelSource();
+        TransferBed testBed = startWith(client -> new SftpDoubles().channelEndingAtTheFirstLook(client, cancel::cancel));
+        Files.write(root.resolve("small.bin"), pattern(850));
+
+        DownloadResult result = testBed.transfer().download(testBed.download("/small.bin"), new TransferBed.Collecting(), testBed.control(cancel));
+
+        assertThat(result).isEqualTo(new DownloadResult.Failed(TransferFailureCause.CANCELLED));
+        assertThat(testBed.sessions().discards()).isZero();
+        assertThat(warnings()).as("a stop by the owner is not a lost connection").isEmpty();
+    }
+
+    @Test
+    @DisplayName("S-D0013-30 (b) D-0013 a cancel that ends the channel after the last byte is CANCELLED and logs no lost connection")
+    void aCancelAfterTheLastByteIsNotLoggedAsALoss() throws IOException {
+        CancelSource cancel = new CancelSource();
+        TransferBed testBed = startWith(client -> new SftpDoubles().channelEndingAfterTheRead(client, ".bin", false, cancel::cancel));
+        Files.write(root.resolve("small.bin"), pattern(850));
+
+        DownloadResult result = testBed.transfer().download(testBed.download("/small.bin"), new TransferBed.Collecting(), testBed.control(cancel));
+
+        assertThat(result).isEqualTo(new DownloadResult.Failed(TransferFailureCause.CANCELLED));
+        assertThat(testBed.sessions().discards()).isZero();
+        assertThat(warnings()).as("a stop by the owner is not a lost connection").isEmpty();
+    }
+
+    private List<ILoggingEvent> warnings() {
+        return appender.list.stream().filter(event -> event.getLevel().isGreaterOrEqual(Level.WARN)).toList();
+    }
+
+    private List<ILoggingEvent> transferWarnings() {
+        return transferAppender.list.stream().filter(event -> event.getLevel().isGreaterOrEqual(Level.WARN)).toList();
+    }
+
+    /** One WARN or more severe event of the downloader, with a throwable assignable to {@code expectedType} and a message that does not repeat the remote path. */
+    private void assertTheLossIsLogged(Class<? extends Throwable> expectedType) throws ClassNotFoundException {
+        assertThat(warnings()).as("the cause of the TRANSPORT_LOST verdict is logged once").hasSize(1);
+        ILoggingEvent event = warnings().get(0);
+        assertThat(event.getThrowableProxy()).as("with the exception that caused it").isNotNull();
+        Class<?> loggedType = Class.forName(event.getThrowableProxy().getClassName());
+        assertThat(expectedType).isAssignableFrom(loggedType);
+        assertThat(event.getFormattedMessage()).doesNotContain("small.bin");
+    }
+
+    @Test
+    @DisplayName("S-D0013-35 D-0013 a dead session while the plain SFTP channel is opened logs the cause at WARN with the throwable, while a live-session channel refusal or a cancel logs no WARN")
+    void channelOpeningLogsTransportLossOnly() throws IOException {
+        bed = TransferBed.start(root, true, new SftpChannels() {
+            @Override
+            public SftpClient open(ClientSession session) throws IOException {
+                session.close(true).await(Duration.ofSeconds(5));
+                throw new ClosedChannelException();
+            }
+        }, ScriptedExecutor.everythingSucceeds(), (target, path) -> new PathPolicyDecision.NotApplicable());
+
+        DownloadResult lost = bed.transfer().download(bed.download("/small.bin"), new TransferBed.Collecting(), bed.control());
+
+        assertThat(lost).isEqualTo(new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST));
+        assertThat(bed.sessions().discards()).isEqualTo(1);
+        assertThat(transferWarnings()).hasSize(1);
+        assertThat(transferWarnings().get(0).getThrowableProxy()).isNotNull();
+        assertThat(transferWarnings().get(0).getThrowableProxy().getClassName()).isEqualTo(ClosedChannelException.class.getName());
+        assertThat(transferWarnings().get(0).getFormattedMessage()).doesNotContain("small.bin");
+        bed.close();
+        transferAppender.list.clear();
+
+        bed = TransferBed.start(root, TransferBed.Sudo.NO_SERVER, new SftpChannels(), ScriptedExecutor.everythingSucceeds(),
+            TransferBed.refusingSessionChannels(opening -> true));
+
+        DownloadResult refusedChannel = bed.transfer().download(bed.download("/small.bin"), new TransferBed.Collecting(), bed.control());
+
+        assertThat(refusedChannel).isEqualTo(new DownloadResult.Failed(TransferFailureCause.CHANNEL_OPEN_FAILED));
+        assertThat(bed.sessions().discards()).isZero();
+        assertThat(transferWarnings()).as("a channel refusal on a live session is not a lost connection").isEmpty();
+        bed.close();
+        transferAppender.list.clear();
+
+        CancelSource cancel = new CancelSource();
+        bed = TransferBed.start(root, true, new SftpChannels() {
+            @Override
+            public SftpClient open(ClientSession session) throws IOException {
+                cancel.cancel();
+                session.close(true).await(Duration.ofSeconds(5));
+                throw new ClosedChannelException();
+            }
+        }, ScriptedExecutor.everythingSucceeds(), (target, path) -> new PathPolicyDecision.NotApplicable());
+
+        DownloadResult cancelled = bed.transfer().download(bed.download("/small.bin"), new TransferBed.Collecting(), bed.control(cancel));
+
+        assertThat(cancelled).isEqualTo(new DownloadResult.Failed(TransferFailureCause.CANCELLED));
+        assertThat(transferWarnings()).as("a stop by the owner is not logged as a lost connection").isEmpty();
     }
 
     @Test

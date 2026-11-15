@@ -2,6 +2,7 @@ package io.github.jaeseongs95.portal.ssh.sftp;
 
 import io.github.jaeseongs95.portal.app.remote.FileDiagnostic;
 import io.github.jaeseongs95.portal.domain.error.TransferErrorCode;
+import java.io.IOException;
 import java.util.Objects;
 
 /**
@@ -38,7 +39,14 @@ sealed interface PathInspection permits PathInspection.Absent, PathInspection.Pr
         }
     }
 
-    /** The connection was lost while the path was being looked at. */
-    record Lost() implements PathInspection {
+    /**
+     * The connection was lost while the path was being looked at.
+     *
+     * @param cause the exception that showed the loss; the transfer that decides it is a lost connection logs it, so that a loss of unknown origin can be diagnosed (defect D-0013)
+     */
+    record Lost(IOException cause) implements PathInspection {
+        public Lost {
+            Objects.requireNonNull(cause, "cause");
+        }
     }
 }

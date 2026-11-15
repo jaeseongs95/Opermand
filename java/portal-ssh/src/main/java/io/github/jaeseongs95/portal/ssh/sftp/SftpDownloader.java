@@ -13,6 +13,8 @@ import java.util.Arrays;
 import java.util.Objects;
 import java.util.Optional;
 import org.apache.sshd.sftp.client.SftpClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
@@ -27,11 +29,13 @@ import org.springframework.stereotype.Component;
  *
  * <p>What the failures come to: a status the server answered with (permission denied, no such file) is {@code Refused} with its own code; a lost connection is
  * {@code Failed(TRANSPORT_LOST)}; the time limit and the cancel are {@code Failed(DEADLINE)} and {@code Failed(CANCELLED)}. The adapter never reads the file again. A failure of {@code close()} on the read stream is only logged: it comes after the
- * last byte and does not change what was read (size and SHA-256) or what the second look at the file found.
+ * last byte and does not change what was read (size and SHA-256) or what the second look at the file found. A verdict of {@code TRANSPORT_LOST} is logged at WARN with the
+ * exception that caused it (defect D-0013), because the result does not carry it; a stop by the time limit or the cancel is not a lost connection and is not logged as one.
  */
 @Component
 public class SftpDownloader {
 
+    private static final Logger LOG = LoggerFactory.getLogger(SftpDownloader.class);
     private static final int BLOCK_BYTES = 64 * 1024;
 
     private final RemotePathChecker checker;
@@ -69,8 +73,7 @@ public class SftpDownloader {
                 if (watch.fired().isPresent()) {
                     yield new DownloadResult.Failed(watch.fired().orElseThrow());
                 }
-                lease.discard();
-                yield new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST);
+                yield connectionLost(lease, lost.cause());
             }
             case PathInspection.Refused refused -> new DownloadResult.Refused(refused.code(), refused.diagnostic());
             case PathInspection.Absent absent -> new DownloadResult.Refused(TransferErrorCode.FILE_NOT_FOUND, new FileDiagnostic.None());
@@ -125,8 +128,7 @@ public class SftpDownloader {
                 if (watch.fired().isPresent()) {
                     yield new DownloadResult.Failed(watch.fired().orElseThrow());
                 }
-                lease.discard();
-                yield new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST);
+                yield connectionLost(lease, lost.cause());
             }
         };
     }
@@ -161,12 +163,20 @@ public class SftpDownloader {
             return new DownloadResult.Failed(watch.fired().orElseThrow());
         }
         return switch (classifier.verdict(cause, SftpFailureClassifier.Site.TARGET_FILE)) {
-            case SftpFailureClassifier.Verdict.Lost lost -> {
-                lease.discard();
-                yield new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST);
-            }
+            case SftpFailureClassifier.Verdict.Lost lost -> connectionLost(lease, cause);
             case SftpFailureClassifier.Verdict.Refusal refusal -> new DownloadResult.Refused(refusal.code(), refusal.diagnostic());
         };
+    }
+
+    /**
+     * The one place where a download is judged to have lost its connection: the session is discarded, and the exception that showed the loss is logged with its stack and kind,
+     * because the result ({@code Failed(TRANSPORT_LOST)}) carries no cause and the next loss of unknown origin could not be diagnosed otherwise (defect D-0013, cases S-D0013-27
+     * to S-D0013-29). The message names no remote path, which the result never repeats either, and no local path or credential value (D-0137).
+     */
+    private DownloadResult connectionLost(SessionLease lease, IOException cause) {
+        LOG.warn("A download was judged a lost connection (TRANSPORT_LOST); the target was only read and the session is discarded", cause);
+        lease.discard();
+        return new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST);
     }
 
     private DownloadResult changed() {

@@ -351,22 +351,33 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
                 // The session lives and there is no elevated channel without a refusal of the request (the server refused a channel, the program did not answer in time, the
                 // wait was interrupted): the same cause as the plain path gives, the session is kept; a stop that fired meanwhile is the cause (S-D0013-13, 14, 18 to 21).
                 case SudoSftpChannels.Opening.ChannelFailed failed -> new Attempt.Unreachable(watch.fired().orElse(TransferFailureCause.CHANNEL_OPEN_FAILED));
-                case SudoSftpChannels.Opening.Lost lost -> {
-                    lease.discard();
-                    yield new Attempt.Unreachable(watch.fired().orElse(TransferFailureCause.TRANSPORT_LOST));
-                }
+                case SudoSftpChannels.Opening.Lost lost -> lostBeforeWork(lease, watch, lost.cause());
             };
         }
         try {
             return new Attempt.Ready(channels.open(lease.session()));
         } catch (IOException e) {
-            boolean sessionAlive = lease.session().isOpen();
-            if (!sessionAlive) {
-                lease.discard();
+            if (!lease.session().isOpen()) {
+                return lostBeforeWork(lease, watch, e);
             }
             LOG.debug("The SFTP channel could not be opened", e);
-            return new Attempt.Unreachable(watch.fired().orElse(sessionAlive ? TransferFailureCause.CHANNEL_OPEN_FAILED : TransferFailureCause.TRANSPORT_LOST));
+            return new Attempt.Unreachable(watch.fired().orElse(TransferFailureCause.CHANNEL_OPEN_FAILED));
         }
+    }
+
+    /**
+     * A connection that died while the SFTP channel was opened: the session is discarded, and when no time limit or cancel caused the close, the exception is logged at WARN
+     * with its throwable (no remote path in the message), because {@code TRANSPORT_LOST} carries no cause of its own (defect D-0013, audit F1; cases S-D0013-35 and S-D0013-36).
+     */
+    private Attempt.Unreachable lostBeforeWork(SessionLease lease, TransferWatch watch, IOException cause) {
+        lease.discard();
+        Optional<TransferFailureCause> stopped = watch.fired();
+        if (stopped.isPresent()) {
+            LOG.debug("The SFTP channel could not be opened after the transfer was stopped", cause);
+            return new Attempt.Unreachable(stopped.orElseThrow());
+        }
+        LOG.warn("Opening the SFTP channel of a transfer was judged a lost connection (TRANSPORT_LOST); nothing was sent on the channel and the session is discarded", cause);
+        return new Attempt.Unreachable(TransferFailureCause.TRANSPORT_LOST);
     }
 
     private <R> R withLease(SessionLease lease, ExecutionControl control, TransferWatch watch, boolean elevated, Function<TransferFailureCause, R> notDispatched,

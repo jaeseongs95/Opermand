@@ -85,8 +85,15 @@ public class SudoSftpChannels {
             }
         }
 
-        /** The connection failed. */
-        record Lost() implements Opening {
+        /**
+         * The connection failed.
+         *
+         * @param cause the exception that showed the loss
+         */
+        record Lost(IOException cause) implements Opening {
+            public Lost {
+                Objects.requireNonNull(cause, "cause");
+            }
         }
     }
 
@@ -126,7 +133,7 @@ public class SudoSftpChannels {
             look = plain.open(session);
         } catch (IOException e) {
             LOG.debug("The SFTP channel that looks for the server program could not be opened", e);
-            return session.isOpen() ? new Opening.ChannelFailed() : new Opening.Lost();
+            return session.isOpen() ? new Opening.ChannelFailed() : new Opening.Lost(e);
         }
         Optional<String> server;
         try {
@@ -135,7 +142,7 @@ public class SudoSftpChannels {
             LOG.debug("The look for the SFTP server program failed", e);
             return switch (classifier.verdict(e, SftpFailureClassifier.Site.TARGET_FILE)) {
                 case SftpFailureClassifier.Verdict.Refusal refusal -> new Opening.LookRefused(refusal.code());
-                case SftpFailureClassifier.Verdict.Lost lost -> new Opening.Lost();
+                case SftpFailureClassifier.Verdict.Lost lost -> new Opening.Lost(e);
             };
         } finally {
             plain.closeQuietly(look);
@@ -174,7 +181,7 @@ public class SudoSftpChannels {
             Thread.currentThread().interrupt();
         }
         if (!session.isOpen()) {
-            return new Opening.Lost();
+            return new Opening.Lost(failure);
         }
         if (failure instanceof EOFException) {
             return new Opening.NotStarted();

@@ -2,6 +2,10 @@ package io.github.jaeseongs95.portal.ssh.sftp;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.github.jaeseongs95.portal.app.remote.CancelSource;
 import io.github.jaeseongs95.portal.app.remote.DownloadRequest;
 import io.github.jaeseongs95.portal.app.remote.DownloadResult;
@@ -27,24 +31,30 @@ import io.github.jaeseongs95.portal.domain.operation.CleanupState;
 import io.github.jaeseongs95.portal.domain.operation.OverwriteMode;
 import io.github.jaeseongs95.portal.domain.path.PosixRemotePath;
 import java.io.IOException;
+import java.nio.channels.ClosedChannelException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
+import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.server.SshServer;
+import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.common.SftpConstants;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 
 /**
  * Elevated file work (S3-EL-01 to S3-EL-04, stage 3 design 6.1, decision Q8). A POSIX target is served by its SFTP server started with {@code sudo -n} and spoken to with
@@ -65,9 +75,21 @@ class ElevatedTransferTest {
     Path root;
 
     private TransferBed bed;
+    private Logger transferLog;
+    private ListAppender<ILoggingEvent> transferAppender;
+
+    @BeforeEach
+    void listenToTheTransfer() {
+        transferLog = (Logger) LoggerFactory.getLogger(MinaRemoteFileTransfer.class);
+        transferAppender = new ListAppender<>();
+        transferAppender.start();
+        transferLog.addAppender(transferAppender);
+    }
 
     @AfterEach
     void closeBed() throws IOException {
+        transferLog.detachAppender(transferAppender);
+        transferAppender.stop();
         if (bed != null) {
             bed.close();
         }
@@ -353,6 +375,46 @@ class ElevatedTransferTest {
 
         assertThat(download).isEqualTo(new DownloadResult.Refused(TransferErrorCode.PERMISSION_DENIED, new FileDiagnostic.None()));
         assertThat(testBed.sessions().discards()).isZero();
+    }
+
+    @Test
+    @DisplayName("S-D0013-36 D-0013 a dead session during sudo -n channel opening (Opening.Lost) logs the cause at WARN with the throwable; a cancel before the loss logs no WARN")
+    void lostSessionDuringElevatedOpeningLogsTheCauseUnlessStopped() throws IOException {
+        TransferBed lostBed = start(TransferBed.Sudo.WORKS, new SftpChannels() {
+            @Override
+            public SftpClient open(ClientSession session) throws IOException {
+                session.close(true).await(Duration.ofSeconds(5));
+                throw new ClosedChannelException();
+            }
+        }, sshd -> { });
+
+        DownloadResult lost = lostBed.transfer().download(elevatedDownload("/x.bin"), new TransferBed.Collecting(), lostBed.control());
+
+        List<ILoggingEvent> warnings = transferAppender.list.stream().filter(event -> event.getLevel().isGreaterOrEqual(Level.WARN)).toList();
+        assertThat(lost).isEqualTo(new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST));
+        assertThat(lostBed.sessions().discards()).isEqualTo(1);
+        assertThat(warnings).hasSize(1);
+        assertThat(warnings.get(0).getThrowableProxy()).isNotNull();
+        assertThat(warnings.get(0).getThrowableProxy().getClassName()).isEqualTo(ClosedChannelException.class.getName());
+        assertThat(warnings.get(0).getFormattedMessage()).doesNotContain("x.bin");
+        lostBed.close();
+        transferAppender.list.clear();
+
+        CancelSource cancel = new CancelSource();
+        TransferBed cancelledBed = start(TransferBed.Sudo.WORKS, new SftpChannels() {
+            @Override
+            public SftpClient open(ClientSession session) throws IOException {
+                cancel.cancel();
+                session.close(true).await(Duration.ofSeconds(5));
+                throw new ClosedChannelException();
+            }
+        }, sshd -> { });
+
+        DownloadResult cancelled = cancelledBed.transfer().download(elevatedDownload("/x.bin"), new TransferBed.Collecting(), cancelledBed.control(cancel));
+
+        List<ILoggingEvent> cancelWarnings = transferAppender.list.stream().filter(event -> event.getLevel().isGreaterOrEqual(Level.WARN)).toList();
+        assertThat(cancelled).isEqualTo(new DownloadResult.Failed(TransferFailureCause.CANCELLED));
+        assertThat(cancelWarnings).as("a stop by the owner is not logged as a lost connection").isEmpty();
     }
 
     // ---- S3-EL-03, S3-EL-04: the plan decides ----

@@ -171,11 +171,29 @@ public class TransferOutcomes {
         };
     }
 
-    /** The name of the code that a local failure carries, for the one fixed sentence; any other exception is a plain local I/O failure. */
+    /**
+     * A local file of the portal that could not be written (the sink of the artifact that the download fills): the name of the code that the failure carries, for the one
+     * fixed sentence; any other exception is a plain local I/O failure. A failure of the portal's storage or code that is no file write is {@link #portalFailure}.
+     */
     public ExecutionOutcome localFailure(Throwable cause) {
         Objects.requireNonNull(cause, "cause");
-        String code = cause instanceof RequestRefusedException refused ? refused.code().name() : "LOCAL_IO_FAILED";
-        return readOnlyFailure(ExecutionReason.INPUT_FAILED, OPERATION_NOT_STARTED, List.of(code + ": A local file of the portal could not be written; nothing on the target changed."));
+        return readOnlyFailure(ExecutionReason.INPUT_FAILED, OPERATION_NOT_STARTED, List.of(localCodeOf(cause) + ": A local file of the portal could not be written; nothing on the target changed."));
+    }
+
+    /**
+     * The portal failed on its own side while a read-only operation ran, and it was not a file write: its database or artifact store (a runtime exception or a refusal of the
+     * store), or an error of its own code, including the adapter's exceptions that no result describes. The cause is the portal's, not the connection's, and a read-only
+     * operation leaves the target as it was, so nothing is to be reconciled (defect D-0013, audit F2 and F4). The code is the store's own when the failure is a refusal and
+     * {@code LOCAL_IO_FAILED} otherwise, as for {@link #localFailure}; the sentence does not say a file was written.
+     */
+    public ExecutionOutcome portalFailure(Throwable cause) {
+        Objects.requireNonNull(cause, "cause");
+        return readOnlyFailure(ExecutionReason.INPUT_FAILED, OPERATION_NOT_STARTED, List.of(localCodeOf(cause)
+            + ": The portal failed locally (its storage or an internal error); nothing on the target changed."));
+    }
+
+    private static String localCodeOf(Throwable cause) {
+        return cause instanceof RequestRefusedException refused ? refused.code().name() : "LOCAL_IO_FAILED";
     }
 
     // ---- common ----

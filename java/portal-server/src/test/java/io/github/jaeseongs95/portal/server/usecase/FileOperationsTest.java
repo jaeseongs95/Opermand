@@ -212,6 +212,50 @@ class FileOperationsTest {
     }
 
     @Test
+    @DisplayName("S-D0013-37 D-0013 a download whose adapter throws a runtime exception after the guard settles as FAILED and NOT_DISPATCHED, with nothing to reconcile and never UNKNOWN")
+    void aDownloadWhoseAdapterThrowsARuntimeExceptionSettlesAsFailed() throws Exception {
+        transfer.onDownload((request, sink) -> {
+            throw new IllegalStateException("injected: an unexpected error inside the adapter");
+        });
+
+        Operation done = approvedAndDone(submitDownload("/var/log/adapter-error.log"));
+
+        assertThat(done.state()).isEqualTo(OperationState.FAILED);
+        Settlement.Settled settled = (Settlement.Settled) done.settlement();
+        assertThat(settled.reconciliation()).isEqualTo(Reconciliation.NOT_REQUIRED);
+        assertThat(settled.certainty()).isEqualTo(OutcomeCertainty.NOT_DISPATCHED);
+        RecordedResult.Executed executed = (RecordedResult.Executed) settled.result();
+        assertThat(executed.outcome().remoteState()).isEqualTo(RemoteState.NOT_DISPATCHED);
+        assertThat(executed.outcome().texts().get(0))
+            .isEqualTo("LOCAL_IO_FAILED: The portal failed locally (its storage or an internal error); nothing on the target changed.");
+        assertThat(journal.events(done.id()).stream().map(OperationEvent::state).toList())
+            .contains(OperationState.RUNNING)
+            .doesNotContain(OperationState.UNKNOWN, OperationState.COMPLETED);
+        assertThat(transfer.downloadsSent()).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("S-D0013-38 D-0013 a runtime exception thrown inside the dispatch guard (START_AUDIT) settles the download as FAILED directly from STARTING without entering RUNNING")
+    void aDownloadWhoseDispatchGuardThrowsARuntimeExceptionSettlesFromStarting() throws Exception {
+        audit.whenWritten(event -> {
+            if (event.action() == AuditAction.APPROVED) {
+                throw new IllegalStateException("injected: the start audit threw a runtime exception");
+            }
+        });
+
+        Operation done = approvedAndDone(submitDownload("/var/log/guard-error.log"));
+
+        assertThat(done.state()).isEqualTo(OperationState.FAILED);
+        Settlement.Settled settled = (Settlement.Settled) done.settlement();
+        assertThat(settled.reconciliation()).isEqualTo(Reconciliation.NOT_REQUIRED);
+        assertThat(settled.certainty()).isEqualTo(OutcomeCertainty.NOT_DISPATCHED);
+        assertThat(journal.events(done.id()).stream().map(OperationEvent::state).toList())
+            .contains(OperationState.STARTING)
+            .doesNotContain(OperationState.RUNNING, OperationState.UNKNOWN, OperationState.COMPLETED);
+        assertThat(transfer.downloadsSent()).isZero();
+    }
+
+    @Test
     @DisplayName("S3-SS-03 RC-A-469 the admission is the intake of every request: in a maintenance window it is MAINTENANCE_ACTIVE and writes nothing, after the window the same upload is accepted once, and only an upload is admitted")
     void theAdmissionIsTheIntakeOfEveryRequest() {
         UploadInput input = new UploadInput(new ArtifactId("b".repeat(48)), PathSyntax.POSIX.path("/srv/app/window.txt"), new FileName("window.txt"), 10, new Digest("d".repeat(64)),

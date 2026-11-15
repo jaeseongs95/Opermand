@@ -111,6 +111,7 @@ public class SftpUploader {
                 if (watch.fired().isPresent()) {
                     yield new UploadResult.NotDispatched(watch.fired().orElseThrow());
                 }
+                LOG.warn("An upload was judged a lost connection before anything was written (TRANSPORT_LOST); the session is discarded", lost.cause());
                 lease.discard();
                 yield new UploadResult.NotDispatched(TransferFailureCause.TRANSPORT_LOST);
             }
@@ -298,6 +299,7 @@ public class SftpUploader {
         SftpFailure failure = classifier.classify(cause);
         return switch (classifier.verdict(failure, site)) {
             case SftpFailureClassifier.Verdict.Lost lost -> {
+                LOG.warn("An upload was judged a lost connection after its temporary file was begun (TRANSPORT_LOST, outcome unconfirmed); the session is discarded", cause);
                 lease.discard();
                 yield new UploadResult.Unconfirmed(new UnconfirmedCause.TransportLost(), CleanupState.INCOMPLETE);
             }

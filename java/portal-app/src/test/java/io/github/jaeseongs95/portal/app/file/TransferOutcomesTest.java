@@ -3,6 +3,7 @@ package io.github.jaeseongs95.portal.app.file;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.io.IOException;
 import java.time.Duration;
 
 import org.junit.jupiter.api.DisplayName;
@@ -20,6 +21,7 @@ import io.github.jaeseongs95.portal.domain.error.ExecutionErrorCode;
 import io.github.jaeseongs95.portal.domain.error.ExecutionFailure;
 import io.github.jaeseongs95.portal.domain.error.ExecutionStage;
 import io.github.jaeseongs95.portal.domain.error.RemoteOutcome;
+import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.error.TransferErrorCode;
 import io.github.jaeseongs95.portal.domain.operation.CompletionEvidence;
 import io.github.jaeseongs95.portal.domain.operation.ExecutionOutcome;
@@ -78,6 +80,24 @@ class TransferOutcomesTest {
         assertThat(lost.texts().get(0)).startsWith("SSH_EXECUTION_FAILED");
         assertThat(denied.failure()).isNotEqualTo(lost.failure());
         assertThat(denied.verdict()).isEqualTo(OperationState.FAILED);
+    }
+
+    @Test
+    @DisplayName("S-D0013-34 D-0013 a failure of the portal's own storage or code has its own sentence, while a failure to write the local file keeps the file-write sentence")
+    void portalFailureAndLocalFileFailureKeepTheirOwnSentences() {
+        ExecutionOutcome internal = outcomes.portalFailure(new IllegalStateException("database error"));
+        ExecutionOutcome storeRefusal = outcomes.portalFailure(new RequestRefusedException(ArtifactErrorCode.ARTIFACT_STORAGE_IO_ERROR));
+        ExecutionOutcome fileWrite = outcomes.localFailure(new IOException("disk error"));
+
+        assertThat(internal.texts().get(0)).isEqualTo("LOCAL_IO_FAILED: The portal failed locally (its storage or an internal error); nothing on the target changed.");
+        assertThat(storeRefusal.texts().get(0))
+            .isEqualTo("ARTIFACT_STORAGE_IO_ERROR: The portal failed locally (its storage or an internal error); nothing on the target changed.");
+        assertThat(fileWrite.texts().get(0)).isEqualTo("LOCAL_IO_FAILED: A local file of the portal could not be written; nothing on the target changed.");
+        for (ExecutionOutcome outcome : new ExecutionOutcome[] {internal, storeRefusal, fileWrite}) {
+            assertThat(outcome.verdict()).isEqualTo(OperationState.FAILED);
+            assertThat(outcome.remoteState()).isEqualTo(RemoteState.NOT_DISPATCHED);
+            assertThat(outcome.reconciliation()).isEqualTo(Reconciliation.NOT_REQUIRED);
+        }
     }
 
     @Test

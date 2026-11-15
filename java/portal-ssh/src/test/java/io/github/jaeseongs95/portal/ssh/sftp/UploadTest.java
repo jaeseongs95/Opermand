@@ -3,6 +3,10 @@ package io.github.jaeseongs95.portal.ssh.sftp;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.github.jaeseongs95.portal.app.remote.CancelSource;
 import io.github.jaeseongs95.portal.app.remote.FileAccess;
 import io.github.jaeseongs95.portal.app.remote.FileDiagnostic;
@@ -24,6 +28,7 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
+import java.nio.channels.ClosedChannelException;
 import java.nio.channels.ReadableByteChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -40,10 +45,12 @@ import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.client.SftpClientFactory;
 import org.apache.sshd.sftp.client.SftpVersionSelector;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
 
 /**
@@ -59,9 +66,21 @@ class UploadTest {
     Path root;
 
     private TransferBed bed;
+    private Logger uploaderLog;
+    private ListAppender<ILoggingEvent> appender;
+
+    @BeforeEach
+    void listenToTheUploader() {
+        uploaderLog = (Logger) LoggerFactory.getLogger(SftpUploader.class);
+        appender = new ListAppender<>();
+        appender.start();
+        uploaderLog.addAppender(appender);
+    }
 
     @AfterEach
     void closeBed() throws IOException {
+        uploaderLog.detachAppender(appender);
+        appender.stop();
         if (bed != null) {
             bed.close();
         }
@@ -676,6 +695,43 @@ class UploadTest {
         assertThat(testBed.sessions().discards()).isEqualTo(1);
         assertThat(testBed.sessions().leases()).as("no automatic second upload").isEqualTo(1);
         assertThat(entries()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S-D0013-31 D-0013 a loss judged at the first look of an upload logs the cause at WARN with the throwable (no remote path in the message)")
+    void lossAtTheFirstLookIsLoggedWithItsCause() throws IOException, ClassNotFoundException {
+        TransferBed testBed = startWith(client -> new SftpDoubles().channelEndingAtTheFirstLook(client, () -> { }));
+        byte[] content = pattern(1024);
+
+        UploadResult result = testBed.transfer().upload(testBed.upload("/out.bin", content, OverwriteMode.FAIL_IF_EXISTS), TransferBed.source(content), testBed.control());
+
+        assertThat(result).isEqualTo(new UploadResult.NotDispatched(TransferFailureCause.TRANSPORT_LOST));
+        assertThat(testBed.sessions().discards()).isEqualTo(1);
+        assertTheLossIsLogged(ClosedChannelException.class);
+    }
+
+    @Test
+    @DisplayName("S-D0013-32 D-0013 a connection cut while the temporary file is written logs the cause at WARN with the throwable (no remote path in the message)")
+    void lossInTheMiddleIsLoggedWithItsCause() throws IOException, ClassNotFoundException {
+        TransferBed testBed = start(true);
+        byte[] content = pattern(1024 * 1024);
+        testBed.server().injectSftpFault(SftpFault.of(SftpFault.Operation.OPEN_FOR_WRITE, ".part", SftpFault.Failure.CONNECTION_DROPPED).afterBytes(100_000));
+
+        UploadResult result = testBed.transfer().upload(testBed.upload("/cut.bin", content, OverwriteMode.FAIL_IF_EXISTS), TransferBed.source(content), testBed.control());
+
+        assertThat(result).isEqualTo(new UploadResult.Unconfirmed(new UnconfirmedCause.TransportLost(), CleanupState.INCOMPLETE));
+        assertThat(testBed.sessions().discards()).isEqualTo(1);
+        assertTheLossIsLogged(IOException.class);
+    }
+
+    /** One WARN or more severe event of the uploader, with a throwable assignable to {@code expectedType} and a message that does not repeat the remote path. */
+    private void assertTheLossIsLogged(Class<? extends Throwable> expectedType) throws ClassNotFoundException {
+        List<ILoggingEvent> warnings = appender.list.stream().filter(event -> event.getLevel().isGreaterOrEqual(Level.WARN)).toList();
+        assertThat(warnings).as("the cause of the TRANSPORT_LOST verdict is logged once").hasSize(1);
+        assertThat(warnings.get(0).getThrowableProxy()).as("with the exception that caused it").isNotNull();
+        Class<?> loggedType = Class.forName(warnings.get(0).getThrowableProxy().getClassName());
+        assertThat(expectedType).isAssignableFrom(loggedType);
+        assertThat(warnings.get(0).getFormattedMessage()).doesNotContain("out.bin", "cut.bin");
     }
 
     // ---- the doubles of this file ----

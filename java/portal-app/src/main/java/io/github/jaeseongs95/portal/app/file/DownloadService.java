@@ -52,8 +52,12 @@ import io.github.jaeseongs95.portal.domain.id.ArtifactId;
  *
  * <p>Every way to end without a verified artifact gives the reserved bytes back and answers an outcome that is {@code NOT_DISPATCHED}, needs no reconciliation and is
  * {@code FAILED}: a download only reads, so the target cannot be in doubt (D3-17). A size that the budget or the disk refused (before the first byte is read) is the same outcome with the code
- * {@code ARTIFACT_QUOTA} or {@code ARTIFACT_STORAGE_FULL} and the numbers behind it, at stage {@code OPERATION} and {@code NOT_STARTED} (D-0012). An exception of the adapter (the
- * guard's {@code DispatchRefusedException}) discards the artifact and goes on to the caller.
+ * {@code ARTIFACT_QUOTA} or {@code ARTIFACT_STORAGE_FULL} and the numbers behind it, at stage {@code OPERATION} and {@code NOT_STARTED} (D-0012). A refusal of the artifact store at the reservation is the same outcome, with the store's own code and the sentence of
+ * {@link TransferOutcomes#portalFailure}; a failure to write the artifact is the same outcome with the code {@code LOCAL_IO_FAILED} and the sentence of
+ * {@link TransferOutcomes#localFailure}. A runtime exception (of the registry, or of the adapter: the dispatch guard's {@code DispatchRefusedException}, a
+ * {@code RequestRefusedException} of a step of the adapter such as the Windows command wrapper of the link probe, or an error of the code) gives the reserved artifact back and
+ * goes on to {@code DownloadOperationRunner}, which settles it once: a refusal as refused before dispatch, anything else as a local failure of the portal, never as an unknown
+ * outcome, because the target was only read (defect D-0013, cases S-D0013-24 to S-D0013-26 and S-D0013-33).
  *
  * <p>The adapter hashes the bytes it read and the use case hashes the bytes it stored; a file whose two digests or sizes differ is not delivered (cases RC-A-182, RC-A-183).
  */
@@ -101,8 +105,9 @@ public class DownloadService {
         try {
             reservation = registry.reserve(reservationOf(job), clock.instant());
         } catch (RequestRefusedException e) {
-            // The artifact store could not be read (ARTIFACT_STORAGE_IO_ERROR) or refused the reservation outright: nothing was sent to the target.
-            return new DownloadExecution.NotStored(outcomes.localFailure(e));
+            // The artifact store could not be read (ARTIFACT_STORAGE_IO_ERROR) or refused the reservation outright: nothing was sent to the target. A runtime exception of the
+            // store is not caught here: it goes on to DownloadOperationRunner, which settles every such exception once (audit F4).
+            return new DownloadExecution.NotStored(outcomes.portalFailure(e));
         }
         if (!(reservation instanceof ArtifactReservation.Reserved reserved)) {
             return new DownloadExecution.NotStored(outcomes.reservationRefused(ArtifactRefusal.of(reservation)));
@@ -113,6 +118,9 @@ public class DownloadService {
         try {
             result = transfer.download(new DownloadRequest(remote, input.remotePath(), access, pathPolicy, limits), sink, control);
         } catch (RuntimeException e) {
+            // The artifact is given back and the exception goes on to DownloadOperationRunner, which settles it: a DispatchRefusedException of the dispatch guard, or a
+            // RequestRefusedException of a step of the adapter before it touches the target (the Windows command wrapper in the link probe), as refused before dispatch; any other
+            // exception as a local failure of the portal.
             discard(reserved.id());
             throw e;
         }
@@ -145,9 +153,12 @@ public class DownloadService {
         try {
             ArtifactRecord ready = registry.completeDownload(id, actual);
             return new DownloadExecution.Stored(outcomes.downloaded(), ready);
+        } catch (RequestRefusedException e) {
+            discard(id);
+            return new DownloadExecution.NotStored(outcomes.portalFailure(e));
         } catch (RuntimeException e) {
             discard(id);
-            return new DownloadExecution.NotStored(outcomes.localFailure(e));
+            throw e;
         }
     }
 
@@ -174,14 +185,14 @@ public class DownloadService {
         }
     }
 
-    /** Removes the bytes and the row, and so the charge. A failure here is logged: the row is {@code DELETING}, and the next reap (or the start-up check) finishes the removal. */
+    /** Removes the bytes and the row, and so the charge. A failure here is logged. When it came after the row was set to {@code DELETING}, a later reap removes the row at once and the start-up check finishes it; when the row could not be set to {@code DELETING}, it stays and a reap removes it when it expires. */
     private void discard(ArtifactId id) {
         try {
             registry.beginDelete(id);
             payloads.delete(id);
             registry.release(id, ReleaseReason.REFUSED);
         } catch (RuntimeException e) {
-            LOG.warn("The download artifact " + id.value() + " could not be discarded; the next reap removes it", e);
+            LOG.warn("The download artifact " + id.value() + " could not be discarded; a later reap or the start-up check removes it (at once when the removal had begun, otherwise at the expiry of the artifact)", e);
         }
     }
 }

@@ -109,7 +109,7 @@ public class RemotePathChecker {
             if (failure.kind() == SftpFailure.Kind.NOT_FOUND) {
                 return new PathInspection.Absent();
             }
-            return failed(failure, SftpFailureClassifier.Site.TARGET_FILE);
+            return failed(failure, e, SftpFailureClassifier.Site.TARGET_FILE);
         }
         return switch (FileKind.of(attributes)) {
             case REGULAR -> new PathInspection.Present(LeafState.of(attributes));
@@ -118,13 +118,13 @@ public class RemotePathChecker {
     }
 
     private PathInspection failed(IOException cause, SftpFailureClassifier.Site site) {
-        return failed(classifier.classify(cause), site);
+        return failed(classifier.classify(cause), cause, site);
     }
 
-    private PathInspection failed(SftpFailure failure, SftpFailureClassifier.Site site) {
+    private PathInspection failed(SftpFailure failure, IOException cause, SftpFailureClassifier.Site site) {
         return switch (classifier.verdict(failure, site)) {
             case SftpFailureClassifier.Verdict.Refusal refusal -> new PathInspection.Refused(refusal.code(), refusal.diagnostic());
-            case SftpFailureClassifier.Verdict.Lost lost -> new PathInspection.Lost();
+            case SftpFailureClassifier.Verdict.Lost lost -> new PathInspection.Lost(cause);
         };
     }
 }
