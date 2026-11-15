@@ -130,6 +130,46 @@ class PrivateFileRuleTest {
     }
 
     @Test
+    @DisplayName("S-D0117-07: a folder and a file that cannot be removed again after the list could not be set are named in the message and stay; the owner gives the rights back and deletes them afterwards")
+    void whatCannotBeRemovedAgainOnAnAclStoreIsNamed() throws IOException {
+        TestFiles.requireOrSkip("acl", Files.getFileStore(directory).supportsFileAttributeView("acl"),
+            "the file store of the test folder has no acl view (it is a posix store); a run on a machine with ACLs states -Pportal.test.require=acl and fails instead of skipping");
+        Path parent = Files.createDirectory(directory.resolve("no-delete"));
+        TestFiles.forbidDeletingWhatIsMadeIn(parent);
+        try {
+            Path nested = parent.resolve("outer").resolve("known_hosts");
+            assertThatThrownBy(() -> TestFiles.privateFiles().createPrivateFile(nested)).isInstanceOf(IOException.class).hasMessageContaining("could not be made private")
+                .hasMessageContaining(parent.resolve("outer").toString()).hasMessageContaining("could not be removed again");
+            assertThat(parent.resolve("outer")).as("the folder that could not be removed stays").exists();
+        } finally {
+            TestFiles.undoTheDenial(parent); // gives the owner DELETE_CHILD back: what the folder holds can be deleted again
+            TestFiles.deleteTree(parent);
+        }
+    }
+
+    @Test
+    @DisplayName("S-D0117-07: a file with wide rights that cannot be removed again (its folder is not writable) is named in the message and stays; nothing is claimed to be removed that was not")
+    void aWideFileThatCannotBeRemovedIsNamed() throws IOException {
+        TestFiles.requireOrSkip("posix", Files.getFileStore(directory).supportsFileAttributeView("posix"),
+            "the file store of the test folder has no posix view (it is an NTFS volume); the Linux CI requires it (-Pportal.test.require=posix) and fails instead of skipping");
+        Path folder = Files.createDirectory(directory.resolve("parent"));
+        Path file = folder.resolve("known_hosts");
+        // The read-back is the test's value (wide rights); it also takes the write right of the folder away, so that the removal that follows fails (an account that is not root).
+        PosixPrivateFileRule ignoringModes = new PosixPrivateFileRule(path -> {
+            Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-x------"));
+            return PosixFilePermissions.fromString("rw-rw-rw-");
+        });
+        try {
+            assertThatThrownBy(() -> new PrivateFiles(List.of(ignoringModes)).createPrivateFile(file)).isInstanceOf(IOException.class).hasMessageContaining("ignored the mode")
+                .hasMessageContaining("could not be removed again").hasMessageContaining(file.toString());
+
+            assertThat(file).as("the file that could not be removed stays").exists();
+        } finally {
+            Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("rwx------"));
+        }
+    }
+
+    @Test
     @DisplayName("S-D0117-07, S-D0117-01: the read-back is of what the call created: a file and a folder that exist are not read at all, whatever their rights")
     void existingPathsAreNeverReadBack() throws IOException {
         TestFiles.requireOrSkip("posix", Files.getFileStore(directory).supportsFileAttributeView("posix"),

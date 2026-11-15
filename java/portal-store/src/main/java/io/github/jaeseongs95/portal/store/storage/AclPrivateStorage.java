@@ -36,7 +36,8 @@ import org.springframework.stereotype.Component;
  * explicitly right after it is created. What the volume's parent folder grants (typically {@code Users} or {@code Authenticated Users}, which a volume other than the system
  * volume gives by default) is therefore not inherited by a path that this rule creates. The ACL of a new file is set after it is created, because the owner (the account the
  * process runs as) is known only from the created file; it has no bytes yet at that moment. A path that cannot be made private is removed again and the refusal is
- * {@link UnsafeStorageException}: nothing is left behind with the rights of the parent.
+ * {@link UnsafeStorageException}. When a path cannot even be removed again (a right to delete is missing) it stays with the rights it inherited, and the message of the
+ * exception names it; the next run uses an existing folder as it is and does not look at its rights, so a path left behind this way is used without a check.
  *
  * <p><b>What exists is not judged.</b> The ACL of an existing folder or file is neither read nor changed: an entry for another principal, another owner or a link is not a
  * reason to refuse it (decision D-0117).
@@ -72,8 +73,7 @@ public final class AclPrivateStorage implements PrivateStorage {
             try {
                 protect(path, true);
             } catch (IOException | RuntimeException e) {
-                removeAll(created.reversed(), e);
-                throw refusal(path, e);
+                throw refusal(path, e, removeAll(created.reversed(), e));
             }
         }
     }
@@ -93,24 +93,32 @@ public final class AclPrivateStorage implements PrivateStorage {
             } catch (IOException closing) {
                 e.addSuppressed(closing);
             }
-            removeAll(List.of(file), e);
-            throw refusal(file, e);
+            throw refusal(file, e, removeAll(List.of(file), e));
         }
         return channel;
     }
 
-    private UnsafeStorageException refusal(Path path, Exception cause) {
-        return cause instanceof UnsafeStorageException unsafe ? unsafe : new UnsafeStorageException(path.toString(), "it could not be made private to its owner", cause);
+    /** The refusal; when some of what the call created could not be removed again, the message names those paths and says what that means. */
+    private UnsafeStorageException refusal(Path path, Exception cause, List<Path> left) {
+        String reason = "it could not be made private to its owner";
+        if (!left.isEmpty()) {
+            reason += "; " + left + " could not be removed again and is left with the rights it inherited (a later run uses an existing folder as it is, it does not look at its rights)";
+        }
+        return new UnsafeStorageException(path.toString(), reason, cause);
     }
 
-    private void removeAll(List<Path> paths, Exception failure) {
+    /** Removes the paths; returns the ones that could not be removed (the failures are attached to {@code failure}). */
+    private List<Path> removeAll(List<Path> paths, Exception failure) {
+        List<Path> left = new ArrayList<>();
         for (Path path : paths) {
             try {
                 Files.deleteIfExists(path);
             } catch (IOException cleanup) {
                 failure.addSuppressed(cleanup);
+                left.add(path);
             }
         }
+        return left;
     }
 
     private void protect(Path path, boolean folder) throws IOException {

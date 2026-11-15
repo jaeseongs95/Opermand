@@ -31,7 +31,8 @@ import org.springframework.stereotype.Component;
  *
  * <p><b>Making a path private.</b> The list of a new folder or file is replaced by full control for the owner and for the system account; the entries of a folder are
  * inheritable. What the parent grants (typically {@code Users} or {@code Authenticated Users}) is not inherited by a path that this rule creates. A path that cannot be made
- * private is removed again and the failure is an {@link IOException}: nothing is left behind with the rights of the parent.
+ * private is removed again and the failure is an {@link IOException}. When a path cannot even be removed again (a right to delete is missing) it stays with the rights it
+ * inherited and the message names it; the next run uses an existing folder as it is and does not look at its rights, so a path left behind this way is used without a check.
  *
  * <p><b>What exists is not judged.</b> The list of an existing folder or file is neither read nor changed: 2.x refused a path that another account could change and warned
  * about one that another account could read (PF-05), and 3.0 does neither (D-0117).
@@ -79,14 +80,20 @@ public final class AclPrivateFileRule implements PrivateFileRule {
         try {
             protect(path, folder);
         } catch (IOException | RuntimeException e) {
+            List<Path> left = new ArrayList<>();
             for (Path created : removeOnFailure) {
                 try {
                     Files.deleteIfExists(created);
                 } catch (IOException cleanup) {
                     e.addSuppressed(cleanup);
+                    left.add(created);
                 }
             }
-            throw new IOException("The path " + path + " could not be made private to its owner", e);
+            String message = "The path " + path + " could not be made private to its owner";
+            if (!left.isEmpty()) {
+                message += "; " + left + " could not be removed again and is left with the rights it inherited (a later run uses an existing folder as it is, it does not look at its rights)";
+            }
+            throw new IOException(message, e);
         }
     }
 

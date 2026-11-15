@@ -185,6 +185,27 @@ class AclPrivateStorageTest {
     }
 
     @Test
+    @DisplayName("S-D0117-07: a folder and a file that cannot be removed again are named in the message and stay (nothing is claimed to be removed that was not); the owner gives the rights back and deletes them afterwards")
+    void whatCannotBeRemovedAgainIsNamed() throws IOException {
+        Path parent = Files.createDirectory(directory.resolve("no-delete"));
+        TestStorage.forbidDeletingWhatIsMadeIn(parent);
+        try {
+            Path outer = parent.resolve("outer");
+            assertThatThrownBy(() -> rule.createFolder(outer)).isInstanceOfSatisfying(UnsafeStorageException.class,
+                e -> assertThat(e).hasMessageContaining("could not be made private").hasMessageContaining(outer.toString()).hasMessageContaining("could not be removed again"));
+            assertThat(Files.exists(outer, LinkOption.NOFOLLOW_LINKS)).as("the folder that could not be removed stays").isTrue();
+
+            Path file = parent.resolve("payload.part");
+            assertThatThrownBy(() -> rule.open(file, Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE))).isInstanceOfSatisfying(UnsafeStorageException.class,
+                e -> assertThat(e).hasMessageContaining(file.toString()).hasMessageContaining("could not be removed again"));
+            assertThat(Files.exists(file, LinkOption.NOFOLLOW_LINKS)).isTrue();
+        } finally {
+            TestStorage.undoTheDenial(parent); // gives the owner DELETE_CHILD back: what the folder holds can be deleted again
+            TestStorage.deleteTree(parent);
+        }
+    }
+
+    @Test
     @DisplayName("S-D0117-07: the folder that forbids changing the list is never locked itself: with the denial still in place, the account deletes it with what was made below it (the proof for a test that dies before its cleanup)")
     void theAccountDeletesAFolderThatStillHasTheDenial() throws IOException {
         Path parent = folderThatForbidsChangingTheList();

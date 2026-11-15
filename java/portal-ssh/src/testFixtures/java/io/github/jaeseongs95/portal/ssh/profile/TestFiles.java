@@ -122,6 +122,23 @@ public final class TestFiles {
         view.setAcl(acl);
     }
 
+    /**
+     * Like {@link #forbidChangingTheListOfWhatIsMadeIn} and, in addition, nothing made in the folder can be deleted by the owner: the full control of the owner leaves out DELETE
+     * and DELETE_CHILD, so a call that made something and has to remove it again fails to remove it. The folder itself can still be changed by its owner:
+     * {@link #undoTheDenial} gives the full control back (DELETE_CHILD included), after which {@link #deleteTree} deletes everything. Acl stores only.
+     */
+    public static void forbidDeletingWhatIsMadeIn(Path folder) throws IOException {
+        UserPrincipal ownerRights = folder.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName("OWNER RIGHTS");
+        AclFileAttributeView view = Files.getFileAttributeView(folder, AclFileAttributeView.class);
+        Set<AclEntryPermission> withoutDelete = EnumSet.complementOf(EnumSet.of(AclEntryPermission.DELETE, AclEntryPermission.DELETE_CHILD));
+        List<AclEntry> acl = List.of(
+            AclEntry.newBuilder().setType(AclEntryType.DENY).setPrincipal(ownerRights).setPermissions(AclEntryPermission.WRITE_ACL, AclEntryPermission.WRITE_OWNER)
+                .setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT, AclEntryFlag.INHERIT_ONLY).build(),
+            AclEntry.newBuilder().setType(AclEntryType.ALLOW).setPrincipal(view.getOwner()).setPermissions(withoutDelete)
+                .setFlags(AclEntryFlag.FILE_INHERIT, AclEntryFlag.DIRECTORY_INHERIT).build());
+        view.setAcl(acl);
+    }
+
     /** Takes the denial of {@link #forbidChangingTheListOfWhatIsMadeIn} away again: the list of the folder is full control for the owner, inheritable. What was made in it before keeps what it inherited. */
     public static void undoTheDenial(Path folder) throws IOException {
         AclFileAttributeView view = Files.getFileAttributeView(folder, AclFileAttributeView.class);

@@ -28,8 +28,9 @@ import org.springframework.stereotype.Component;
  * <p><b>The result is read back, for what this call created only.</b> The JDK answers that a file store has the {@code posix} view whatever is mounted: a mount that ignores
  * modes (a volume of another file system type, a share without permission checks) accepts the attribute and creates the path with wide rights. So right after it creates a
  * folder or a file, the rule reads the permissions of that path, and when the group or others have any access it removes what this call created and throws
- * {@link UnsafeStorageException}: nothing is left behind with wide rights (the common design, version 11). A path that existed before the call is neither read nor changed:
- * who may use it is not asked (decision D-0117), and this is a check of the creation, not of the reading.
+ * {@link UnsafeStorageException} (the common design, version 11). When a path cannot even be removed again (a right to delete is missing) it stays with its wide rights and
+ * the message names it; the next run uses an existing folder as it is and does not look at its rights, so a path left behind this way is used without a check. A path that
+ * existed before the call is neither read nor changed: who may use it is not asked (decision D-0117), and this is a check of the creation, not of the reading.
  *
  * <p>Based on the Java SE API: {@code java.nio.file.attribute.PosixFilePermissions}
  * (https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/nio/file/attribute/PosixFilePermissions.html).
@@ -114,24 +115,33 @@ public final class PosixPrivateStorage implements PrivateStorage {
 
     /** Reads back what this call has just created; when the group or others have access, or the permissions cannot be read, removes {@code removeOnFailure} and refuses. */
     private void requireOwnerOnly(Path created, List<Path> removeOnFailure) {
-        UnsafeStorageException refusal;
+        String reason;
+        Exception cause = null;
         try {
             Set<PosixFilePermission> permissions = reader.permissionsOf(created);
             if (Collections.disjoint(permissions, GROUP_AND_OTHERS)) {
                 return;
             }
-            refusal = new UnsafeStorageException(created.toString(), "the file store ignored the mode of the new path: its permissions are "
-                + PosixFilePermissions.toString(permissions) + " and it cannot be made private to its owner");
+            reason = "the file store ignored the mode of the new path: its permissions are " + PosixFilePermissions.toString(permissions) + " and it cannot be made private to its owner";
         } catch (IOException | RuntimeException e) {
-            refusal = new UnsafeStorageException(created.toString(), "the permissions of the new path could not be read back, so it cannot be shown to be private to its owner", e);
+            reason = "the permissions of the new path could not be read back, so it cannot be shown to be private to its owner";
+            cause = e;
         }
+        List<Path> left = new ArrayList<>();
+        List<IOException> failures = new ArrayList<>();
         for (Path path : removeOnFailure) {
             try {
                 Files.deleteIfExists(path);
             } catch (IOException cleanup) {
-                refusal.addSuppressed(cleanup);
+                failures.add(cleanup);
+                left.add(path);
             }
         }
+        if (!left.isEmpty()) {
+            reason += "; " + left + " could not be removed again and is left with its wide rights (a later run uses an existing folder as it is, it does not look at its rights)";
+        }
+        UnsafeStorageException refusal = new UnsafeStorageException(created.toString(), reason, cause);
+        failures.forEach(refusal::addSuppressed);
         throw refusal;
     }
 }

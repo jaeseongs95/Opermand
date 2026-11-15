@@ -111,6 +111,26 @@ class PosixPrivateStorageTest {
     }
 
     @Test
+    @DisplayName("S-D0117-07: a folder with wide rights that cannot be removed again (its parent is not writable) is named in the message and stays; nothing is claimed to be removed that was not")
+    void aWideFolderThatCannotBeRemovedIsNamed() throws IOException {
+        Path parent = Files.createDirectory(directory.resolve("parent"));
+        Path child = parent.resolve("child");
+        // The read-back is the test's value (wide rights); it also takes the write right of the parent away, so that the removal that follows fails (an account that is not root).
+        PosixPrivateStorage ignoringModes = new PosixPrivateStorage(path -> {
+            Files.setPosixFilePermissions(parent, PosixFilePermissions.fromString("r-x------"));
+            return WIDE;
+        });
+        try {
+            assertThatThrownBy(() -> ignoringModes.createFolder(child)).isInstanceOfSatisfying(UnsafeStorageException.class,
+                e -> assertThat(e).hasMessageContaining("ignored the mode").hasMessageContaining(child.toString()).hasMessageContaining("could not be removed again"));
+
+            assertThat(child).as("the folder that could not be removed stays").isDirectory();
+        } finally {
+            Files.setPosixFilePermissions(parent, PosixFilePermissions.fromString("rwx------"));
+        }
+    }
+
+    @Test
     @DisplayName("S-D0117-07: a mode that cannot be read back is not shown to be private: what the call created is removed and the cause is kept")
     void aModeThatCannotBeReadIsRefused() {
         PosixPrivateStorage unreadable = new PosixPrivateStorage(path -> {
