@@ -12,6 +12,8 @@ import org.springframework.stereotype.Component;
 import io.github.jaeseongs95.portal.app.storage.ReapGate;
 import io.github.jaeseongs95.portal.app.storage.ReapPermission;
 import io.github.jaeseongs95.portal.app.storage.ReapReport;
+import io.github.jaeseongs95.portal.domain.error.ArtifactErrorCode;
+import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 
 /**
  * Removes the artifacts whose time has come: the bytes, the row and the charge of each (2.x {@code reap}). It asks the {@link ReapGate} before every run, so a
@@ -20,7 +22,9 @@ import io.github.jaeseongs95.portal.app.storage.ReapReport;
  *
  * <p>The order for the others is the registry's: the row goes to {@code DELETING} first, then the bytes are deleted, then the row is released, so a crash in the middle
  * leaves a row that the next run, or the start-up check, finishes: a row in {@code DELETING} is removed again whatever its expiry (defect D-0012: a failed discard of a download
- * used to leave its charge in the budget until the next start). One artifact that cannot be removed is counted and kept for the next run; it does not stop the run.
+ * used to leave its charge in the budget until the next start). One artifact that cannot be removed is counted and kept for the next run; it does not stop the run. A row that
+ * another use case removed meanwhile (a discard that finished after the list was taken) counts as removed. A row in {@code DELETING} is released as {@code ABANDONED}, not as
+ * {@code EXPIRED}, because it did not expire.
  */
 @Component
 public class ArtifactReaper {
@@ -68,11 +72,28 @@ public class ArtifactReaper {
         reap();
     }
 
-    private void remove(ArtifactRecord expired) {
-        if (expired.state() != ArtifactState.CONSUMED) {
-            registry.beginDelete(expired.id());
-            payloads.delete(expired.id());
+    /**
+     * Removes one listed artifact. A row that is {@code DELETING} did not expire: a removal began and did not finish, so it is released as {@link ReleaseReason#ABANDONED}
+     * (the reason the start-up check gives it); only a row that was listed because its expiry passed is released as {@link ReleaseReason#EXPIRED}.
+     *
+     * <p>The row may be gone between the list and {@code beginDelete}: the discard that left it {@code DELETING} can still be running and finish first. That is the outcome
+     * the run wanted, so it is no failure and no retry (Principles 4.4: the one who lost the race is not run again); only {@code ARTIFACT_NOT_FOUND} of {@code beginDelete}
+     * means this, every other refusal is rethrown and counted as a failure.
+     */
+    private void remove(ArtifactRecord due) {
+        ReleaseReason reason = due.state() == ArtifactState.DELETING ? ReleaseReason.ABANDONED : ReleaseReason.EXPIRED;
+        if (due.state() != ArtifactState.CONSUMED) {
+            try {
+                registry.beginDelete(due.id());
+            } catch (RequestRefusedException e) {
+                if (e.code() != ArtifactErrorCode.ARTIFACT_NOT_FOUND) {
+                    throw e;
+                }
+                LOG.debug("The artifact {} was removed by another use case before the reap took it", due.id().value());
+                return;
+            }
+            payloads.delete(due.id());
         }
-        registry.release(expired.id(), ReleaseReason.EXPIRED);
+        registry.release(due.id(), reason);
     }
 }

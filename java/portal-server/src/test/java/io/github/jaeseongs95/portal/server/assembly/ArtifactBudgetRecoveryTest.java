@@ -3,19 +3,29 @@ package io.github.jaeseongs95.portal.server.assembly;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import io.github.jaeseongs95.portal.app.artifact.ArtifactDestination;
@@ -29,6 +39,8 @@ import io.github.jaeseongs95.portal.app.artifact.ArtifactReservation;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRetention;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactSpec;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactState;
+import io.github.jaeseongs95.portal.app.artifact.ChunkDigest;
+import io.github.jaeseongs95.portal.app.artifact.ReleaseReason;
 import io.github.jaeseongs95.portal.app.artifact.StagingTimes;
 import io.github.jaeseongs95.portal.app.file.DownloadExecution;
 import io.github.jaeseongs95.portal.app.file.DownloadJob;
@@ -43,6 +55,7 @@ import io.github.jaeseongs95.portal.app.remote.TransferLimits;
 import io.github.jaeseongs95.portal.app.storage.DiskSpace;
 import io.github.jaeseongs95.portal.app.storage.PayloadRead;
 import io.github.jaeseongs95.portal.app.storage.PayloadWrite;
+import io.github.jaeseongs95.portal.app.storage.ReapGate;
 import io.github.jaeseongs95.portal.app.storage.ReapReport;
 import io.github.jaeseongs95.portal.domain.error.ArtifactErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
@@ -88,10 +101,12 @@ class ArtifactBudgetRecoveryTest {
     private final Digester digester;
     private final JdbcTemplate jdbc;
     private final Clock clock;
+    private final ReapGate gate;
+    private final List<ListAppender<ILoggingEvent>> appenders = new ArrayList<>();
 
     ArtifactBudgetRecoveryTest(ArtifactRegistry registry, ArtifactPayloadStore payloads, ArtifactReaper reaper, DownloadService downloads, StorageRoots roots, FakeRemote remote,
                                FakeTargets targets, TransferSupport support, TransferOutcomes outcomes, TransferLimits limits, StagingTimes times, Digester digester,
-                               JdbcTemplate jdbc, Clock clock) {
+                               JdbcTemplate jdbc, Clock clock, ReapGate gate) {
         this.registry = registry;
         this.payloads = payloads;
         this.reaper = reaper;
@@ -106,6 +121,7 @@ class ArtifactBudgetRecoveryTest {
         this.digester = digester;
         this.jdbc = jdbc;
         this.clock = clock;
+        this.gate = gate;
     }
 
     @BeforeEach
@@ -189,7 +205,132 @@ class ArtifactBudgetRecoveryTest {
         assertThat(registry.budget().chargedBytes()).as("and the budget is free again").isZero();
     }
 
+    @Test
+    @DisplayName("S-D0012-04 (D-0012): a discard that finishes between the reap's list and its removal is not a failure: the row is gone, so the run counts it as removed, reports no failure and logs no warning")
+    void aDiscardThatFinishesBetweenTheListAndTheRemovalIsNotAFailure() {
+        ArtifactId discarding = aRowThatAFailedDiscardLeftDeleting();
+        RegistryProbe probe = new RegistryProbe();
+        // The reap has listed the row; now the discard that is still running finishes (the bytes go, the row is released) before the reap takes the row.
+        probe.afterDeletingIsListed = () -> {
+            payloads.delete(discarding);
+            registry.release(discarding, ReleaseReason.REFUSED);
+        };
+        ArtifactReaper racing = new ArtifactReaper(probe.registry, payloads, gate, clock);
+        List<ILoggingEvent> logged = captureReaperLog();
+
+        ReapReport report = racing.reap();
+
+        assertThat(report).as("the row is gone, so it is counted as removed and not as a failure").isEqualTo(new ReapReport.Reaped(1, 0));
+        assertThat(logged).as("no warning: nothing stays until the next run").noneMatch(event -> event.getLevel().isGreaterOrEqual(Level.WARN));
+        assertThat(probe.reasons).as("the reap released nothing itself, the discard did").isEmpty();
+        assertThat(registry.holding()).isEmpty();
+        assertThat(registry.budget().chargedBytes()).isZero();
+    }
+
+    @Test
+    @DisplayName("S-D0012-04 (D-0012): the code that is taken as 'already removed' is ARTIFACT_NOT_FOUND alone: any other refusal of the removal is still a failure with its warning")
+    void anyOtherRefusalOfTheRemovalIsStillAFailure() {
+        ArtifactId discarding = aRowThatAFailedDiscardLeftDeleting();
+        RegistryProbe probe = new RegistryProbe();
+        probe.beginDeleteRefusal = new RequestRefusedException(ArtifactErrorCode.ARTIFACT_CHANGED);
+        ArtifactReaper reaperOfConflicts = new ArtifactReaper(probe.registry, payloads, gate, clock);
+        List<ILoggingEvent> logged = captureReaperLog();
+
+        ReapReport report = reaperOfConflicts.reap();
+
+        assertThat(report).isEqualTo(new ReapReport.Reaped(0, 1));
+        assertThat(logged).as("the failure is warned about, with its cause").anySatisfy(event -> {
+            assertThat(event.getLevel()).isEqualTo(Level.WARN);
+            assertThat(event.getThrowableProxy()).isNotNull();
+        });
+        assertThat(registry.find(discarding)).as("the row stays for the next run").isPresent();
+    }
+
+    @Test
+    @DisplayName("S-D0012-05 (D-0012): the retry of a row left DELETING is released as ABANDONED, not as EXPIRED, because the row has not expired; a row that did expire is still EXPIRED")
+    void aRowLeftDeletingIsNotReleasedAsExpired() {
+        ArtifactId left = aRowThatAFailedDiscardLeftDeleting();
+        ArtifactId old = expiredArtifact(new byte[300]);
+        RegistryProbe probe = new RegistryProbe();
+        ArtifactReaper recordingReaper = new ArtifactReaper(probe.registry, payloads, gate, clock);
+
+        ReapReport report = recordingReaper.reap();
+
+        assertThat(report).isEqualTo(new ReapReport.Reaped(2, 0));
+        assertThat(probe.reasons).as("one release per row, with the reason of each").containsEntry(left, ReleaseReason.ABANDONED).containsEntry(old, ReleaseReason.EXPIRED).hasSize(2);
+        assertThat(registry.holding()).isEmpty();
+    }
+
     // ---- helpers ----
+
+    /** A download whose discard failed: the payload store cannot delete, so the row stays {@code DELETING} and charged (the state S-D0012-02 starts from). */
+    private ArtifactId aRowThatAFailedDiscardLeftDeleting() {
+        UndeletablePayloads locked = new UndeletablePayloads(payloads);
+        DownloadService service = new DownloadService(registry, locked, remote, support, outcomes, limits, times, digester, clock);
+        remote.downloadAnswer = new DownloadResult.Refused(TransferErrorCode.PERMISSION_DENIED, new FileDiagnostic.SftpStatus(3));
+        assertThat(service.download(downloadJob(), CONTROL)).isInstanceOf(DownloadExecution.NotStored.class);
+        List<ArtifactRecord> holding = registry.holding();
+        assertThat(holding).extracting(ArtifactRecord::state).containsExactly(ArtifactState.DELETING);
+        return holding.getFirst().id();
+    }
+
+    private ArtifactId expiredArtifact(byte[] bytes) {
+        ArtifactSpec expired = new ArtifactSpec(ArtifactDirection.UPLOAD, new FileName("old.bin"), bytes.length, new ArtifactOrigin.Transfer(), new ArtifactDestination.Unassigned(),
+            OverwriteMode.REPLACE, Elevation.NONE, UploadProtocol.UNSPECIFIED, ArtifactRetention.RELEASABLE, Duration.ofNanos(1_000));
+        ArtifactId id = ((ArtifactReservation.Reserved) registry.reserve(expired, clock.instant())).id();
+        payloads.append(id, 0, bytes);
+        registry.append(id, 0, new ChunkDigest(bytes.length, digester.digest(bytes)));
+        registry.markReady(id, digester.digest(bytes));
+        return id;
+    }
+
+    /**
+     * The real registry (the rows and the budget are real) behind a {@link Proxy} that adds what a test needs and a real run cannot give on cue: a step that runs right after
+     * the list of {@code DELETING} rows was taken (the other thread finishing its discard at exactly that point, no sleep), a refusal of {@code beginDelete}, and the reason of
+     * every release (the registry only logs it).
+     */
+    private final class RegistryProbe {
+
+        Runnable afterDeletingIsListed = () -> { };
+        RuntimeException beginDeleteRefusal;
+        final Map<ArtifactId, ReleaseReason> reasons = new LinkedHashMap<>();
+        final ArtifactRegistry registry = (ArtifactRegistry) Proxy.newProxyInstance(ArtifactRegistry.class.getClassLoader(), new Class<?>[] {ArtifactRegistry.class},
+            (proxy, method, args) -> {
+                if (method.getName().equals("beginDelete") && beginDeleteRefusal != null) {
+                    throw beginDeleteRefusal;
+                }
+                if (method.getName().equals("release")) {
+                    reasons.put((ArtifactId) args[0], (ReleaseReason) args[1]);
+                }
+                Object answer;
+                try {
+                    answer = method.invoke(ArtifactBudgetRecoveryTest.this.registry, args);
+                } catch (InvocationTargetException e) {
+                    throw e.getCause();
+                }
+                if (method.getName().equals("deleting")) {
+                    afterDeletingIsListed.run();
+                }
+                return answer;
+            });
+    }
+
+    /** The events {@link ArtifactReaper} logs from now on; the appender is detached by {@link #detachTheReaperLog()}. */
+    private List<ILoggingEvent> captureReaperLog() {
+        Logger reaperLog = (Logger) LoggerFactory.getLogger(ArtifactReaper.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        reaperLog.addAppender(appender);
+        appenders.add(appender);
+        return appender.list;
+    }
+
+    @AfterEach
+    void detachTheReaperLog() {
+        Logger reaperLog = (Logger) LoggerFactory.getLogger(ArtifactReaper.class);
+        appenders.forEach(reaperLog::detachAppender);
+        appenders.clear();
+    }
 
     private Path quarantined(ArtifactId id) {
         return roots.artifacts().resolve("orphans").resolve(id.value() + ".part");
