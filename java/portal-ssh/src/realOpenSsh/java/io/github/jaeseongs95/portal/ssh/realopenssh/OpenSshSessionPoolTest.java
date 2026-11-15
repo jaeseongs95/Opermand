@@ -1,7 +1,6 @@
 package io.github.jaeseongs95.portal.ssh.realopenssh;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import io.github.jaeseongs95.portal.app.output.StreamKind;
 import io.github.jaeseongs95.portal.app.remote.CancelSource;
@@ -84,10 +83,12 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
  * server, a restart or a firewall ends a session. Before it kills, the test reads {@code /proc/$PPID/comm} and requires {@code sshd} in it, so the test cannot end another process of the
  * account. Nothing the product does closes the session: the test never calls close on it.
  *
- * <p><b>Windows is not run.</b> The session process of the Windows OpenSSH server and its security context are not established for this test: whether a non-administrator
- * account can end its own session process through an exec channel was not shown, and no other way of closing a session from the server side is part of the CI preparation
- * script ({@code java/ci/openssh-windows.cmd}). A Windows run is skipped with an assumption that names this reason; a test that ends in an unverified way would not tell the
- * defect from the method. The Gradle task {@code realOpenSshTest} still discovers the test on both platforms, so it does not fail for running no test (failOnNoDiscoveredTests).
+ * <p><b>How the server closes the session (Windows).</b> The CI job runs the Windows OpenSSH server on the same machine as the test JVM (the listener is the {@code sshd.exe} that
+ * {@code java/ci/openssh-windows.cmd} starts as SYSTEM in a scheduled task, with the configuration folder {@code portal-openssh-ci}), and the JVM runs as the runner administrator.
+ * The test finds that listener with {@link ProcessHandle#allProcesses()} (an {@code sshd.exe} whose parent is not an {@code sshd.exe}, and whose command line, when the
+ * operating system gives it, names the configuration folder) and ends every descendant of it with {@link ProcessHandle#destroyForcibly()}: the session processes of the server,
+ * which are the only sessions of this server, since the tests of the task run one after another. The listener stays, so the next connection is accepted. No external program is
+ * started; if no session process is found or none could be ended, the test fails with that fact. The test is not skipped on either platform.
  *
  * <p>They run only through the Gradle task {@code realOpenSshTest}; nothing here was run on the machine that wrote it.
  */
@@ -193,12 +194,48 @@ class OpenSshSessionPoolTest {
         }
     }
 
+    private static boolean isSshd(ProcessHandle process) {
+        return process.info().command().map(command -> Path.of(command).getFileName().toString().equalsIgnoreCase("sshd.exe")).orElse(false);
+    }
+
+    /**
+     * Windows: the server and the test JVM run on one machine. The listener of the prepared server is an {@code sshd.exe} that no {@code sshd.exe} started (and, when the
+     * operating system gives the command line, one that names the configuration folder of the CI preparation script); its descendants are the sessions of the server.
+     */
+    private static List<ProcessHandle> windowsSessionProcesses() {
+        return ProcessHandle.allProcesses()
+            .filter(OpenSshSessionPoolTest::isSshd)
+            .filter(process -> process.parent().map(parent -> !isSshd(parent)).orElse(true))
+            .filter(process -> process.info().commandLine().map(line -> line.contains("portal-openssh-ci")).orElse(true))
+            .flatMap(ProcessHandle::descendants)
+            .toList();
+    }
+
+    /** The server side ends the session: what was done, as text for the failure message. */
+    private String endTheSessionOnTheServer(ClientSession session) throws IOException {
+        return switch (target.platform()) {
+            case LINUX -> {
+                assertThat(exec(session, "cat /proc/$PPID/comm")).as("the parent of the shell of an exec request is the session process of sshd").contains("sshd");
+                try {
+                    exec(session, "kill -9 $PPID");
+                    yield "kill -9 of the session process of sshd through an exec channel";
+                } catch (IOException e) {
+                    // the channel dies with the process; whether the session really closed is asserted by the caller
+                    yield "kill -9 of the session process of sshd through an exec channel, which ended with " + e;
+                }
+            }
+            case WINDOWS -> {
+                List<ProcessHandle> sessions = windowsSessionProcesses();
+                assertThat(sessions).as("the session processes of the sshd listener that the CI preparation script started on this machine").isNotEmpty();
+                long refused = sessions.stream().filter(process -> !process.destroyForcibly()).count();
+                yield "ended " + sessions.size() + " session process(es) of the sshd listener with ProcessHandle.destroyForcibly, " + refused + " refused";
+            }
+        };
+    }
+
     @Test
     @DisplayName("S-D0038-01 (cause of D-0038 not confirmed; this fixes the category) a real sshd ends the session of the pool: the next request through the pool makes one new connection and runs once")
     void aRequestAfterTheServerClosedTheSession() throws Exception {
-        assumeTrue(target.platform() == OpenSshTarget.Platform.LINUX,
-            "the server side close is run on a Linux sshd only: how a non-administrator account ends its own session process of the Windows OpenSSH server is not established, "
-                + "and java/ci/openssh-windows.cmd has no other way to close a session from the server side");
         startAdapter();
 
         Run before = run("echo " + BEFORE);
@@ -206,18 +243,12 @@ class OpenSshSessionPoolTest {
         assertThat(before.stdout()).contains(BEFORE);
 
         ClientSession closedByServer;
-        IOException killFailure = null;
         try (ChannelLease lease = lease()) {
             closedByServer = lease.session();
             assertThat(closedByServer.isOpen()).as("the session of the pool is open before the server ends it").isTrue();
-            assertThat(exec(closedByServer, "cat /proc/$PPID/comm")).as("the parent of the shell of an exec request is the session process of sshd").contains("sshd");
-            try {
-                exec(closedByServer, "kill -9 $PPID");
-            } catch (IOException e) {
-                killFailure = e; // the channel dies with the process; whether the session really closed is asserted next
-            }
+            String how = endTheSessionOnTheServer(closedByServer);
             assertThat(closedByServer.waitFor(EnumSet.of(ClientSessionEvent.CLOSED), OpenSshClient.LIMIT.toMillis()))
-                .as("the server ended its session process, so the client session is closed (the test never closes it); the kill command ended with " + killFailure)
+                .as("the server ended its session process, so the client session is closed (the test never closes it); the server side did: " + how)
                 .contains(ClientSessionEvent.CLOSED);
         }
 
