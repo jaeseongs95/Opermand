@@ -10,10 +10,14 @@
 #   2. an ed25519 client key pair and an ed25519 host key, both in $RUNNER_TEMP/portal-openssh-ci (mode 700 directory, nothing is printed);
 #   3. authorized_keys for the account, and a sudoers rule that lets the account run the OpenSSH sftp-server (and true, cat, tee, mv) without a password:
 #      this is what the elevate tests need (sudo -n sftp-server over an exec channel, stage 3 design 6.1, pilot P3-4);
-#   4. a second sshd on a random loopback port with its own configuration; the system sshd, if any, is not touched;
-#   5. a known_hosts file that holds only the host public key of that sshd (host key checking stays on in the tests).
+#   4. a second sshd on a random loopback port with its own configuration; the system sshd, if any, is not touched. The same sshd listens on one more random loopback
+#      port, the idle port, and a "Match LocalPort <idle port>" block gives only the connections to that port "UnusedConnectionTimeout 3" (sshd_config(5), OpenSSH 9.2 and
+#      later: the server closes a connection that has had no open channel for that long). Case S-D0038-01 connects to the idle port, so a real server closes its session
+#      by itself and no other test is affected;
+#   5. a known_hosts file that holds only the host public key of that sshd, for both ports (host key checking stays on in the tests).
+# It prints the OpenSSH version and what "sshd -T -C" resolves for both ports (the keyword must be 3 s on the idle port and "none", the default, on the other: the script fails otherwise).
 # It then writes the connection values (no secret: the key is named by its path) to $GITHUB_ENV for the next workflow step:
-#   PORTAL_OPENSSH_PORT, PORTAL_OPENSSH_USER, PORTAL_OPENSSH_KEY_FILE, PORTAL_OPENSSH_KNOWN_HOSTS
+#   PORTAL_OPENSSH_PORT, PORTAL_OPENSSH_IDLE_PORT, PORTAL_OPENSSH_USER, PORTAL_OPENSSH_KEY_FILE, PORTAL_OPENSSH_KNOWN_HOSTS
 #
 # Usage: openssh-linux.sh          prepare (default)
 #        openssh-linux.sh stop     stop the sshd and remove the account and the sudoers rule (the workflow calls it with if: always())
@@ -87,22 +91,24 @@ printf '%s ALL=(root) NOPASSWD: %s\n' "$CI_USER" "$RULE_COMMANDS" > "$FIX/sudoer
 sudo visudo -cf "$FIX/sudoers" > /dev/null
 sudo install -m 440 -o root -g root "$FIX/sudoers" "/etc/sudoers.d/portal-openssh-ci-$CI_USER"
 
-# 5. A random loopback port that nothing listens on yet.
-PORT=""
-attempt=0
-while [ "$attempt" -lt 50 ]; do
-    candidate=$((20000 + $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 30000))
-    if [ -z "$(ss -ltnH "sport = :$candidate")" ]; then PORT="$candidate"; break; fi
-    attempt=$((attempt + 1))
-done
-if [ -z "$PORT" ]; then
+# 5. Two random loopback ports that nothing listens on yet: the one of the tests and the idle port (a different one).
+free_port() {
+    attempt=0
+    while [ "$attempt" -lt 50 ]; do
+        candidate=$((20000 + $(od -An -N2 -tu2 /dev/urandom | tr -d ' ') % 30000))
+        if [ "$candidate" != "${PORT:-}" ] && [ -z "$(ss -ltnH "sport = :$candidate")" ]; then printf '%s' "$candidate"; return 0; fi
+        attempt=$((attempt + 1))
+    done
     echo "No free loopback port found." >&2
-    exit 1
-fi
+    return 1
+}
+PORT="$(free_port)"
+IDLE_PORT="$(free_port)"
 
 # 6. The sshd of this test: its own configuration, host key and pid file. LogLevel VERBOSE keeps the log useful without command text.
 cat > "$FIX/sshd_config" <<EOF
 Port $PORT
+Port $IDLE_PORT
 ListenAddress 127.0.0.1
 HostKey $FIX/host_key
 PidFile $FIX/sshd.pid
@@ -117,13 +123,27 @@ StrictModes yes
 UsePAM yes
 Subsystem sftp $SFTP_SERVER
 LogLevel VERBOSE
+# Only the connections to the idle port: the server closes one that has no open channel for 3 s. The timer starts when authentication completes (sshd_config(5)), so the
+# value is not shorter than 3 s. Match must stay the last block of the file.
+Match LocalPort $IDLE_PORT
+    UnusedConnectionTimeout 3
 EOF
 sudo mkdir -p /run/sshd
 sudo /usr/sbin/sshd -t -f "$FIX/sshd_config"
+ssh -V
+for lport in "$PORT" "$IDLE_PORT"; do
+    resolved="$(sudo /usr/sbin/sshd -T -f "$FIX/sshd_config" -C "user=$CI_USER,host=localhost,addr=127.0.0.1,laddr=127.0.0.1,lport=$lport" | grep -i '^unusedconnectiontimeout ')"
+    echo "sshd -T, local port $lport: $resolved"
+    if [ "$lport" = "$PORT" ]; then expected="unusedconnectiontimeout none"; else expected="unusedconnectiontimeout 3"; fi
+    if [ "$resolved" != "$expected" ]; then
+        echo "sshd resolves '$resolved' for local port $lport, expected '$expected'." >&2
+        exit 1
+    fi
+done
 sudo /usr/sbin/sshd -f "$FIX/sshd_config" -E "$FIX/sshd.log"
 
-# 7. known_hosts: the two fields of the host public key (without its comment), for exactly this host and port.
-awk -v port="$PORT" '{ printf "[127.0.0.1]:%s %s %s\n", port, $1, $2 }' "$FIX/host_key.pub" > "$FIX/known_hosts"
+# 7. known_hosts: the two fields of the host public key (without its comment), for exactly this host and each of the two ports.
+awk -v port="$PORT" -v idle="$IDLE_PORT" '{ printf "[127.0.0.1]:%s %s %s\n[127.0.0.1]:%s %s %s\n", port, $1, $2, idle, $1, $2 }' "$FIX/host_key.pub" > "$FIX/known_hosts"
 
 # 8. Wait until a login with the key works, and check that the sudo rule is in force: sudo -n true must succeed for this account.
 attempt=0
@@ -140,8 +160,9 @@ done
 
 {
     printf 'PORTAL_OPENSSH_PORT=%s\n' "$PORT"
+    printf 'PORTAL_OPENSSH_IDLE_PORT=%s\n' "$IDLE_PORT"
     printf 'PORTAL_OPENSSH_USER=%s\n' "$CI_USER"
     printf 'PORTAL_OPENSSH_KEY_FILE=%s\n' "$FIX/client_key"
     printf 'PORTAL_OPENSSH_KNOWN_HOSTS=%s\n' "$FIX/known_hosts"
 } >> "${GITHUB_ENV:?GITHUB_ENV is not set}"
-echo "Real OpenSSH server ready on 127.0.0.1:$PORT for account $CI_USER (sftp-server: $SFTP_SERVER)."
+echo "Real OpenSSH server ready on 127.0.0.1:$PORT (idle port $IDLE_PORT) for account $CI_USER (sftp-server: $SFTP_SERVER)."

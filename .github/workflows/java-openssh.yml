@@ -45,6 +45,7 @@ jobs:
           ./gradlew --no-daemon --console=plain :portal-ssh:realOpenSshTest \
             -Pportal.test.openssh.host=127.0.0.1 \
             -Pportal.test.openssh.port="$PORTAL_OPENSSH_PORT" \
+            -Pportal.test.openssh.idle-port="$PORTAL_OPENSSH_IDLE_PORT" \
             -Pportal.test.openssh.user="$PORTAL_OPENSSH_USER" \
             -Pportal.test.openssh.key-file="$PORTAL_OPENSSH_KEY_FILE" \
             -Pportal.test.openssh.known-hosts="$PORTAL_OPENSSH_KNOWN_HOSTS" \
@@ -86,11 +87,48 @@ jobs:
           ./gradlew --no-daemon --console=plain :portal-ssh:realOpenSshTest \
             -Pportal.test.openssh.host=127.0.0.1 \
             -Pportal.test.openssh.port="$PORTAL_OPENSSH_PORT" \
+            -Pportal.test.openssh.idle-port="$PORTAL_OPENSSH_IDLE_PORT" \
             -Pportal.test.openssh.user="$PORTAL_OPENSSH_USER" \
             -Pportal.test.openssh.key-file="$PORTAL_OPENSSH_KEY_FILE" \
             -Pportal.test.openssh.known-hosts="$PORTAL_OPENSSH_KNOWN_HOSTS" \
             -Pportal.test.openssh.platform=windows \
             -Pportal.test.openssh.windows-python="$PORTAL_OPENSSH_WINDOWS_PYTHON"
+      # Diagnostic: the server log (LogLevel VERBOSE, no command text) of the sshd the preparation script started.
+      # It runs whatever the tests did and cannot fail the job (continue-on-error), so it never hides the result of the tests. First it prints, for reference only, how many ping commands
+      # started after the prepared sshd are running and how many sshd processes exist. The ping count is not evidence for case S-D0038-02: a 15 s command ends by itself
+      # before the step counts, so zero proves nothing. Nothing is ended before the counts are printed. The log is read with a sharing mode first; on this job that read
+      # is usually refused while the prepared sshd runs, so the usual path is the one in the catch block: the step says so, ends the sshd processes and the ping commands
+      # it counted, then reads the file once more. This is a diagnostic of the CI job, not product or test code.
+      - name: Show the log of the prepared sshd
+        if: always()
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          $log = Join-Path $env:ProgramData 'portal-openssh-ci\sshd.log'
+          $prepared = Get-CimInstance Win32_Process -Filter "Name = 'sshd.exe'" | Where-Object { $_.CommandLine -like '*portal-openssh-ci*' } | Select-Object -First 1
+          $since = if ($prepared) { $prepared.CreationDate } else { (Get-Date).AddMinutes(-30) }
+          function Read-SshdLog {
+            $fs = [System.IO.File]::Open($log, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]'ReadWrite,Delete')
+            try { $text = [System.IO.StreamReader]::new($fs).ReadToEnd() } finally { $fs.Dispose() }
+            $lines = $text -split "`r?`n"
+            Write-Host ('--- sshd.log, ' + $lines.Count + ' lines, the last 300')
+            $lines | Select-Object -Last 300 | ForEach-Object { Write-Host $_ }
+          }
+          $leftover = @(Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -ge $since -and $_.CommandLine -like '*ping*-n*' } | ForEach-Object { $_.ProcessId })
+          $sshdCount = @(Get-Process -Name sshd -ErrorAction SilentlyContinue).Count
+          Write-Host ('--- when the tests ended: ' + $leftover.Count + ' ping command(s) started after the prepared sshd are still running, ' + $sshdCount + ' sshd process(es)')
+          try {
+            Read-SshdLog
+          } catch {
+            Write-Host ('--- the log cannot be read (' + $_.Exception.Message + '); ending the ' + $sshdCount + ' sshd process(es) and the ' + $leftover.Count + ' ping command(s) counted above')
+            Stop-ScheduledTask -TaskName PortalOpenSshCi -ErrorAction Continue
+            Get-Process -Name sshd -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction Continue
+            Get-Process -Name sshd -ErrorAction SilentlyContinue | Wait-Process -Timeout 15 -ErrorAction Continue
+            $leftover | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }
+            $leftover | ForEach-Object { Wait-Process -Id $_ -Timeout 10 -ErrorAction SilentlyContinue }
+            Read-SshdLog
+          }
       - name: Stop the OpenSSH server and remove the account
         if: always()
         shell: cmd
