@@ -38,9 +38,11 @@ val testForks: String? = statedTestSize("forks", Regex("[1-9][0-9]*"), "a positi
 // runner offers can never pass by skipping. The build only checks the names and hands the list to the test JVM as the system property portal.test.require, which the test code reads.
 val testRequire: String? = providers.gradleProperty("portal.test.require").orNull?.also { value ->
     val allowed = setOf("posix", "links", "acl")
-    val names = value.split(',').map { it.trim() }
+    // The names are compared as they are given, not trimmed: the test code compares the same text, so a name with a blank around it (or an empty name) is refused here, as a size
+    // property with a blank is (D-0111 rules).
+    val names = value.split(',')
     if (names.any { it !in allowed }) {
-        throw GradleException("-Pportal.test.require must be a comma separated list of ${allowed.sorted()}, but is '$value'")
+        throw GradleException("-Pportal.test.require must be a comma separated list of ${allowed.sorted()} without blanks, but is '$value'")
     }
 }
 
