@@ -1,7 +1,3 @@
-        if (budgetBytes < maxFileBytes) {
-            // Not even one file of the largest size would fit: a request that no wait could ever let in would be refused for good (and reported as retryable, ARTIFACT_QUOTA).
-            throw new IllegalArgumentException("The budget must hold at least one file: budgetBytes " + budgetBytes + " is below maxFileBytes " + maxFileBytes);
-        }
 package io.github.jaeseongs95.portal.store.artifact;
 
 import java.time.Duration;
