@@ -64,6 +64,11 @@ public class SftpDownloader {
         PathInspection before = checker.inspect(client, location);
         return switch (before) {
             case PathInspection.Lost lost -> {
+                // A time limit or a cancel that fires during the first look closes the channel, and the look then fails: the cause stays what stopped the transfer and the
+                // live session is kept, as in the look after the read and in failedReading. Only a loss that nobody caused is a lost connection (case S-D0013-06).
+                if (watch.fired().isPresent()) {
+                    yield new DownloadResult.Failed(watch.fired().orElseThrow());
+                }
                 lease.discard();
                 yield new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST);
             }

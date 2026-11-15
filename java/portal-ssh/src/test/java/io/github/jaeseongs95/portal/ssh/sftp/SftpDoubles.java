@@ -12,6 +12,8 @@ import java.util.NavigableMap;
 import java.util.TreeMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.UnaryOperator;
+import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.client.extensions.openssh.OpenSSHFsyncExtension;
 import org.apache.sshd.sftp.common.extensions.openssh.FsyncExtensionParser;
@@ -82,6 +84,36 @@ final class SftpDoubles {
             }
             return passThrough(real, method, arguments);
         });
+    }
+
+    /**
+     * A client whose channel ends at the first look at a path: the first {@code lstat} runs {@code atTheLook} and then fails with a {@link ClosedChannelException}, what a
+     * client that was closed from outside answers (a stop that fires during the look closes the channel the same way). With a no-op {@code atTheLook} the loss has no
+     * cause but the connection. Every later call goes to the real client.
+     */
+    SftpClient channelEndingAtTheFirstLook(SftpClient real, Runnable atTheLook) {
+        AtomicBoolean ended = new AtomicBoolean();
+        return proxy(real, (method, arguments) -> {
+            if ("lstat".equals(method.getName()) && ended.compareAndSet(false, true)) {
+                atTheLook.run();
+                throw new ClosedChannelException();
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /** Opens the real client of a session and puts a fault in front of it. */
+    static final class FaultyChannels extends SftpChannels {
+        private final UnaryOperator<SftpClient> fault;
+
+        FaultyChannels(UnaryOperator<SftpClient> fault) {
+            this.fault = fault;
+        }
+
+        @Override
+        public SftpClient open(ClientSession session) throws IOException {
+            return fault.apply(super.open(session));
+        }
     }
 
     /** A client whose server offers {@code fsync@openssh.com} (or does not, as chosen) and whose flush always fails; the counter says how often it was tried. */

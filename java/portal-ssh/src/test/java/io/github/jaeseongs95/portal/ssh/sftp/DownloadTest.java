@@ -20,7 +20,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.function.UnaryOperator;
-import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -229,22 +228,36 @@ class DownloadTest {
     }
 
     private TransferBed startWith(UnaryOperator<SftpClient> fault) throws IOException {
-        bed = TransferBed.start(root, true, new FaultyChannels(fault), ScriptedExecutor.everythingSucceeds(), (target, path) -> new PathPolicyDecision.NotApplicable());
+        bed = TransferBed.start(root, true, new SftpDoubles.FaultyChannels(fault), ScriptedExecutor.everythingSucceeds(), (target, path) -> new PathPolicyDecision.NotApplicable());
         return bed;
     }
 
-    /** Opens the real client and puts a fault in front of it. */
-    private static final class FaultyChannels extends SftpChannels {
-        private final UnaryOperator<SftpClient> fault;
+    @Test
+    @DisplayName("S-D0013-06 D-0013 a cancel that comes while the path is first looked at and ends the channel stays Failed(CANCELLED), not TRANSPORT_LOST: the live session is kept")
+    void cancelDuringTheFirstLookKeepsItsCause() throws IOException {
+        CancelSource cancel = new CancelSource();
+        TransferBed testBed = startWith(client -> new SftpDoubles().channelEndingAtTheFirstLook(client, cancel::cancel));
+        Files.write(root.resolve("small.bin"), pattern(850));
+        TransferBed.Collecting sink = new TransferBed.Collecting();
 
-        FaultyChannels(UnaryOperator<SftpClient> fault) {
-            this.fault = fault;
-        }
+        DownloadResult result = testBed.transfer().download(testBed.download("/small.bin"), sink, testBed.control(cancel));
 
-        @Override
-        public SftpClient open(ClientSession session) throws IOException {
-            return fault.apply(super.open(session));
-        }
+        assertThat(result).as("the channel ended because of the cancel: %s", result).isEqualTo(new DownloadResult.Failed(TransferFailureCause.CANCELLED));
+        assertThat(testBed.sessions().discards()).as("the connection is fine; only the transfer was stopped: the session is kept").isZero();
+        assertThat(sink.bytes()).as("not a byte was read").isEmpty();
+    }
+
+    @Test
+    @DisplayName("S-D0013-08 D-0013 a channel that ends at the first look with nobody having stopped the transfer is still Failed(TRANSPORT_LOST) and the session is discarded")
+    void lossAtTheFirstLookWithoutACauseIsTransportLost() throws IOException {
+        TransferBed testBed = startWith(client -> new SftpDoubles().channelEndingAtTheFirstLook(client, () -> { }));
+        Files.write(root.resolve("small.bin"), pattern(850));
+
+        DownloadResult result = testBed.transfer().download(testBed.download("/small.bin"), new TransferBed.Collecting(), testBed.control());
+
+        assertThat(result).isEqualTo(new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST));
+        assertThat(testBed.sessions().discards()).isEqualTo(1);
+        assertThat(testBed.sessions().leases()).as("no automatic second read").isEqualTo(1);
     }
 
     @Test

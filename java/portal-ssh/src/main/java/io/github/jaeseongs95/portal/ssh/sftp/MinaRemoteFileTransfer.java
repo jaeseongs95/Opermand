@@ -259,14 +259,19 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
     private PermissionResult permissionsOver(PermissionRequest request, ExecutionControl control, boolean elevated) {
         return withSftp(request.target(), request.limits(), control, elevated, PermissionResult.NotDispatched::new,
             code -> new PermissionResult.Refused(code, new FileDiagnostic.None()),
-            (client, lease, watch) -> setPermissions(client, lease, request));
+            (client, lease, watch) -> setPermissions(client, lease, watch, request));
     }
 
-    private PermissionResult setPermissions(SftpClient client, SessionLease lease, PermissionRequest request) {
+    private PermissionResult setPermissions(SftpClient client, SessionLease lease, TransferWatch watch, PermissionRequest request) {
         SftpLocation location = new SftpLocation(request.path());
         PathInspection inspection = checker.inspect(client, location);
         switch (inspection) {
             case PathInspection.Lost lost -> {
+                // Nothing was sent yet. A time limit or a cancel that fires during the look closes the channel and the look then fails: the cause stays what stopped the
+                // request and the live session is kept; only a loss that nobody caused is a lost connection (case S-D0013-07).
+                if (watch.fired().isPresent()) {
+                    return new PermissionResult.NotDispatched(watch.fired().orElseThrow());
+                }
                 lease.discard();
                 return new PermissionResult.NotDispatched(TransferFailureCause.TRANSPORT_LOST);
             }
