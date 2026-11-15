@@ -873,24 +873,25 @@ Java 판에 같은 행동이 없다. 각 묶음의 대체 사례는 8.5절에서
 6. 읽기 시작 규칙(자동 시작, 명령, 읽기 프로필, 실행 결정 없음)은 `ApprovalPolicy.checkDispatch(Operation, ProfileAlias, MaintenanceState, Instant)` 오버로드로 옮겼다. 위치: `domain.approval.ApprovalPolicy`(호출 `app.execution.DispatchChecks`).
 7. 프로필 `[policy]` 표는 호환을 위해 받아들이고, 집행하지 않는다는 경고를 한 번 낸다. 위치: `ssh.profile.ProfileEvents#policyNotEnforced`(구현 `LoggingProfileEvents`, 호출 `TomlProfileLoader`).
 8. `known_hosts`는 다른 계정이 쓸 수 없어야 한다. 읽기 금지는 요구하지 않는다(공개 키이기 때문이다). 위치: `ssh.hostkey.ServerKeyPolicy`(`FileAccessGuard.inspect(file, Protection.NO_OTHER_WRITE)`).
-9. vendor 사례 13건을 2.x보다 엄격하게 바꿨다. 목록은 시험의 DisplayName 「2.x와 다름」에서 모았다. 위치: `ssh.profile`·`ssh.hostkey` 시험.
+9. vendor 사례 12건과 새 사례 1건(S-D0137-05)을 2.x보다 엄격하게 바꿨다. 목록은 시험의 DisplayName 「2.x와 다름」에서 모았다. 위치: `ssh.profile`·`ssh.hostkey` 시험.
    - VR-344: 포트의 TOML 실수 `22.0`도 거절한다(2.x의 JavaScript 숫자는 받았다). `TomlProfileLoaderTest`.
    - VR-386: `~u/x`는 홈 경로로 확장하지 않는다. `EnvironmentCredentialSourceTest`.
    - VR-387: 홈을 모르는 `~/k`는 확장하지 않고 작업 디렉터리에서 찾지 않는다. `HOME`이 없으면 `user.home`을 쓴다. 같은 시험.
-   - VR-388: 키 프로필의 키 파일이 없으면 파일 이름을 댄 실패이며, 더 약한 방식으로 조용히 넘어가지 않는다. 같은 시험.
+   - VR-388: 키 프로필의 키 파일이 없으면 키를 지정한 자리를 댄 실패이며, 더 약한 방식으로 조용히 넘어가지 않는다. 같은 시험.
    - VR-389: 키 경로가 폴더이면 건너뛰지 않고 「읽을 수 없다」는 miss다. 같은 시험.
    - VR-396·397: keychain 프로필은 `Unsupported`다. 같은 시험.
    - VR-398: 비밀번호 프로필은 비밀번호만 받는다. 같은 시험.
    - VR-399: 비밀번호 변수가 없으면 두 변수 이름을 댄 miss다(문장을 던지지 않는다). 같은 시험.
-   - VR-400: agent 프로필인데 `SSH_AUTH_SOCK`이 없으면 miss이고, 환경의 비밀번호로 물러서지 않는다. 같은 시험.
+   - S-D0137-05: agent 프로필이 이름으로 지정한 키 파일이 없으면 비밀번호로 넘어가지 않고, 키를 지정한 자리(`keyRef` 또는 변수 이름)를 댄 miss다(2.x는 없는 파일을 건너뛰었다). 파일 값은 miss와 로그에 넣지 않는다. 같은 시험.
    - VR-443: 빈 핀은 설정 오류다(2.x는 핀 없음으로 보고 핀 검사를 조용히 껐다). `HostKeyFingerprintTest`, `ServerKeyPolicyTest`.
    - VR-449·450: 알 수 없는 모드는 설정을 읽는 자리에서 거절한다(2.x는 tofu처럼 다뤘다). `ServerKeyPolicyTest`.
    - 이 밖에 VR이 아닌 EV-01(`a-b`와 `a_b`가 같은 자격 증명 접두를 내면 로드 때 거절)과 PF-11(프로필 이름은 `ProfileAlias` 규칙)도 같은 표시를 단다(`TomlProfileLoaderTest`).
+   - 2.x보다 엄격하지 않고 2.x처럼 바뀐 동작: VR-400은 agent 프로필(auth를 적지 않은 프로필 포함)이 키, 비밀번호, `SSH_AUTH_SOCK`(에이전트) 순으로 물러서고, 셋 다 없을 때만 miss이며 miss에는 찾아본 자리를 모두 담는다. 같은 시험(`EnvironmentCredentialSourceTest`).
 10. `DispatchGuard`는 채널을 열기 전에 호출한다. 3.2절 P3 문장을 고쳤다. 근거는 RC-B-462(「연결 확립 후 channel 열기 전」)와 포트 문서(`app.remote.DispatchGuard`)다. 위치: `ssh.exec.MinaRemoteExecutor`(`runOnLease`), `ssh.sftp.MinaRemoteFileTransfer`, `ssh.cli.AgentCliInstaller`.
 11. 연결 실패와 exec 거절은 `ExecutionReason.CHANNEL_OPEN_FAILED`로 내고, 단계와 코드로 나눈다. `SSH_CONNECT`/`SSH_CONNECT_FAILED`, `SSH_CHANNEL`/`SSH_CHANNEL_OPEN_FAILED`, `SSH_EXECUTION`/`SSH_EXECUTION_FAILED`가 서로 다르다는 것을 S3-SS-03이 확인한다(`SshSessionPoolTest`: 연결 안 됨, 채널 허가 없음, 단절 뒤 `TRANSPORT_LOST`·UNKNOWN이 세 값). `SSH_EXECUTION_FAILED`는 exec 요청 거절(`NOT_STARTED`)과 요청 뒤 단절(`UNKNOWN`) 두 경우에 쓰며 `RemoteOutcome`으로 가른다. 위치: `ssh.exec.ExecOutcomes`.
 12. ProxyJump는 (a) `HostConfigEntry` 체인 방식으로 한다. 근거는 hop별 호스트 키 검증이다(`AbstractClientSession.checkKeys`가 세션마다 그 세션이 향한 서버의 주소를 주므로 hop마다 자기 핀·기록과 대조한다). MINA는 (a)·(b) 모두 루프백 리스너를 연다(`SshClient.doConnect`의 `createLocalPortForwardingTracker`). 그래서 이것은 둘을 가르는 근거가 아니다. 점프 지정은 `URI`가 아니라 `JumpEntries`와 `HostConfigEntryResolver`로 해석한다(밑줄이 든 호스트 이름과 IPv6 리터럴이 `URI`에서 깨지기 때문이다. S3-SS-14). 위치: `ssh.session.ProxyJumpResolver`, `JumpEntries`, `SessionConnector`, `HopHostKeyVerifier`.
 13. 유휴 연결 정리(VR-416·419)는 `SessionReapSettings`(15분/1분, 2.x `connectionIdleReapMs`)로 한다. 채널을 쓰는 중인 세션(lease가 있는 세션)은 닫지 않는다(S3-SS-12). 위치: `ssh.session.SessionReapSettings`, `SshSessionPool`.
-14. agent 자격 증명은 지원하지 않는다. 연결 전에 `AGENT_UNSUPPORTED`로 거절한다(S3-SS-13). 2.x는 EV-08·EV-11로 ssh-agent를 썼으므로 이것은 동작 변경이며, 3.0.0 릴리스 노트의 「동작 변경」에 넣을 대상이다. 위치: `ssh.session.ConnectFailureCause`, `ProxyJumpResolver`.
+14. agent 자격 증명은 지원하지 않는다. 연결 전에 `AGENT_UNSUPPORTED`로 거절한다(S3-SS-13). 2.x는 EV-08·EV-11로 ssh-agent를 썼으므로 이것은 동작 변경이며, 3.0.0 릴리스 노트의 「동작 변경」에 넣을 대상이다. auth를 적지 않은 프로필은 2.x처럼 키·비밀번호로 물러서지만, 다음 프로필은 영향을 받는다. (a) 에이전트만 쓰던 프로필. (b) 이름으로 지정한 키 파일이 없거나 비었는데 비밀번호나 소켓은 있는 프로필(2.x는 없는 파일을 건너뛰었고 빈 키를 거짓으로 보고 비밀번호나 소켓으로 넘어갔으며, 3.0은 키를 지정한 자리를 댄 miss로 멈춘다. S-D0137-05, S-D0137-08). (c) 키와 다른 출처(비밀번호·소켓)를 함께 둔 프로필(2.x는 모두 ssh2에 넘겼고 3.0은 키 하나만 넘긴다). 위치: `ssh.session.ConnectFailureCause`, `ProxyJumpResolver`.
 15. 실패가 겹치면 원인의 종류로 우선순위를 정한다. 세션 상실이 입력 실패보다 앞선다(죽은 세션에 쓴 입력의 실패는 상실 때문이다). 채널이 닫히면 마감이 없어도 정산한다. 위치: `ssh.exec.ExecOutcomes#afterDispatch`, `ExecSupervisor`.
 16. ArchUnit A-SSH-NO-PLATFORM-BRANCH(S3-AB-09)를 넓혀 `CommandLineGrammar` 구현도 자기 `TargetOs` 상수를 읽을 수 있게 했다(`platform()`이 그 문법이 따옴표를 다루는 OS를 답하고, 등록기가 그 답으로 문법을 플랫폼에 잇는다). 위치: `archchecks.PortalRules#noPlatformBranch`.
 17. 에이전트 CLI 계획의 원격 명령은 압축 해제 하나뿐이다(21번). 시험(S3-AG-10)은 계획의 원격 명령이 그것뿐이고 `readlink`·`mkdir`·`sed`·`grep`·`cp`·`rm`·`mv`·`ln`이 없음을, 두 도구의 명령이 도구 디렉터리만 다르고 설치된 프로그램을 실행하는 단계가 없음을, Windows 명령이 8000자 아래 PowerShell 한 줄임을 고정한다. 원격을 바꾼 뒤의 실패는 `NotDispatched`가 아니다(`Unconfirmed` 또는 `RolledBack`). 위치: `ssh.platform.LinuxTargetPlatform`, `WindowsTargetPlatform`, `AgentCliPlansTest`, `ssh.cli.AgentCliInstaller`. (구현 초기에는 단계마다 다른 명령 문자열 `: before;`·`: after;`를 고정했으나 해당 단계가 SFTP로 옮겨져 사라졌다.)

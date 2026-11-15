@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -14,16 +15,24 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.env.StandardEnvironment;
+
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 
 import io.github.jaeseongs95.portal.app.remote.CredentialLookup;
 import io.github.jaeseongs95.portal.app.remote.CredentialMiss;
 import io.github.jaeseongs95.portal.app.remote.CredentialPart;
+import io.github.jaeseongs95.portal.app.remote.ProfileLookup;
 import io.github.jaeseongs95.portal.app.remote.SecretValue;
 import io.github.jaeseongs95.portal.app.remote.SshCredential;
 import io.github.jaeseongs95.portal.domain.target.AuthMethod;
 import io.github.jaeseongs95.portal.domain.target.Setting;
+import io.github.jaeseongs95.portal.ssh.session.JumpResolution;
+import io.github.jaeseongs95.portal.ssh.session.ProxyJumpResolver;
 import jakarta.validation.Validation;
 import jakarta.validation.Validator;
 
@@ -213,7 +222,7 @@ class EnvironmentCredentialSourceTest {
     }
 
     @Test
-    @DisplayName("VR-388 (2.x와 다름: 2.x skipped a missing key file and went on with the other sources; a key profile with no key is a failure that names the file, not a silent fallback to a weaker method): a profile that uses a key and whose key file does not exist gets a miss that names the file")
+    @DisplayName("VR-388 (2.x와 다름: 2.x skipped a missing key file and went on with the other sources; a key profile with no key is a failure that names where the key was set, not a silent fallback to a weaker method): a profile that uses a key and whose key file does not exist gets a miss that names the source of the key, not the path")
     void aMissingKeyFileIsAMiss() throws IOException {
         Path missing = directory.resolve("no-such-key");
 
@@ -221,7 +230,7 @@ class EnvironmentCredentialSourceTest {
 
         assertThat(missesOf(lookup)).singleElement().satisfies(miss -> {
             assertThat(miss.part()).isEqualTo(CredentialPart.PRIVATE_KEY);
-            assertThat(miss.place()).contains(missing.toString()).contains("does not exist");
+            assertThat(miss.place()).contains("keyRef of the profile").contains("does not exist").doesNotContain(missing.toString());
         });
     }
 
@@ -232,7 +241,7 @@ class EnvironmentCredentialSourceTest {
 
         CredentialLookup lookup = resolve("aws-local", "auth = \"key\"\nkeyRef = " + literal(folder), Map.of("SSH_MCP_PASSWORD", "p"));
 
-        assertThat(missesOf(lookup)).singleElement().satisfies(miss -> assertThat(miss.place()).contains(folder.toString()).contains("cannot be read"));
+        assertThat(missesOf(lookup)).singleElement().satisfies(miss -> assertThat(miss.place()).contains("keyRef of the profile").contains("cannot be read").doesNotContain(folder.toString()));
     }
 
     @Test
@@ -326,9 +335,163 @@ class EnvironmentCredentialSourceTest {
     }
 
     @Test
-    @DisplayName("VR-400 (2.x와 다름: 2.x fell back to a password in the environment when there was no agent; an agent profile with no agent is a miss, not a fallback to a weaker method): an agent profile without SSH_AUTH_SOCK gets a miss that names SSH_AUTH_SOCK")
-    void aMissingAgentNamesTheSocketVariable() throws IOException {
-        assertThat(missesOf(resolve("aws-local", "auth = \"agent\"", Map.of("SSH_MCP_PASSWORD", "p")))).containsExactly(new CredentialMiss(CredentialPart.PRIVATE_KEY, "SSH_AUTH_SOCK"));
+    @DisplayName("VR-400: an agent profile with no key, no password and no SSH_AUTH_SOCK gets a miss for every place that was searched")
+    void aMissingAgentNamesEveryPlace() throws IOException {
+        assertThat(missesOf(resolve("aws-local", "auth = \"agent\"", Map.of()))).extracting(CredentialMiss::place).containsExactly("keyRef of the profile",
+            "SSH_MCP_AWS_LOCAL_KEY", "SSH_MCP_KEY", "SSH_MCP_AWS_LOCAL_PASSWORD", "SSH_MCP_PASSWORD", "SSH_AUTH_SOCK");
+    }
+
+    @Test
+    @DisplayName("S-D0137-01: a profile without auth (the agent method) with SSH_MCP_<PROFILE>_KEY gets the key, as in 2.x (EV-10)")
+    void aProfileWithoutAuthGetsTheKey() throws IOException {
+        Path key = file("keys/id", "the key\n");
+
+        CredentialLookup lookup = resolve("aws-local", "", Map.of("SSH_MCP_AWS_LOCAL_KEY", key.toString()));
+
+        assertThat(revealed(keyOf(lookup).pem())).isEqualTo("the key\n");
+    }
+
+    @Test
+    @DisplayName("S-D0137-02: a profile without auth with only SSH_MCP_PASSWORD gets the password")
+    void aProfileWithoutAuthGetsThePassword() throws IOException {
+        assertThat(revealed(passwordOf(resolve("aws-local", "", Map.of("SSH_MCP_PASSWORD", "p"))).password())).isEqualTo("p");
+    }
+
+    @Test
+    @DisplayName("S-D0137-03: an agent profile with a key and a password gets the key, with its passphrase (the keyRef wins over the variables)")
+    void theKeyComesBeforeThePassword() throws IOException {
+        Path a = file("keys/a", "key a\n");
+        Path b = file("keys/b", "key b\n");
+
+        SshCredential.PrivateKey byVariable = keyOf(resolve("aws-local", "", Map.of("SSH_MCP_KEY", b.toString(), "SSH_MCP_PASSWORD", "p", "SSH_MCP_PASSPHRASE", "f")));
+        SshCredential.PrivateKey byReference = keyOf(resolve("aws-local", "auth = \"agent\"\nkeyRef = " + literal(a), Map.of("SSH_MCP_KEY", b.toString(), "SSH_MCP_PASSWORD", "p")));
+
+        assertThat(revealed(byVariable.pem())).isEqualTo("key b\n");
+        assertThat(byVariable.passphrase()).isEqualTo(Setting.given(SecretValue.of("f")));
+        assertThat(revealed(byReference.pem())).isEqualTo("key a\n");
+    }
+
+    @Test
+    @DisplayName("S-D0137-04: an agent profile with only SSH_AUTH_SOCK still gets the agent, and a password takes its place when there is one")
+    void theSocketIsTheLastResort() throws IOException {
+        assertThat(resolve("aws-local", "", Map.of("SSH_AUTH_SOCK", "/run/agent.sock"))).isEqualTo(new CredentialLookup.Resolved(new SshCredential.Agent()));
+        assertThat(revealed(passwordOf(resolve("aws-local", "", Map.of("SSH_AUTH_SOCK", "/run/agent.sock", "SSH_MCP_PASSWORD", "p"))).password())).isEqualTo("p");
+    }
+
+    @Test
+    @DisplayName("S-D0137-05 (2.x와 다름: 2.x skipped a named key file that did not exist and went on; a named key that is not there is a miss that names the source of the key, never a quiet fallback to the password): an agent profile whose named key file does not exist gets a miss that names the source of the key, not the path")
+    void aNamedKeyFileThatIsMissingIsAMiss() throws IOException {
+        Path missing = directory.resolve("no-such-key");
+
+        CredentialLookup lookup = resolve("aws-local", "", Map.of("SSH_MCP_AWS_LOCAL_KEY", missing.toString(), "SSH_MCP_PASSWORD", "p", "SSH_AUTH_SOCK", "/run/agent.sock"));
+
+        assertThat(missesOf(lookup)).singleElement().satisfies(miss -> assertThat(miss.place()).contains("SSH_MCP_AWS_LOCAL_KEY").contains("does not exist").doesNotContain(missing.toString()));
+    }
+
+    @Test
+    @DisplayName("S-D0137-06: a profile with auth = \"password\" and only a key variable gets a miss for the password variables (an explicit method is not widened)")
+    void anExplicitPasswordProfileIgnoresTheKey() throws IOException {
+        Path key = file("keys/id", "the key\n");
+
+        assertThat(missesOf(resolve("aws-local", "auth = \"password\"", Map.of("SSH_MCP_KEY", key.toString())))).extracting(CredentialMiss::place)
+            .containsExactly("SSH_MCP_AWS_LOCAL_PASSWORD", "SSH_MCP_PASSWORD");
+    }
+
+    @Test
+    @DisplayName("S-D0137-08: an agent profile whose key file is empty gets a miss that says so, and does not fall back to the password")
+    void anEmptyKeyFileOfAnAgentProfileIsAMiss() throws IOException {
+        Path empty = file("keys/empty", "");
+
+        CredentialLookup lookup = resolve("aws-local", "", Map.of("SSH_MCP_AWS_LOCAL_KEY", empty.toString(), "SSH_MCP_PASSWORD", "p"));
+
+        assertThat(missesOf(lookup)).singleElement().satisfies(miss -> assertThat(miss.place()).contains("SSH_MCP_AWS_LOCAL_KEY").contains("is empty"));
+    }
+
+    @Test
+    @DisplayName("S-D0137-09: an agent profile whose key path is not a valid path (a NUL character, invalid on every system) gets a miss, and does not fall back to the password")
+    void anInvalidKeyPathOfAnAgentProfileIsAMiss() throws IOException {
+        CredentialLookup lookup = resolve("aws-local", "", Map.of("SSH_MCP_KEY", "bad\0key", "SSH_MCP_PASSWORD", "p"));
+
+        assertThat(missesOf(lookup)).singleElement().satisfies(miss -> assertThat(miss.place()).contains("SSH_MCP_KEY").contains("cannot be read"));
+    }
+
+    @Test
+    @DisplayName("S-D0137-10: an agent profile with cert = true and a certificate file next to the key gets the certificate with the key")
+    void anAgentProfileGetsTheCertificate() throws IOException {
+        Path key = file("keys/id", "the key\n");
+        file("keys/id-cert.pub", "the certificate\n");
+
+        SshCredential.PrivateKey credential = keyOf(resolve("aws-local", "cert = true", Map.of("SSH_MCP_AWS_LOCAL_KEY", key.toString())));
+
+        assertThat(revealed(credential.pem())).isEqualTo("the key\n");
+        assertThat(credential.certificate()).isEqualTo(Setting.given("the certificate\n"));
+    }
+
+    @Test
+    @DisplayName("S-D0137-11: a key text put in a key variable instead of a path is not in the miss, whatever the profile's method")
+    void aKeyTextInAKeyVariableIsNeverInAMessage() throws IOException {
+        String pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nSECRETBODY\n-----END OPENSSH PRIVATE KEY-----\n";
+
+        for (String profileKeys : List.of("", "auth = \"key\"")) {
+            CredentialLookup lookup = resolve("aws-local", profileKeys, Map.of("SSH_MCP_KEY", pem, "SSH_MCP_PASSWORD", "p"));
+
+            assertThat(lookup).isInstanceOf(CredentialLookup.Missing.class);
+            assertThat(lookup.toString()).doesNotContain("SECRETBODY").doesNotContain("BEGIN");
+            assertThat(missesOf(lookup)).singleElement().satisfies(miss -> assertThat(miss.place()).contains("SSH_MCP_KEY"));
+        }
+    }
+
+    @Test
+    @DisplayName("S-D0137-12: a certificate file that cannot be read is a miss that names where it was set, for a variable and for the file next to the key")
+    void anUnreadableCertificateNamesItsSource() throws IOException {
+        Path key = file("keys/id", "the key\n");
+        Files.createDirectories(directory.resolve("keys/id-cert.pub"));
+        Path folder = Files.createDirectory(directory.resolve("cert-folder"));
+
+        CredentialLookup next = resolve("aws-local", "cert = true", Map.of("SSH_MCP_AWS_LOCAL_KEY", key.toString()));
+        CredentialLookup named = resolve("aws-local", "cert = true", Map.of("SSH_MCP_AWS_LOCAL_KEY", key.toString(), "SSH_MCP_AWS_LOCAL_CERT", folder.toString()));
+
+        assertThat(missesOf(next)).singleElement().satisfies(miss -> {
+            assertThat(miss.part()).isEqualTo(CredentialPart.CERTIFICATE);
+            assertThat(miss.place()).contains("next to the key named by SSH_MCP_AWS_LOCAL_KEY").contains("cannot be read");
+        });
+        assertThat(missesOf(named)).singleElement().satisfies(miss -> assertThat(miss.place()).contains("named by SSH_MCP_AWS_LOCAL_CERT").contains("cannot be read"));
+    }
+
+    @Test
+    @DisplayName("S-D0137-13: the warning for a key path that is not valid names the source and never holds the value, in the message or in its arguments")
+    void theLogNeverHoldsTheKeyValue() throws IOException {
+        Logger logger = (Logger) LoggerFactory.getLogger(EnvironmentCredentialSource.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        try {
+            resolve("aws-local", "", Map.of("SSH_MCP_KEY", "-----BEGIN OPENSSH PRIVATE KEY-----\nSECRETBODY\0\n-----END OPENSSH PRIVATE KEY-----\n"));
+        } finally {
+            logger.detachAppender(appender);
+        }
+
+        assertThat(appender.list).isNotEmpty().allSatisfy(event -> {
+            assertThat(event.getFormattedMessage()).contains("SSH_MCP_KEY").doesNotContain("SECRETBODY").doesNotContain("BEGIN");
+            assertThat(String.valueOf(Arrays.asList(event.getArgumentArray()))).doesNotContain("SECRETBODY");
+            assertThat(event.getThrowableProxy()).isNull();
+        });
+    }
+
+    @Test
+    @DisplayName("S-D0137-07: a profile without auth and with a key variable goes through the jump resolver as Resolved with the key (not AGENT_UNSUPPORTED or CREDENTIAL_MISSING)")
+    void aProfileWithoutAuthIsResolvedByTheJumpResolver() throws IOException {
+        Path key = file("keys/id", "the key\n");
+        Path config = Files.writeString(directory.resolve("config-jump.toml"), "[[profiles]]\nname = \"aws-local\"\nhost = \"h\"\nuser = \"u\"\n");
+        ProfileCatalog catalog = loader.load(config);
+        ProfileEntry entry = catalog.entries().get(0);
+        ProxyJumpResolver resolver = new ProxyJumpResolver(alias -> new ProfileLookup.Found(entry.connection()),
+            new EnvironmentCredentialSource(environment(Map.of("SSH_MCP_AWS_LOCAL_KEY", key.toString())), catalog));
+
+        JumpResolution resolution = resolver.resolve(entry.alias());
+
+        assertThat(resolution).isInstanceOf(JumpResolution.Resolved.class);
+        assertThat(((JumpResolution.Resolved) resolution).hops()).singleElement().satisfies(hop -> assertThat(hop.credential()).isInstanceOf(SshCredential.PrivateKey.class));
     }
 
     @Test
