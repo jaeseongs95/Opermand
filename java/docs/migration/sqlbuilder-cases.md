@@ -7,8 +7,9 @@
 ## 1. 출처와 이식 범위
 
 - 출처: 저장소 `jaeseongs95/sennard-source`(private), 브랜치 `int-6d37-m3` 2aa6b008, 마지막 변경 커밋 1ad1b8e7. 경로 `java/ags-api/src/main/java/io/github/jaeseongs95/ags/service/database/SqlBuilder.java`(168줄)와 같은 패키지 test의 `SqlBuilderTest.java`, `SqlBuilderConnectionTest.java`. AGS와 포털 3.0.0은 둘 다 AGPL-3.0-or-later이고 소유자가 같다.
-- 포털 위치: `portal-store`의 `io.github.jaeseongs95.portal.store.sql.SqlBuilder`. 동작·`Database` enum·공식 문서 링크 주석은 원본 그대로다.
-- 바꾼 것은 예외 하나다. AGS의 `StoreException`·`StoreCode`는 포털의 `DatabaseProductException`과 그 `Reason`으로 바뀐다.
+- 포털 위치: `portal-store`의 `io.github.jaeseongs95.portal.store.sql.SqlBuilder`. 동작과 공식 문서 링크 주석은 원본 그대로이고, 원본과 다른 곳은 아래 두 가지뿐이다.
+- 다른 점 1, 지원 제품(사용자 확인, 개인판 범위): 공개 저장소는 개인판(사용자 1명, 자기 PC)이다. 대형 상용 DBMS 지원·다중 사용자·호스팅·KMS는 상용판 몫이고 공개 저장소에 넣지 않는다. 그래서 `Database` enum과 `generateLimit` 분기에서 ORACLE·DB2·SQLSERVER를 뺐고 H2·POSTGRESQL·MARIADB·MYSQL만 남겼다(MYSQL은 develop 마이그레이션에 `mysql` 폴더가 이미 있어 이번에는 남긴다. 범위 판정은 리드가 따로 한다). Oracle·Db2·SQL Server는 `UNSUPPORTED_DATABASE_PRODUCT`로 거부된다. 제거한 제품의 공식 문서 링크 주석도 뺐다.
+- 다른 점 2, 예외: AGS의 `StoreException`·`StoreCode`는 포털의 `DatabaseProductException`과 그 `Reason`으로 바뀐다.
   - 판단: 포털의 공개 오류 코드(`ErrorCode` 8개 범주)는 Contract 2.0의 와이어 값이고 `ErrorCodeBaselineTest`가 개수를 고정한다. 제품 판별 실패·미지원·불일치는 요청 거절이 아니라 시작·설정 실패이므로 `ArtifactStoreCorruptedException`(`IllegalStateException` + `Reason` enum, `PortalException` 아님)과 같은 방식으로 저장소 안의 예외로 둔다. 공개 코드 집합과 `ErrorCodeBaselineTest`는 바뀌지 않는다.
   - 메시지는 `Reason`과 닫힌 집합의 값(제품 enum 이름)만 담는다. 원인 예외는 `cause`로만 단다.
 - `SqlBuilder`는 트랜잭션을 열지 않는다(개발원칙 4.4). 호출자의 트랜잭션 연결에 합류하거나 연결을 잠시 빌린다.
@@ -17,7 +18,7 @@
 
 | ID | 대상 | 입력 | 기대 | 판정 |
 |---|---|---|---|---|
-| S-SQLB-01 | 제품별 행 수 제한 구문(`generateLimit(Database, parameter)`) | 7개 제품, 자리표시자 `:count` | H2·PostgreSQL·Oracle·Db2 `FETCH FIRST :count ROWS ONLY`; SQL Server·MariaDB `OFFSET 0 ROWS FETCH NEXT :count ROWS ONLY`; MySQL `LIMIT :count` | 문자열 일치 |
+| S-SQLB-01 | 제품별 행 수 제한 구문(`generateLimit(Database, parameter)`) | 4개 제품(`Database.values()`는 H2, POSTGRESQL, MARIADB, MYSQL 순서), 자리표시자 `:count` | H2·PostgreSQL `FETCH FIRST :count ROWS ONLY`; MariaDB `OFFSET 0 ROWS FETCH NEXT :count ROWS ONLY`; MySQL `LIMIT :count` | 문자열 일치, enum 값 목록 일치 |
 | S-SQLB-02 | Statement 조립(`query`·`orGroup`·`and`·`orderBy`·`append`·`limit`·`build`·`applyLimit`) | `orGroup` 개수 0·1·2·3, 조건 하나, 정렬, 이름 있는 자리표시자와 위치 `?` | 개수 0은 `(1 = 0)`, 나머지는 `(a OR b …)`; 값은 항상 자리표시자; `limit`은 H2에서 `FETCH FIRST :limit ROWS ONLY`를 끝에 붙인다 | 전체 SQL 문자열 일치 |
 | S-SQLB-03 | 제품 판별은 처음 한 번 | 8개 스레드가 동시에 `generateLimit("?")`, 풀 8개의 실제 H2 | 모두 `FETCH FIRST ? ROWS ONLY`, 메타데이터 호출 1번 | 반환값, 호출 횟수 |
 | S-SQLB-04 | 판별이 잠금 안에서 연결을 기다리지 않는다 | 풀 1개를 트랜잭션이 쥔 채 다른 스레드가 판별을 기다림 | 트랜잭션 안 호출은 같은 연결로 판별을 끝내고, 기다리던 호출도 이어서 끝난다. 교착 없음 | 10초 안에 완료, 메타데이터 호출 1번 |
@@ -25,8 +26,9 @@
 | S-SQLB-06 | 판별 실패 거부 | 연결 메타데이터 읽기가 `SQLException`을 던짐 | `Reason`이 `STORE_UNREACHABLE`, `cause`가 원래 `SQLException`; 결과를 저장하지 않아 다음 호출은 다시 판별해 성공 | `Reason`, `cause`, 재호출 성공 |
 | S-SQLB-07 | 제품 불일치 거부 | 설정 URL `jdbc:postgresql://…`와 연결 제품 `PostgreSQL`(일치)·`H2`(불일치)·지원 밖 URL | 일치는 통과; 불일치는 `DATABASE_PRODUCT_MISMATCH`이고 메시지에 `POSTGRESQL`과 `H2` 둘 다; 지원 밖 URL은 `UNSUPPORTED_DATABASE_PRODUCT` | `Reason`, 메시지 |
 | S-SQLB-08 | 인스턴스 `requireSame(productName)` | 실제 `DataSource`(H2)에 `H2`·`PostgreSQL` | `H2`는 통과, `PostgreSQL`은 `DATABASE_PRODUCT_MISMATCH` | `Reason` |
-| S-SQLB-09 | URL로 제품 선택(`ofJdbcUrl`) | `postgresql`·`oracle`·`db2`·`sqlserver`·`mariadb`·`mysql`·`h2` URL | 각각 대응 `Database` | 값 일치 |
-| S-SQLB-10 | 실제 DBMS에서 행 수 제한 실행(`SqlBuilderStoreTest`, `@StoreTest`) | 슬라이스의 실제 `DataSource`에 행 5개를 넣고 `query("SELECT …").orderBy(…).limit(:limit)`에 3 | 3행만 읽고 그 행은 정렬 앞쪽 3행. 기본 실행은 H2, `externalDbmsTest`는 PostgreSQL에서 같은 시험이 돈다 | 읽은 행 목록 |
+| S-SQLB-09 | URL로 제품 선택(`ofJdbcUrl`) | `h2`·`postgresql`·`mariadb`·`mysql` URL과 제품 이름 `PostgreSQL` | 각각 대응 `Database` | 값 일치 |
+| S-SQLB-21 | 개인판 밖 제품 거부 | 제품 이름 `Oracle`·`DB2/NT64`·`Microsoft SQL Server`, URL `jdbc:oracle:thin:…`·`jdbc:db2:…`·`jdbc:sqlserver:…` | 모두 `DatabaseProductException`의 `Reason`이 `UNSUPPORTED_DATABASE_PRODUCT` | `Reason` |
+| S-SQLB-10 | 실제 DBMS에서 행 수 제한 실행(`SqlBuilderStoreTest`, `@StoreTest`) | 슬라이스의 실제 `DataSource`에 행 5개를 넣고 `query("SELECT …").orderBy(…).limit(:limit)`에 3 | 3행만 읽고 그 행은 정렬 앞쪽 3행. 같은 슬라이스에서 연결이 알리는 URL과 제품 이름으로 `requireSame(url, product)`·`requireSame(product)`가 통과한다. 기본 실행은 H2, `externalDbmsTest`는 PostgreSQL에서 같은 시험이 돈다 | 읽은 행 목록, 예외 없음 |
 
 ## 3. AgentCliHistoryReader (자리 1)
 
