@@ -165,7 +165,7 @@ class JdbcAgentCliRequestStoreTest {
             SELECT o.id AS operation_id, o.created_at AS created_at
             FROM agent_cli_request r JOIN operation o ON o.id = r.operation_id
             WHERE r.provider = :provider AND o.target_id = :targetId AND o.target_revision = :targetRevision AND o.profile = :profile""";
-        String newestFirst = " ORDER BY o.created_at DESC, o.id DESC " + sql.generateLimit(":limit");
+        String newestFirst = " ORDER BY o.created_at DESC, o.id DESC FETCH FIRST :limit ROWS ONLY";
 
         assertThat(reader.statement(false)).isEqualTo(select + newestFirst);
         assertThat(reader.statement(true)).isEqualTo(select + " AND (o.created_at < :createdAt OR (o.created_at = :createdAt AND o.id < :id))" + newestFirst);

@@ -6,7 +6,7 @@ import java.util.Objects;
 /**
  * The business database cannot be used by {@link SqlBuilder}: its product has no SQL here, the product could not be read from the connection, or the configured JDBC
  * URL names another product than the connected one. These are start-up and configuration failures, not refusals of a request, so this is not a {@code PortalException}
- * and adds no code to the public contract (the same reasoning as {@code ArtifactStoreCorruptedException}). The message holds the {@link Reason} and the closed values of
+ * and adds no code to the public contract (the same reasoning as {@code ArtifactStoreCorruptedException}); it is therefore outside the sealed hierarchy of business exceptions (development principle 3.4), and the sealed structure of the SSH error codes is handled separately (D-0065). The message holds the {@link Reason} and the closed values of
  * the products (the names of {@link SqlBuilder.Database} or of Spring Boot's {@code DatabaseDriver}); the caught exception is the {@code cause} only.
  */
 public final class DatabaseProductException extends IllegalStateException {

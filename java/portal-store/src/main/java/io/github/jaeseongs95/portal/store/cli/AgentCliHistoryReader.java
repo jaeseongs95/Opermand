@@ -22,7 +22,7 @@ import io.github.jaeseongs95.portal.store.sql.SqlBuilder;
 /**
  * The keyset page of the install history of one binding (A-027, A-028, A-029). The order is newest first by (created_at, id) of the joined {@code operation} row, the
  * same key the cursor carries, so a request that arrives between two page reads or shares a timestamp with others is neither repeated nor skipped. The statement is
- * written by the {@link SqlBuilder}, which adds the row limit in the syntax of the database in use (the limit is not common to H2, PostgreSQL, MariaDB and MySQL): the
+ * written by the {@link SqlBuilder}, which adds the row limit in the syntax of the database in use (the limit is not common to the seven products: H2, PostgreSQL, Oracle, Db2, SQL Server, MariaDB and MySQL): the
  * statement asks for one row more than a page, and that extra row only tells whether a next page exists. The caller owns the transaction. The {@code Operation} of
  * each entry is not read here (the journal reads it, see {@code JdbcAgentCliRequestStore#history}).
  */

@@ -18,7 +18,7 @@ import com.zaxxer.hikari.HikariDataSource;
 import io.github.jaeseongs95.portal.store.sql.DatabaseProductException.Reason;
 
 /**
- * S-SQLB-01, 02, 05, 07, 08, 09 (docs/migration/sqlbuilder-cases.md). Ported from AGS {@code SqlBuilderTest} (AGS, Agent Governance Suite, as of commit 1ad1b8e7): the seven
+ * S-SQLB-01, 02, 05, 07, 08, 09, 21 (docs/migration/sqlbuilder-cases.md). Ported from AGS {@code SqlBuilderTest} (AGS, Agent Governance Suite, as of commit 1ad1b8e7): the seven
  * dialects render a bound limit; a complete statement keeps its parameter; an unknown database is refused; the default embedded database is H2.
  */
 @TestInstance(TestInstance.Lifecycle.PER_CLASS)
@@ -121,6 +121,23 @@ class SqlBuilderTest {
         assertThat(SqlBuilder.ofJdbcUrl("jdbc:mariadb://localhost/db")).isEqualTo(SqlBuilder.Database.MARIADB);
         assertThat(SqlBuilder.ofJdbcUrl("jdbc:mysql://localhost/db")).isEqualTo(SqlBuilder.Database.MYSQL);
         assertThat(SqlBuilder.ofProductName("PostgreSQL")).isEqualTo(SqlBuilder.Database.POSTGRESQL);
+    }
+
+    @Test
+    @DisplayName("S-SQLB-21: each of the seven product names a connection reports selects its product, by name alone and without a connection")
+    void selectsTheDialectFromEachProductName() {
+        assertThat(SqlBuilder.ofProductName("H2")).isEqualTo(SqlBuilder.Database.H2);
+        assertThat(SqlBuilder.ofProductName("PostgreSQL")).isEqualTo(SqlBuilder.Database.POSTGRESQL);
+        assertThat(SqlBuilder.ofProductName("Oracle")).isEqualTo(SqlBuilder.Database.ORACLE);
+        assertThat(SqlBuilder.ofProductName("DB2/NT64")).isEqualTo(SqlBuilder.Database.DB2);
+        assertThat(SqlBuilder.ofProductName("Microsoft SQL Server")).isEqualTo(SqlBuilder.Database.SQLSERVER);
+        assertThat(SqlBuilder.ofProductName("MariaDB")).isEqualTo(SqlBuilder.Database.MARIADB);
+        assertThat(SqlBuilder.ofProductName("MySQL")).isEqualTo(SqlBuilder.Database.MYSQL);
+        SqlBuilder.requireSame("jdbc:oracle:thin:@localhost:1521/db", "Oracle");
+        SqlBuilder.requireSame("jdbc:db2://localhost/db", "DB2/NT64");
+        SqlBuilder.requireSame("jdbc:sqlserver://localhost", "Microsoft SQL Server");
+        SqlBuilder.requireSame("jdbc:mariadb://localhost/db", "MariaDB");
+        SqlBuilder.requireSame("jdbc:mysql://localhost/db", "MySQL");
     }
 
     @Test
