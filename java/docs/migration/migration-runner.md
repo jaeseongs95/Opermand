@@ -21,7 +21,7 @@
 - 동시 실행: 같은 번호를 두 실행기가 넣으면 DB가 둘째를 첫째의 커밋까지 기다리게 하고 중복 키를 준다. 실행기에는 sleep·폴링·재시도가 없다. 중복 키를 받으면 이력을 한 번 다시 읽어, 그 번호가 SUCCEEDED이고 digest가 같으면 건너뛰고 아니면 `MIGRATION_FAILED`로 멈춘다(메시지: 상대가 실패했거나 아직 적용 중이다). 한계는 「한계와 운영자 복구」 절.
 - 번호는 1부터 빈 번호 없이 연속이다. 아니면 DB에 손대기 전에 `MIGRATION_OUT_OF_ORDER`다. 적용된 최고 번호보다 낮은 미적용 번호도 같다.
 - 바뀐 파일(`MIGRATION_CHANGED`)과 jar에 없는 번호(`MIGRATION_MISSING`)는 아무것도 적용하기 전에 멈추고 이력에 행을 더하지 않는다.
-- 자리표시자 `${long_text}`는 `DatabaseMetaData.getTypeInfo()`로 고른 형으로 바뀐다(`LongTextType`: 길이가 필요 없는 대형 문자 객체형, 그다음 길이가 필요 없는 VARCHAR, 그다음 가장 큰 VARCHAR). digest는 치환 전 파일의 SHA-256이다. 설정 키는 없다.
+- 자리표시자 `${long_text}`는 `DatabaseMetaData.getTypeInfo()`로 고른 형으로 바뀐다(`LongTextType`, 공통 형식 판 3: 대형 문자 객체형(`CLOB`·`LONGVARCHAR` 계열)을 VARCHAR보다 먼저 고르고 `CREATE_PARAMS`가 있다는 이유로 빼지 않는다. 그다음 길이가 필요 없는 VARCHAR, 그다음 가장 큰 VARCHAR. 고른 형의 `CREATE_PARAMS`가 비었으면 길이 없이, 비지 않았으면 드라이버가 보고한 최대 `PRECISION`으로 길이를 적어 선언한다). digest는 치환 전 파일의 SHA-256이다. 설정 키는 없다.
 - 시작할 때 DB 인코딩이 UTF-8인지 SQL 표준 질의로 확인한다(`verifyEncoding`).
 - 스크립트 위치: `db/expand`(기동마다 적용), `db/contract`(명령으로만 적용. 3.0.0에는 contract 스크립트가 없다). DBMS별 폴더는 없다(D-0088).
 
@@ -84,7 +84,7 @@ SSH의 사정에 따른 차이:
   - `maintenance_reservation`: `baseline`(null 허용)
 - 이 열들은 요청 본문(명령, 호출 맥락, 결과 문장, 2.x 원문, 유지보수 보존 기준)이다. 이를 첨부 메타 표와 파일로 옮기면 저장 계약이 바뀌므로(저장소 어댑터·사용 사례·사례표 전체) 첨부 표 이전(장부 D-0092)에서 따로 다룬다. 이 단위는 열을 그대로 둔다. 같은 이유로 DBMS별 폴더 제거(D-0088)는 이 열들을 `${long_text}`로 쓰는 것으로 끝냈다.
 - 번호: 3.0.0은 배포 전이라 `V1_1`·`V6_1`을 없애고 `V1`·`V6` 안으로 합쳐 번호가 1~7로 연속이다(`V2`~`V5`·`V7`의 번호와 이름은 그대로).
-- H2에서 `${long_text}`는 `CHARACTER VARYING(1000000000)`이다. H2 2.4.240의 `getTypeInfo()`는 `CHARACTER LARGE OBJECT`에도 길이(`CREATE_PARAMS = LENGTH`)를 요구한다고 알리므로, 규칙(길이가 필요한 대형 문자 객체형은 긴 텍스트 형이 아니다)에 따라 길이를 쓰는 VARCHAR 중 가장 큰 것이 뽑힌다. 이전 판의 H2 벤더 스크립트는 `CLOB`이었다. 시험은 모두 통과하며 열의 의미(NOT NULL, 최대 크기 이상)는 같다. 이 규칙은 공통 형식 판 3에서 바뀌며 다음 단위에서 반영한다.
+- H2에서 `${long_text}`는 `CHARACTER LARGE OBJECT(2147483647)`이다. H2 2.4.240의 `getTypeInfo()`는 `CHARACTER LARGE OBJECT`에 `CREATE_PARAMS = LENGTH`와 `PRECISION = 2147483647`을 보고하고, 판 3 규칙은 이 형을 빼지 않으므로 그 최대 크기를 적어 선언한다. 이전 판의 H2 벤더 스크립트는 `CLOB`이었고, 지금과 열의 의미(NOT NULL, 큰 문자 객체)가 같다. H2가 이 선언을 받아들이는 것은 시험으로 확인했다: 이 선언으로 만든 열에 한글을 포함한 40만 자를 넣고 그대로 읽는다(S-D0109-13 (b)), 열 12개가 모두 이 형이다(S-D0109-21). 규칙이 판 3 이전에는 길이가 필요한 대형 문자 객체형을 빼고 `CHARACTER VARYING(1000000000)`을 골랐다.
 - 지금 스크립트에는 `CLOB`·`TEXT` 같은 DBMS의 형 이름이 없다(S-D0109-21). 다른 DBMS의 `${long_text}` 결과(`text`, `LONGTEXT` 등)는 후보 목록 단위 시험(`LongTextTypeTest`)으로만 확인한다. 실제 다른 DBMS에서의 실행은 개발원칙 7.3에 따라 시험하지 않는다.
 
 ## 한계와 운영자 복구

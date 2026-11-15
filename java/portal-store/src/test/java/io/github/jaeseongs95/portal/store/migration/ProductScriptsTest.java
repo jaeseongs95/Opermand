@@ -91,7 +91,7 @@ class ProductScriptsTest {
         assertThat(offenders).isEmpty();
         assertThat(placeholders).as("every long-text column of the schema comes from the placeholder").isEqualTo(LONG_TEXT_COLUMNS.size());
 
-        // What the driver of this database reports for a long text (H2 2.4.240 asks for a length of its CHARACTER LARGE OBJECT, so the rule chooses CHARACTER VARYING(1000000000));
+        // What the driver of this database reports for a long text (H2 2.4.240 lists a length for its CHARACTER LARGE OBJECT, which the rule still chooses, declared with its largest size);
         // the columns of the schema are exactly the twelve of the list, all of that type and size.
         DataSource database = freshDatabase();
         LongTextType chosen;

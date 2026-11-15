@@ -13,17 +13,42 @@ import io.github.jaeseongs95.portal.store.migration.MigrationException.Reason;
 
 /**
  * S-D0109-13 (a): the choice of the long text type from what a driver reports in {@code getTypeInfo()}. The lists are what the drivers report in the shape of each family;
- * no DBMS name is in the rule: a character large object type that needs no length comes first, then a VARCHAR that needs no length, then the VARCHAR of the largest size.
+ * no DBMS name is in the rule: a character large object type comes first (whatever parameters it lists), then a VARCHAR that needs no length, then the VARCHAR of the largest size;
+ * the type is declared with its largest size when it lists parameters, and by its name alone when it does not.
  */
 class LongTextTypeTest {
 
     @Test
-    @DisplayName("S-D0109-13: a database with a character large object type (the H2 shape) gets that type, whatever VARCHAR it also has")
-    void aLargeObjectTypeComesFirst() {
+    @DisplayName("S-D0109-13: the H2 shape (a CLOB that lists CREATE_PARAMS) gets that type, declared with its largest size, whatever VARCHAR it also has")
+    void aLargeObjectTypeThatListsParametersComesFirstWithItsSize() {
         LongTextType chosen = LongTextType.choose(List.of(new LongTextType("CHARACTER VARYING", Types.VARCHAR, 1_000_000_000L, true),
-            new LongTextType("CHARACTER LARGE OBJECT", Types.CLOB, 2_147_483_647L, false), new LongTextType("CHAR", Types.CHAR, 1, true)));
+            new LongTextType("CHARACTER LARGE OBJECT", Types.CLOB, 2_147_483_647L, true), new LongTextType("CHAR", Types.CHAR, 1, true)));
 
-        assertThat(chosen.declaration()).isEqualTo("CHARACTER LARGE OBJECT");
+        assertThat(chosen.declaration()).isEqualTo("CHARACTER LARGE OBJECT(2147483647)");
+    }
+
+    @Test
+    @DisplayName("S-D0109-13: the Db2 shape (CLOB with a length, a smaller VARCHAR) gets CLOB with its largest size")
+    void theDb2ShapeGetsClobWithItsSize() {
+        LongTextType chosen = LongTextType.choose(List.of(new LongTextType("VARCHAR", Types.VARCHAR, 32_672L, true), new LongTextType("CLOB", Types.CLOB, 2_147_483_647L, true)));
+
+        assertThat(chosen.declaration()).isEqualTo("CLOB(2147483647)");
+    }
+
+    @Test
+    @DisplayName("S-D0109-13: a large object type that lists no parameters is declared by its name alone, and comes before a VARCHAR that needs no length")
+    void aLargeObjectTypeWithoutParametersIsDeclaredByName() {
+        LongTextType chosen = LongTextType.choose(List.of(new LongTextType("text", Types.VARCHAR, 2_147_483_647L, false), new LongTextType("CLOB", Types.CLOB, 4_294_967_295L, false)));
+
+        assertThat(chosen.declaration()).isEqualTo("CLOB");
+    }
+
+    @Test
+    @DisplayName("S-D0109-13: a large object type that asks for a length is not left out: it still comes before a VARCHAR that needs none")
+    void aLargeObjectTypeIsNotLeftOutForItsParameters() {
+        LongTextType chosen = LongTextType.choose(List.of(new LongTextType("text", Types.VARCHAR, 2_147_483_647L, false), new LongTextType("CLOB", Types.CLOB, 1_000_000L, true)));
+
+        assertThat(chosen.declaration()).isEqualTo("CLOB(1000000)");
     }
 
     @Test

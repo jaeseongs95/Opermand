@@ -15,12 +15,15 @@ import io.github.jaeseongs95.portal.store.migration.MigrationException.Reason;
  * declared with a length. The migration scripts write the database's long text type as {@code ${long_text}}. SQL has no one name for it (CLOB, TEXT, LONGTEXT, VARCHAR(max) ...),
  * so the runner asks the driver which type to use. No list of DBMS names is kept here: the choice is made from what the driver says.
  *
- * <p>The rule ({@link #choose(List)}): a character large object type ({@code CLOB}, {@code LONGVARCHAR}) that needs no length, the one of the largest size; where there is none,
- * a {@code VARCHAR} type that needs no length (PostgreSQL's {@code text}), else the {@code VARCHAR} type of the largest size written with that size.
+ * <p>The rule ({@link #choose(List)}, common format edition 3): a character large object type ({@code CLOB}, {@code LONGVARCHAR}) comes before any {@code VARCHAR}, and its
+ * {@code CREATE_PARAMS} does not disqualify it: the driver only says that parameters may be given to the type (JDBC {@code getTypeInfo}: "parameters used in creating the type (may be
+ * null)"), not that they are required. Where there is none, a {@code VARCHAR} type that needs no length (PostgreSQL's {@code text}), else the {@code VARCHAR} type of the largest
+ * size. The type chosen is declared without a length when its {@code CREATE_PARAMS} is empty, and with the largest {@code PRECISION} the driver reports when it is not (a database
+ * that takes the length as optional may give a small default to a type declared without it, for instance 1M characters for a Db2 {@code CLOB}).
  */
 record LongTextType(String name, int sqlType, long precision, boolean needsLength) {
 
-    /** How a column of this type is declared. */
+    /** How a column of this type is declared: with its largest size when the driver lists parameters for the type, else by name alone. */
     String declaration() {
         return needsLength ? name + "(" + precision + ")" : name;
     }
@@ -39,7 +42,7 @@ record LongTextType(String name, int sqlType, long precision, boolean needsLengt
                 .orElseThrow(() -> new MigrationException(Reason.MIGRATION_FAILED, "The database reports no character type that holds a long text."));
     }
 
-    /** Best first: large object types before VARCHAR, a type that needs no length before one that does, then the larger size, then the name (so the choice is the same on every run). */
+    /** Best first: large object types before VARCHAR whatever they ask for, then a type that needs no length before one that does, then the larger size, then the name (so the choice is the same on every run). */
     private static final Comparator<LongTextType> RANK = Comparator
             .comparingInt((LongTextType type) -> type.sqlType() == Types.VARCHAR ? 1 : 0)
             .thenComparing(LongTextType::needsLength)
@@ -58,7 +61,6 @@ record LongTextType(String name, int sqlType, long precision, boolean needsLengt
                 found.add(new LongTextType(rows.getString("TYPE_NAME"), sqlType, rows.getLong("PRECISION"), params != null && !params.isBlank()));
             }
         }
-        // A large object type that asks for a length is no long text type; a VARCHAR that does is, with its largest size.
-        return found.stream().filter(type -> type.sqlType() == Types.VARCHAR || !type.needsLength()).toList();
+        return found;
     }
 }
