@@ -44,6 +44,7 @@ import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
 import io.github.jaeseongs95.portal.domain.target.TargetRevision;
 import io.github.jaeseongs95.portal.store.Savepoints;
 import io.github.jaeseongs95.portal.store.StoreTest;
+import io.github.jaeseongs95.portal.store.sql.SqlBuilder;
 
 /**
  * RC-A-027 .. RC-A-029 (2.x {@code test/agent-cli-history.test.mjs}) and the install request round trip. The history cases run on the keyset reader because the
@@ -52,7 +53,7 @@ import io.github.jaeseongs95.portal.store.StoreTest;
  * {@code HistoryCursor.After}, so only an unknown row remains to be refused. The 2.x assertion that the serialized page has no command text belongs to the web layer.
  */
 @StoreTest
-@Import({JdbcAgentCliRequestStore.class, AgentCliMapper.class, AgentCliHistoryReader.class, JdbcAgentCliRequestStoreTest.StubHistory.class})
+@Import({JdbcAgentCliRequestStore.class, AgentCliMapper.class, AgentCliHistoryReader.class, SqlBuilder.class, JdbcAgentCliRequestStoreTest.StubHistory.class})
 class JdbcAgentCliRequestStoreTest {
 
     private static final Instant T1000 = Instant.ofEpochMilli(1000);
@@ -64,12 +65,14 @@ class JdbcAgentCliRequestStoreTest {
     private final AgentCliHistoryReader reader;
     private final JdbcTemplate jdbc;
     private final Savepoints savepoints;
+    private final SqlBuilder sql;
 
-    JdbcAgentCliRequestStoreTest(JdbcAgentCliRequestStore store, AgentCliHistoryReader reader, JdbcTemplate jdbc, Savepoints savepoints) {
+    JdbcAgentCliRequestStoreTest(JdbcAgentCliRequestStore store, AgentCliHistoryReader reader, JdbcTemplate jdbc, Savepoints savepoints, SqlBuilder sql) {
         this.store = store;
         this.reader = reader;
         this.jdbc = jdbc;
         this.savepoints = savepoints;
+        this.sql = sql;
     }
 
     /** A stand-in for the journal's read port: it knows no operation, which is all the wiring test needs. */
@@ -153,6 +156,67 @@ class JdbcAgentCliRequestStoreTest {
         union.addAll(ids(third));
         assertThat(union).hasSize(41);
         assertThat(ids(reader.slice(binding(AgentCliProviderId.CODEX), new HistoryCursor.FirstPage())).get(0)).isEqualTo(arrival);
+    }
+
+    @Test
+    @DisplayName("S-SQLB-11: the statement is written by the SqlBuilder; the row limit and the keyset condition are in the SQL and every value is a placeholder")
+    void theStatementCarriesTheKeysetConditionAndTheRowLimit() {
+        String select = """
+            SELECT o.id AS operation_id, o.created_at AS created_at
+            FROM agent_cli_request r JOIN operation o ON o.id = r.operation_id
+            WHERE r.provider = :provider AND o.target_id = :targetId AND o.target_revision = :targetRevision AND o.profile = :profile""";
+        String newestFirst = " ORDER BY o.created_at DESC, o.id DESC " + sql.generateLimit(":limit");
+
+        assertThat(reader.statement(false)).isEqualTo(select + newestFirst);
+        assertThat(reader.statement(true)).isEqualTo(select + " AND (o.created_at < :createdAt OR (o.created_at = :createdAt AND o.id < :id))" + newestFirst);
+    }
+
+    @Test
+    @DisplayName("S-SQLB-12: exactly one page of requests is one page of 20 and the End cursor")
+    void exactlyOnePageHasNoNextPage() {
+        for (int number = 1; number <= AgentCliHistoryReader.PAGE_SIZE; number++) {
+            insertRequest(number, T1000);
+        }
+
+        AgentCliHistoryReader.Slice page = reader.slice(binding(AgentCliProviderId.CODEX), new HistoryCursor.FirstPage());
+
+        assertThat(ids(page)).isEqualTo(numbers(20, 1));
+        assertThat(page.next()).isEqualTo(new HistoryCursor.End());
+    }
+
+    @Test
+    @DisplayName("S-SQLB-13: one request more than a page gives a full page with the keyset cursor of its last entry, then a page of one and the End cursor")
+    void oneRequestMoreThanAPageHasANextPage() {
+        for (int number = 1; number <= AgentCliHistoryReader.PAGE_SIZE + 1; number++) {
+            insertRequest(number, T1000);
+        }
+
+        AgentCliHistoryReader.Slice first = reader.slice(binding(AgentCliProviderId.CODEX), new HistoryCursor.FirstPage());
+        assertThat(ids(first)).isEqualTo(numbers(21, 2));
+        assertThat(first.next()).isEqualTo(new HistoryCursor.After(T1000, operationId(2)));
+
+        AgentCliHistoryReader.Slice second = reader.slice(binding(AgentCliProviderId.CODEX), first.next());
+        assertThat(ids(second)).isEqualTo(numbers(1, 1));
+        assertThat(second.next()).isEqualTo(new HistoryCursor.End());
+    }
+
+    @Test
+    @DisplayName("S-SQLB-14: the page boundary falls inside a group of equal creation times and the next page neither skips nor repeats a request")
+    void theKeysetBoundaryInsideAGroupOfEqualTimes() {
+        for (int number = 1; number <= 11; number++) {
+            insertRequest(number, T1000);
+        }
+        for (int number = 12; number <= 22; number++) {
+            insertRequest(number, T2000);
+        }
+
+        AgentCliHistoryReader.Slice first = reader.slice(binding(AgentCliProviderId.CODEX), new HistoryCursor.FirstPage());
+        assertThat(ids(first)).isEqualTo(numbers(22, 3));
+        assertThat(first.next()).isEqualTo(new HistoryCursor.After(T1000, operationId(3)));
+
+        AgentCliHistoryReader.Slice second = reader.slice(binding(AgentCliProviderId.CODEX), first.next());
+        assertThat(ids(second)).isEqualTo(numbers(2, 1));
+        assertThat(second.next()).isEqualTo(new HistoryCursor.End());
     }
 
     @Test
@@ -266,6 +330,13 @@ class JdbcAgentCliRequestStoreTest {
             assertThatThrownBy(() -> savepoints.run(() -> jdbc.update("UPDATE agent_cli_request SET remote_cleanup_failures = ? WHERE operation_id = ?", count, id.value())))
                 .as("the table refuses a stored count of %d", count).isInstanceOf(DataIntegrityViolationException.class);
         }
+    }
+
+    /** One install request of the CODEX binding of {@link #binding} whose operation was created at {@code createdAt}. */
+    private void insertRequest(int number, Instant createdAt) {
+        OperationId id = operationId(number);
+        insertOperation(id, createdAt, "alpha", REVISION_A, "alpha-write");
+        store.insert(install(id, AgentCliProviderId.CODEX, new RemoteStatus.NotReported()));
     }
 
     private List<OperationId> ids(AgentCliHistoryReader.Slice slice) {
