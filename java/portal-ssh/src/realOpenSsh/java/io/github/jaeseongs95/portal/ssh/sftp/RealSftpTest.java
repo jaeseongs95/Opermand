@@ -82,7 +82,7 @@ class RealSftpTest {
         SftpChannels channels = new SftpChannels();
         ElevationProbe probe = new ElevationProbe(server.executor(), id -> new TargetLookup.NotRegistered(id));
         transfer = new MinaRemoteFileTransfer(server.sessions(), channels, checker, new SftpUploader(checker, replacer, classifier, channels, new SpaceProbe()),
-            new SftpDownloader(checker, classifier), classifier, new SudoSftpChannels(channels, classifier), probe, scheduler, Clock.systemUTC(),
+            new SftpDownloader(checker, classifier, channels), classifier, new SudoSftpChannels(channels, classifier), probe, scheduler, Clock.systemUTC(),
             List.of(new io.github.jaeseongs95.portal.ssh.platform.WindowsReparseProbe(new WindowsCommandWrapper(new RemoteScripts()), server.executor())));
         target = new RemoteTarget(new TargetId("realserver"), TargetRevision.of("b".repeat(64)), new ProfileAlias("writer"), AccessMode.READ_WRITE);
         directoryName = "ssh-approval-portal-test-" + HexFormat.of().formatHex(new SecureRandom().generateSeed(6));

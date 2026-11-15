@@ -122,7 +122,7 @@ final class TransferBed implements AutoCloseable {
         this.replacer = new AtomicReplacer(checker, classifier, new SecureRandom(), Clock.systemUTC());
         SpaceProbe spaceProbe = new SpaceProbe();
         SftpUploader uploader = new SftpUploader(checker, replacer, classifier, channels, spaceProbe);
-        SftpDownloader downloader = new SftpDownloader(checker, classifier);
+        SftpDownloader downloader = new SftpDownloader(checker, classifier, channels);
         TargetSource noTargets = id -> new TargetLookup.NotRegistered(id);
         ElevationProbe probe = new ElevationProbe(executor, noTargets);
         SudoSftpChannels sudoChannels = new SudoSftpChannels(channels, classifier, List.of(EMPTY_PLACE, SUDO_SERVER));
