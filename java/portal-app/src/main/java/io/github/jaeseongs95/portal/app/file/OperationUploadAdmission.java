@@ -16,8 +16,8 @@ import io.github.jaeseongs95.portal.domain.operation.OperationKind;
 /**
  * {@link UploadAdmission} over the request entrance and the operation intake that every other request goes through (stage 3 design 8.2 groups G4 and G6): a place at the
  * {@link RequestAdmission} first (a full line, a closed entrance and a wait that ran out are the entrance's own refusals), then {@link OperationIntake#submit}, which judges
- * maintenance and the request store, writes the journal once per request key and contract, audits and announces the operation. The upload waits for the owner like any
- * operation; the place at the entrance is given back as soon as the operation is accepted, so the owner's decision never holds it.
+ * maintenance and the request store, writes the journal once per request key and contract, audits and announces the operation. The owner's rule judges the upload like any
+ * operation (it is queued, denied or left to the owner); the place at the entrance is given back as soon as the operation is accepted, so the owner's decision never holds it.
  *
  * <p>The method blocks the calling thread while it waits for a place, for at most the entrance's maximum wait.
  */

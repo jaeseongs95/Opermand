@@ -88,10 +88,14 @@ class OperationStorage {
         return Operation.restore(mapper.snapshot(row, input, decision, result));
     }
 
-    /** Inserts a new operation: its row, its input rows and the event of its first version. */
+    /**
+     * Inserts a new operation in the state its admission decided: its row, its input rows, its decision and the event of its first version. A queued operation also
+     * takes its place in the ready order, as a transition into {@code QUEUED} does in {@link #persist}.
+     */
     void insertNew(Operation operation) {
         OperationSnapshot s = operation.snapshot();
-        aggregates.insert(mapper.operationRow(s, null, null, null));
+        boolean queued = s.state() == OperationState.QUEUED;
+        aggregates.insert(mapper.operationRow(s, queued ? operations.maxReadySequence() + 1 : null, queued ? s.updatedAt() : null, null));
         switch (s.input()) {
             case CommandInput command -> aggregates.insert(mapper.commandRow(s.id(), command));
             case SourceInput source -> aggregates.insert(mapper.sourceRow(s.id(), source));
@@ -101,6 +105,7 @@ class OperationStorage {
                 // The digest of the intent is the column input_digest of the operation row; the rest of the install is AgentCliRequestStore's.
             }
         }
+        writeDecision(s);
         aggregates.insert(new OperationEventRow(s.id().value(), s.version(), s.state(), s.updatedAt()));
     }
 
@@ -125,7 +130,7 @@ class OperationStorage {
                 readyAt = s.updatedAt();
             }
             case STARTING -> startedAt = s.updatedAt();
-            case ACCEPTED, PENDING, EVALUATING, RUNNING, TERMINATING, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN -> {
+            case PENDING, RUNNING, TERMINATING, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN -> {
                 // The ready position and the start belong to the transitions into QUEUED and STARTING only.
             }
         }

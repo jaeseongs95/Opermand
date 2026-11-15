@@ -14,7 +14,7 @@ import java.time.Instant;
 import java.util.Objects;
 
 /**
- * One operation, from the request to the end, in one type. It holds all thirteen states and every transition is a method that returns the next operation; the
+ * One operation, from the request to the end, in one type. It holds all eleven states and every transition is a method that returns the next operation; the
  * object itself never changes. A transition the state table does not allow (or whose condition does not hold) throws a {@link RequestRefusedException} with the
  * code {@code INVALID_OPERATION_TRANSITION}, and nothing is changed. Every transition adds one to the version and the store writes one event for it.
  *
@@ -22,7 +22,7 @@ import java.util.Objects;
  * <ul>
  *   <li>A completed result needs {@link CompletionEvidence} that confirms it; without it the outcome is unknown, never completed (defect D-0035).
  *   <li>An unknown operation is never replayed: it moves only to a reconciled result, through {@link #reconcile}.
- *   <li>The contract (owner, target, revision, kind, input, conflict key, deadline) never changes after {@link #accept}.
+ *   <li>The contract (owner, target, revision, kind, input, conflict key, deadline) never changes after {@link #admit}.
  *   <li>Time is an argument. A use case reads the clock once and passes the same instant to every transition it makes.
  * </ul>
  *
@@ -37,18 +37,36 @@ public final class Operation {
     }
 
     /**
-     * Accepts a request: version 1, state {@code ACCEPTED}. A use case moves it on in the same transaction ({@link #beginEvaluation} or {@link #awaitOwnerDecision}),
-     * so an observer never sees {@code accepted}. The deadline is the one the caller asked for, which has to lie after {@code at} and within one hour of it, or one
-     * hour after {@code at} when the caller asked for none.
+     * Admits a request: version 1, and the first state is what the approval decided at intake ({@link Admission}): {@code QUEUED} under the server's policy,
+     * {@code DENIED} when a rule forbids it, {@code PENDING} when the owner has to decide. There is no state before the judgement (defect D-0119). The deadline is the
+     * one the caller asked for, which has to lie after {@code at} and within one hour of it, or one hour after {@code at} when the caller asked for none.
      */
-    public static Operation accept(NewOperation spec, OperationId id, Instant at) {
+    public static Operation admit(NewOperation spec, OperationId id, Instant at, Admission admission) {
         Objects.requireNonNull(spec, "spec");
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(at, "at");
+        Objects.requireNonNull(admission, "admission");
         Deadline expiry = spec.requestedExpiry().resolve(at);
+        OperationState state;
+        ApprovalMode mode = ApprovalMode.NOT_DECIDED;
+        Settlement settlement = new Settlement.Unsettled();
+        switch (admission) {
+            case Admission.Queue queue -> {
+                if (!queue.authority().covers(spec.kind())) {
+                    throw new IllegalArgumentException("The authority does not cover " + spec.kind());
+                }
+                state = OperationState.QUEUED;
+                mode = queue.authority().mode();
+            }
+            case Admission.Deny deny -> {
+                state = OperationState.DENIED;
+                settlement = new Settlement.Settled(new RecordedResult.NoResult(), OutcomeCertainty.NOT_DISPATCHED, Reconciliation.NOT_REQUIRED, at);
+            }
+            case Admission.Review review -> state = OperationState.PENDING;
+        }
         return new Operation(new OperationSnapshot(id, spec.requestKey(), spec.owner(), spec.targetId(), spec.targetRevision(), spec.kind(), spec.input(),
-            spec.contractDigest(), at, expiry, spec.conflictKey(), OperationState.ACCEPTED, 1L, at, ApprovalMode.NOT_DECIDED, new DecisionRecord.NoDecision(),
-            new Settlement.Unsettled(), RecoveryReason.NONE, new CancellationRequest.NotRequested(), spec.profile(), AuditState.NONE));
+            spec.contractDigest(), at, expiry, spec.conflictKey(), state, 1L, at, mode, admission.decision(), settlement, RecoveryReason.NONE,
+            new CancellationRequest.NotRequested(), spec.profile(), AuditState.NONE));
     }
 
     /** Takes a stored operation back and checks its invariants again; a stored record that breaks one is refused as {@code INVALID_OPERATION_RECORD}. */
@@ -80,7 +98,7 @@ public final class Operation {
         }
         boolean decided = s.approvalMode() != ApprovalMode.NOT_DECIDED;
         switch (s.state()) {
-            case ACCEPTED, EVALUATING, PENDING -> {
+            case PENDING -> {
                 if (decided) {
                     throw new IllegalArgumentException("An operation that is not yet approved has no approval mode");
                 }
@@ -198,30 +216,9 @@ public final class Operation {
         return snapshot.contractDigest().equals(digest);
     }
 
-    /** T2: the automatic approval starts evaluating the operation. */
-    public Operation beginEvaluation(Instant at) {
-        requireMove(OperationState.EVALUATING);
-        return new Operation(snapshot.advanced(OperationState.EVALUATING, at));
-    }
-
-    /** T3: evaluation is over, or there was none; the owner decides. */
-    public Operation awaitOwnerDecision(Instant at) {
-        requireMove(OperationState.PENDING);
-        return new Operation(snapshot.advanced(OperationState.PENDING, at));
-    }
-
-    /** Records the automatic approval's decision. The state stays; the version moves, as for every change. */
-    public Operation recordDecision(DecisionRecord decision, Instant at) {
-        Objects.requireNonNull(decision, "decision");
-        return switch (state()) {
-            case ACCEPTED, EVALUATING, PENDING -> new Operation(snapshot.advanced(state(), at).withDecision(decision));
-            case QUEUED, STARTING, RUNNING, TERMINATING, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN -> throw invalidTransition(state(), "record a decision");
-        };
-    }
-
     /**
-     * T4: approved, and waiting in the execution queue. The deadline must not have passed and the authority must cover the kind of operation; the authority
-     * decides the approval mode.
+     * T4: the owner approved a pending operation, and it waits in the execution queue. The deadline must not have passed and the authority must cover the kind of
+     * operation; the authority decides the approval mode. (An operation the rule lets run is queued by {@link #admit}, not here.)
      */
     public Operation enqueue(StartAuthority authority, Instant at) {
         Objects.requireNonNull(authority, "authority");
@@ -267,7 +264,7 @@ public final class Operation {
      */
     public Operation requestCancel(Instant at) {
         return switch (state()) {
-            case ACCEPTED, EVALUATING, PENDING, QUEUED ->
+            case PENDING, QUEUED ->
                 settledAs(OperationState.CANCELLED, new RecordedResult.NoResult(), OutcomeCertainty.NOT_DISPATCHED, RecoveryReason.NONE, at);
             case STARTING, RUNNING -> new Operation(snapshot.advanced(OperationState.TERMINATING, at).withCancellation(new CancellationRequest.RequestedAt(at)));
             case TERMINATING, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN -> this;
@@ -280,7 +277,7 @@ public final class Operation {
         return switch (state()) {
             case PENDING, QUEUED, STARTING ->
                 settledAs(OperationState.FAILED, new RecordedResult.Refused(failure), OutcomeCertainty.NOT_DISPATCHED, RecoveryReason.NONE, at);
-            case ACCEPTED, EVALUATING, RUNNING, TERMINATING, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN ->
+            case RUNNING, TERMINATING, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN ->
                 throw invalidTransition(OperationState.FAILED, "be refused before dispatch");
         };
     }
@@ -307,7 +304,7 @@ public final class Operation {
     }
 
     /**
-     * T18, T20, T21: the bridge started again and found the operation in flight. What was running (or being evaluated) is unknown, what waited for the owner
+     * T18, T20, T21: the bridge started again and found the operation in flight. What was running is unknown, what waited for the owner
      * expires, and what already ended stays as it is. Nothing is replayed. A queued operation is left as it is (main's ruling, T19 withdrawn): the journal is
      * durable and the claim from queued to starting happens before any external effect in one transaction, so a queued operation was certainly never tried; the
      * scheduler dispatches or expires it as usual (case B-200).
@@ -315,19 +312,9 @@ public final class Operation {
     public Operation recoverAfterRestart(Instant at) {
         return switch (state()) {
             case PENDING -> settledAs(OperationState.EXPIRED, new RecordedResult.NoResult(), OutcomeCertainty.NOT_DISPATCHED, RecoveryReason.BRIDGE_RESTART, at);
-            case ACCEPTED, EVALUATING, STARTING, RUNNING, TERMINATING ->
+            case STARTING, RUNNING, TERMINATING ->
                 settledAs(OperationState.UNKNOWN, new RecordedResult.NoResult(), OutcomeCertainty.UNKNOWN, RecoveryReason.BRIDGE_RESTART, at);
             case QUEUED, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN -> this;
-        };
-    }
-
-    /** T23: evaluating the approval or storing the operation was interrupted; what happened is not known. */
-    public Operation abortEvaluation(Instant at) {
-        return switch (state()) {
-            case ACCEPTED, EVALUATING, QUEUED ->
-                settledAs(OperationState.UNKNOWN, new RecordedResult.NoResult(), OutcomeCertainty.UNKNOWN, RecoveryReason.NONE, at);
-            case PENDING, STARTING, RUNNING, TERMINATING, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN ->
-                throw invalidTransition(OperationState.UNKNOWN, "abort an evaluation");
         };
     }
 

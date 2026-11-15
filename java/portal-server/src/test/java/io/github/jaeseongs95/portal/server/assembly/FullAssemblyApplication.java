@@ -39,7 +39,7 @@ class FullAssemblyApplication {
     static final String PASSWORD = "embedded-test-password";
 
     /** The command the server answers: its exact text, what it prints. */
-    static final String COMMAND = "echo ok";
+    static final String COMMAND = "touch ok";
     static final String COMMAND_OUTPUT = "ok\n";
 
     @Bean

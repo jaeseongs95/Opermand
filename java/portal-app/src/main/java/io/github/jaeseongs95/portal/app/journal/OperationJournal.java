@@ -5,6 +5,7 @@ import java.util.Optional;
 
 import io.github.jaeseongs95.portal.domain.id.OperationId;
 import io.github.jaeseongs95.portal.domain.id.RequestKey;
+import io.github.jaeseongs95.portal.domain.operation.Admission;
 import io.github.jaeseongs95.portal.domain.operation.NewOperation;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
 import io.github.jaeseongs95.portal.domain.operation.OperationEvent;
@@ -16,11 +17,12 @@ import io.github.jaeseongs95.portal.domain.operation.OperationEvent;
 public interface OperationJournal {
 
     /**
-     * Stores a new operation. The request key is unique: the same key with the same contract returns {@link JournalInsert.Existing}, the same key with another contract
+     * Stores a new operation in the state the admission decided (queued with its place in the ready order, denied, or pending), with its decision and the event of its first
+     * version, in one transaction. The request key is unique: the same key with the same contract returns {@link JournalInsert.Existing}, the same key with another contract
      * throws {@code RequestRefusedException(OPERATION_KEY_CONFLICT)}. The implementation makes the id and the time (an {@code OperationIdGenerator} and the one
      * {@code Clock}) and writes the first event in the same transaction.
      */
-    JournalInsert accept(NewOperation spec);
+    JournalInsert accept(NewOperation spec, Admission admission);
 
     /** {@code Optional} here has the one meaning "no such operation". */
     Optional<Operation> find(OperationId id);

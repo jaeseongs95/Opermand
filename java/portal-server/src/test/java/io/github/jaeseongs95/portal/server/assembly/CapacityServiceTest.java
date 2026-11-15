@@ -28,6 +28,8 @@ import io.github.jaeseongs95.portal.domain.id.Digester;
 import io.github.jaeseongs95.portal.domain.id.OwnerId;
 import io.github.jaeseongs95.portal.domain.id.RequestKey;
 import io.github.jaeseongs95.portal.domain.id.TargetId;
+import io.github.jaeseongs95.portal.domain.operation.Admission;
+import io.github.jaeseongs95.portal.domain.operation.DecisionReason;
 import io.github.jaeseongs95.portal.domain.operation.CommandInput;
 import io.github.jaeseongs95.portal.domain.operation.ConflictKey;
 import io.github.jaeseongs95.portal.domain.operation.Deadline;
@@ -150,8 +152,7 @@ class CapacityServiceTest {
         RequestKey key = new RequestKey(String.format("capacity-request-%010d", KEYS.incrementAndGet()));
         NewOperation spec = NewOperation.of(digester, key, new OwnerId("owner"), FakeTargets.WINDOWS_ID, new FakeTargets(digester).windows().revision(),
             FakeTargets.LINUX_WRITE, new CommandInput(new CommandText("echo capacity"), new Utf8Text("caller"), new Utf8Text("display")), new ConflictKey.None(), new Deadline.None());
-        Operation accepted = journal.accept(spec).operation();
-        Operation pending = journal.save(accepted.awaitOwnerDecision(clock.instant()), accepted.version());
+        Operation pending = journal.accept(spec, Admission.of(DecisionReason.NO_MATCHING_RULE, spec.kind(), 0L)).operation();
         return journal.save(pending.enqueue(new StartAuthority.Owner(), clock.instant()), pending.version());
     }
 

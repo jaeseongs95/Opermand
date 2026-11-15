@@ -71,7 +71,7 @@
                 "operationKey": { "$ref": "#/$defs/key" },
                 "action": { "enum": ["copy", "move"] },
                 "requestId": { "$ref": "#/$defs/identifier" },
-                "state": { "enum": ["accepted", "queued", "starting", "running", "terminating", "completed", "failed", "cancelled", "expired", "denied", "unknown", "admission-unconfirmed", "refused"] }
+                "state": { "enum": ["pending", "queued", "starting", "running", "terminating", "completed", "failed", "cancelled", "expired", "denied", "unknown", "admission-unconfirmed", "refused"] }
               }
             }
           }
@@ -109,7 +109,7 @@
           "id": { "$ref": "#/$defs/identifier" },
           "operationKey": { "anyOf": [{ "$ref": "#/$defs/key" }, { "type": "null" }] },
           "kind": { "enum": ["command", "source", "upload", "download"] },
-          "state": { "enum": ["accepted", "pending", "evaluating", "queued", "starting", "running", "terminating", "completed", "failed", "cancelled", "denied", "expired", "unknown"] },
+          "state": { "enum": ["pending", "queued", "starting", "running", "terminating", "completed", "failed", "cancelled", "denied", "expired", "unknown"] },
           "targetId": { "anyOf": [{ "$ref": "#/$defs/target" }, { "type": "null" }] },
           "targetRevision": { "anyOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
           "approvalMode": { "enum": ["owner", "automatic", null] },

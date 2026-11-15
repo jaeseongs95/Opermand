@@ -4,10 +4,10 @@ import com.fasterxml.jackson.annotation.JsonValue;
 
 /**
  * {@code stagedFile.operations[].state} on the wire (public-contract.mjs:71): the operation states plus the two a placement can have before an operation exists.
- * It is not the 13 operation states: {@code pending} and {@code evaluating} are absent and {@code admission-unconfirmed} and {@code refused} are present.
+ * It is all 11 operation states ({@code accepted} and {@code evaluating} do not exist, defect D-0119).
  */
 public enum StagedOperationStateWire {
-    ACCEPTED("accepted"), QUEUED("queued"), STARTING("starting"), RUNNING("running"), TERMINATING("terminating"), COMPLETED("completed"), FAILED("failed"),
+    PENDING("pending"), QUEUED("queued"), STARTING("starting"), RUNNING("running"), TERMINATING("terminating"), COMPLETED("completed"), FAILED("failed"),
     CANCELLED("cancelled"), EXPIRED("expired"), DENIED("denied"), UNKNOWN("unknown"), ADMISSION_UNCONFIRMED("admission-unconfirmed"), REFUSED("refused");
 
     private final String wire;

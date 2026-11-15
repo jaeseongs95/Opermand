@@ -17,6 +17,7 @@ import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
 import io.github.jaeseongs95.portal.domain.id.OperationIdGenerator;
 import io.github.jaeseongs95.portal.domain.id.RequestKey;
+import io.github.jaeseongs95.portal.domain.operation.Admission;
 import io.github.jaeseongs95.portal.domain.operation.NewOperation;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
 import io.github.jaeseongs95.portal.domain.operation.OperationEvent;
@@ -54,12 +55,12 @@ public class JdbcOperationJournal implements OperationJournal {
 
     @Override
     @Transactional
-    public JournalInsert accept(NewOperation spec) {
+    public JournalInsert accept(NewOperation spec, Admission admission) {
         Optional<OperationRow> known = operations.findByRequestKey(spec.requestKey().value());
         if (known.isPresent()) {
             return answerFor(known.orElseThrow(), spec);
         }
-        Operation created = Operation.accept(spec, ids.next(), clock.instant());
+        Operation created = Operation.admit(spec, ids.next(), clock.instant(), admission);
         try {
             savepoints.run(() -> storage.insertNew(created));
             return new JournalInsert.Inserted(created);

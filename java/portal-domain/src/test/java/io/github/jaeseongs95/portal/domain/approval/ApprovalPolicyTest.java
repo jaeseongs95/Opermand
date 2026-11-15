@@ -1,6 +1,7 @@
 package io.github.jaeseongs95.portal.domain.approval;
 
 import static io.github.jaeseongs95.portal.domain.operation.OperationFixtures.DIGESTER;
+import static io.github.jaeseongs95.portal.domain.operation.OperationFixtures.command;
 import static io.github.jaeseongs95.portal.domain.operation.OperationFixtures.REVISION;
 import static io.github.jaeseongs95.portal.domain.operation.OperationFixtures.T0;
 import static io.github.jaeseongs95.portal.domain.operation.OperationFixtures.id;
@@ -24,7 +25,9 @@ import io.github.jaeseongs95.portal.domain.id.Digest;
 import io.github.jaeseongs95.portal.domain.id.OwnerId;
 import io.github.jaeseongs95.portal.domain.id.RequestKey;
 import io.github.jaeseongs95.portal.domain.id.TargetId;
+import io.github.jaeseongs95.portal.domain.operation.Admission;
 import io.github.jaeseongs95.portal.domain.operation.ConflictKey;
+import io.github.jaeseongs95.portal.domain.operation.ApprovalMode;
 import io.github.jaeseongs95.portal.domain.operation.Deadline;
 import io.github.jaeseongs95.portal.domain.operation.DecisionKind;
 import io.github.jaeseongs95.portal.domain.operation.DecisionReason;
@@ -32,6 +35,7 @@ import io.github.jaeseongs95.portal.domain.operation.DecisionRecord;
 import io.github.jaeseongs95.portal.domain.operation.Elevation;
 import io.github.jaeseongs95.portal.domain.operation.NewOperation;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
+import io.github.jaeseongs95.portal.domain.operation.OperationKind;
 import io.github.jaeseongs95.portal.domain.operation.OperationState;
 import io.github.jaeseongs95.portal.domain.operation.OverwriteMode;
 import io.github.jaeseongs95.portal.domain.operation.ReviewReason;
@@ -44,6 +48,7 @@ import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.EnumMap;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -101,16 +106,11 @@ class ApprovalPolicyTest {
     }
 
     @Test
-    @DisplayName("RC-A-157 S2-SC-03 a server policy starts a command only with a decision to execute; a read authority needs none; a file policy refuses at the file guard")
+    @DisplayName("RC-A-157 S2-SC-03 a server policy starts a command only with a decision to execute; a file policy refuses at the file guard")
     void policyAuthorityNeedsADecision() {
         Operation pending = pending();
         StartAuthority command = new StartAuthority.Policy(StartAuthority.PolicyScope.COMMAND);
-        assertThat(policy.checkStart(pending, command, open, NOW)).isEqualTo(refused(DispatchReason.AUTHORITY, DispatchStage.AUTHORITY));
-        Operation reviewed = pending.recordDecision(new DecisionRecord.Decided(DecisionKind.REVIEW, DecisionReason.MODEL_REVIEW, ReviewReason.BELOW_THRESHOLD, 3), T0.plusSeconds(2));
-        assertThat(policy.checkStart(reviewed, command, open, NOW)).isEqualTo(refused(DispatchReason.AUTHORITY, DispatchStage.AUTHORITY));
-        Operation approved = pending.recordDecision(new DecisionRecord.Decided(DecisionKind.EXECUTE, DecisionReason.COMMAND_SET, ReviewReason.NONE, 3), T0.plusSeconds(2));
-        assertThat(policy.checkStart(approved, command, open, NOW)).isEqualTo(new StartDecision.Startable());
-        assertThat(policy.checkStart(pending, new StartAuthority.Policy(StartAuthority.PolicyScope.READ), open, NOW)).isEqualTo(new StartDecision.Startable());
+        assertThat(policy.checkStart(pending, command, open, NOW)).as("a review decision is not a decision to execute").isEqualTo(refused(DispatchReason.AUTHORITY, DispatchStage.AUTHORITY));
         Operation upload = pendingUpload();
         StartAuthority files = new StartAuthority.Policy(StartAuthority.PolicyScope.UPLOAD);
         assertThat(policy.checkStart(upload, files, open, NOW)).isEqualTo(refused(DispatchReason.AUTHORITY, DispatchStage.FILE_GUARD));
@@ -132,34 +132,34 @@ class ApprovalPolicyTest {
     }
 
     @Test
-    @DisplayName("RC-A-467 RC-A-469 a command that the server's read authority started (automatic, on the read profile, no decision) is dispatched under the same guards; no other automatic start is let through")
-    void aReadStartIsDispatchedWithoutADecision() {
-        ProfileAlias readProfile = new ProfileAlias("write-profile");
-        Operation read = pending().enqueue(new StartAuthority.Policy(StartAuthority.PolicyScope.READ), T0.plusSeconds(2)).claim(T0.plusSeconds(3));
-        assertThat(policy.checkDispatch(read, readProfile, open, NOW)).isEqualTo(new StartDecision.Startable());
-        assertThat(policy.checkDispatch(read, readProfile, reserved, NOW)).isEqualTo(refused(DispatchReason.MAINTENANCE, DispatchStage.MAINTENANCE));
-        assertThat(policy.checkDispatch(read, readProfile, open, T0.plus(Duration.ofHours(1)))).isEqualTo(refused(DispatchReason.REQUEST_STATE, DispatchStage.REQUEST_STATE));
-        Operation notClaimed = pending().enqueue(new StartAuthority.Policy(StartAuthority.PolicyScope.READ), T0.plusSeconds(2));
-        assertThat(policy.checkDispatch(notClaimed, readProfile, open, NOW)).as("only a claimed operation is dispatched").isEqualTo(refused(DispatchReason.REQUEST_STATE, DispatchStage.REQUEST_STATE));
-
-        assertThat(policy.checkDispatch(read, new ProfileAlias("another-profile"), open, NOW)).as("on a profile that is not the read profile it is a command start without a decision")
-            .isEqualTo(refused(DispatchReason.AUTHORITY, DispatchStage.AUTHORITY));
+    @DisplayName("RC-A-467 RC-A-469 S-D0119-15 the start authority is derived from the stored decision reason and the kind, never from the profile or a missing decision")
+    void theAuthorityFollowsFromTheStoredDecision() {
+        for (DecisionReason reason : List.of(DecisionReason.READ_ONLY, DecisionReason.COMMAND_SET, DecisionReason.TEST_SERVER_BYPASS)) {
+            Operation claimed = claimed(admitted(DecisionReason.READ_ONLY == reason ? "read-only" : reason.name(), reason, OperationKind.COMMAND));
+            assertThat(claimed.approvalMode()).isEqualTo(ApprovalMode.AUTOMATIC);
+            assertThat(policy.checkDispatch(claimed, open, NOW)).as("%s", reason).isEqualTo(new StartDecision.Startable());
+            assertThat(policy.checkDispatch(claimed, reserved, NOW)).isEqualTo(refused(DispatchReason.MAINTENANCE, DispatchStage.MAINTENANCE));
+            assertThat(policy.checkDispatch(claimed, open, T0.plus(Duration.ofHours(1)))).isEqualTo(refused(DispatchReason.REQUEST_STATE, DispatchStage.REQUEST_STATE));
+        }
+        assertThat(StartAuthority.Policy.of(DecisionReason.READ_ONLY, OperationKind.COMMAND)).isEqualTo(new StartAuthority.Policy(StartAuthority.PolicyScope.READ));
+        assertThat(StartAuthority.Policy.of(DecisionReason.COMMAND_SET, OperationKind.COMMAND)).isEqualTo(new StartAuthority.Policy(StartAuthority.PolicyScope.COMMAND));
+        assertThat(StartAuthority.Policy.of(DecisionReason.COMMAND_SET, OperationKind.SOURCE)).isEqualTo(new StartAuthority.Policy(StartAuthority.PolicyScope.COMMAND));
+        assertThat(StartAuthority.Policy.of(DecisionReason.TEST_SERVER_BYPASS, OperationKind.UPLOAD)).isEqualTo(new StartAuthority.Policy(StartAuthority.PolicyScope.UPLOAD));
+        assertThat(StartAuthority.Policy.of(DecisionReason.AUTOMATIC_DOWNLOAD, OperationKind.DOWNLOAD)).isEqualTo(new StartAuthority.Policy(StartAuthority.PolicyScope.DOWNLOAD));
+        Operation upload = claimed(Operation.admit(uploadSpec(), id('7'), T0, Admission.of(DecisionReason.AUTOMATIC_UPLOAD, OperationKind.UPLOAD, 3)));
+        assertThat(policy.checkDispatch(upload, open, NOW)).as("an upload is started under the upload authority, not a command authority").isEqualTo(new StartDecision.Startable());
         Operation owner = pending().enqueue(new StartAuthority.Owner(), T0.plusSeconds(2)).claim(T0.plusSeconds(3));
-        assertThat(policy.checkDispatch(owner, new ProfileAlias("another-profile"), open, NOW)).as("an owner start is judged as before").isEqualTo(new StartDecision.Startable());
-        assertThat(policy.checkDispatch(owner, readProfile, open, NOW)).isEqualTo(new StartDecision.Startable());
-        Operation upload = pendingUpload().enqueue(new StartAuthority.Policy(StartAuthority.PolicyScope.UPLOAD), T0.plusSeconds(2)).claim(T0.plusSeconds(3));
-        assertThat(policy.checkDispatch(upload, new ProfileAlias("write-profile"), open, NOW)).as("a file operation has no read authority").isEqualTo(refused(DispatchReason.AUTHORITY, DispatchStage.FILE_GUARD));
-        assertThatThrownBy(() -> policy.checkDispatch(read, null, open, NOW)).isInstanceOf(NullPointerException.class);
+        assertThat(policy.checkDispatch(owner, open, NOW)).as("an owner start is judged as before").isEqualTo(new StartDecision.Startable());
     }
 
     @Test
-    @DisplayName("RC-A-467 the read start is no way round the decision rule: under the command authority a command without a decision to execute is not queued, so it is never dispatched as a read start")
+    @DisplayName("RC-A-467 a command that the server started without a decision to execute is never dispatched, whatever its profile")
     void theCommandAuthorityStillNeedsTheDecision() {
         StartAuthority command = new StartAuthority.Policy(StartAuthority.PolicyScope.COMMAND);
         assertThat(policy.checkStart(pending(), command, open, NOW)).isEqualTo(refused(DispatchReason.AUTHORITY, DispatchStage.AUTHORITY));
-        Operation executeDecision = pending().recordDecision(new DecisionRecord.Decided(DecisionKind.EXECUTE, DecisionReason.COMMAND_SET, ReviewReason.NONE, 3), T0.plusSeconds(2))
-            .enqueue(command, T0.plusSeconds(3)).claim(T0.plusSeconds(4));
-        assertThat(policy.checkDispatch(executeDecision, new ProfileAlias("write-profile"), open, NOW)).isEqualTo(new StartDecision.Startable());
+        Operation read = pending().enqueue(new StartAuthority.Policy(StartAuthority.PolicyScope.READ), T0.plusSeconds(2)).claim(T0.plusSeconds(3));
+        assertThat(policy.checkDispatch(read, open, NOW)).as("the review decision of this operation does not stand for a read authority")
+            .isEqualTo(refused(DispatchReason.AUTHORITY, DispatchStage.AUTHORITY));
     }
 
     private static StartDecision refused(DispatchReason reason, DispatchStage stage) {
@@ -174,11 +174,22 @@ class ApprovalPolicyTest {
         return new StateCounts(counts);
     }
 
-    private static Operation pendingUpload() {
-        NewOperation spec = NewOperation.of(DIGESTER, new RequestKey("upload-request-key-1"), new OwnerId("fixture-owner"), new TargetId("alpha"), REVISION,
+    private static Operation admitted(String key, DecisionReason reason, OperationKind kind) {
+        return Operation.admit(command("admitted-" + key.toLowerCase(java.util.Locale.ROOT), "ls"), id('8'), T0, Admission.of(reason, kind, 3));
+    }
+
+    private static Operation claimed(Operation queued) {
+        return queued.claim(T0.plusSeconds(3));
+    }
+
+    private static NewOperation uploadSpec() {
+        return NewOperation.of(DIGESTER, new RequestKey("upload-request-key-1"), new OwnerId("fixture-owner"), new TargetId("alpha"), REVISION,
             new ProfileAlias("write-profile"), new UploadInput(new ArtifactId("b".repeat(48)), new PosixRemotePath("/tmp/file.bin"), new FileName("file.bin"), 10,
                 new Digest("d".repeat(64)), OverwriteMode.REPLACE, Elevation.NONE, new FileBinding.Unbound(), UploadProtocol.UNSPECIFIED),
             new ConflictKey.None(), new Deadline.None());
-        return Operation.accept(spec, id('7'), T0).awaitOwnerDecision(T0.plusSeconds(1));
+    }
+
+    private static Operation pendingUpload() {
+        return Operation.admit(uploadSpec(), id('7'), T0, Admission.of(DecisionReason.NO_MATCHING_RULE, OperationKind.UPLOAD, 0));
     }
 }

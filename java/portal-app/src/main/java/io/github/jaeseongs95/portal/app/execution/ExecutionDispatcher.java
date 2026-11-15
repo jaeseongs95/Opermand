@@ -236,7 +236,7 @@ public class ExecutionDispatcher {
             Optional<Operation> next = switch (current.state()) {
                 case TERMINATING -> Optional.of(current.settle(ExecutionOutcome.notDispatched(ExecutionReason.CANCEL, List.of()), now));
                 case PENDING, QUEUED, STARTING -> Optional.of(current.refuseBeforeDispatch(failure, now));
-                case ACCEPTED, EVALUATING, RUNNING, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN -> Optional.empty();
+                case RUNNING, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN -> Optional.empty();
             };
             if (next.isEmpty()) {
                 return;

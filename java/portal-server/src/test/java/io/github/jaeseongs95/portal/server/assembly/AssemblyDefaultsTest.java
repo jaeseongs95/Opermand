@@ -44,6 +44,9 @@ import io.github.jaeseongs95.portal.domain.id.OperationId;
 import io.github.jaeseongs95.portal.domain.id.OwnerId;
 import io.github.jaeseongs95.portal.domain.id.RequestKey;
 import io.github.jaeseongs95.portal.domain.id.TargetId;
+import io.github.jaeseongs95.portal.domain.operation.Admission;
+import io.github.jaeseongs95.portal.domain.operation.OperationKind;
+import io.github.jaeseongs95.portal.domain.operation.DecisionReason;
 import io.github.jaeseongs95.portal.domain.operation.AgentCliInput;
 import io.github.jaeseongs95.portal.domain.operation.ConflictKey;
 import io.github.jaeseongs95.portal.domain.operation.Deadline;
@@ -168,7 +171,7 @@ class AssemblyDefaultsTest {
         AgentCliIntent intent = AgentCliIntent.of(provider, request, new AgentCliTargetBinding(EmbeddedTargets.ID, target.revision(), EmbeddedTargets.WRITE_PROFILE, true),
             release, now.plus(Duration.ofMinutes(5)).truncatedTo(ChronoUnit.MILLIS), now, digester);
         OperationId id = journal.accept(NewOperation.of(digester, key, new OwnerId("owner"), EmbeddedTargets.ID, target.revision(), EmbeddedTargets.WRITE_PROFILE,
-            new AgentCliInput(intent.intentDigest()), new ConflictKey.None(), new Deadline.None())).operation().id();
+            new AgentCliInput(intent.intentDigest()), new ConflictKey.None(), new Deadline.None()), Admission.of(DecisionReason.AGENT_CLI_REVIEW, OperationKind.AGENT_CLI, 0L)).operation().id();
         store.insert(new AgentCliInstallRecord(id, AgentCliProviderId.CODEX, AgentCliAction.INSTALL, release, expected, "sha256:" + intent.intentDigest().hex(),
             intent.expiresAt(), new RemoteStatus.NotReported()));
         return new AgentCliRun(id, key, target, target.revision(), EmbeddedTargets.WRITE_PROFILE);
