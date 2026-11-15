@@ -35,6 +35,9 @@ import org.springframework.stereotype.Component;
  * private is removed again and the failure is an {@link IOException}. When a path cannot even be removed again (a right to delete is missing) it stays with the rights it
  * inherited and the message names it; the next run uses an existing folder as it is and does not look at its rights, so a path left behind this way is used without a check.
  *
+ * <p><b>Limit.</b> Java's {@code setAcl} does not set the protected-from-inheritance flag of the list, so when the ACL of a parent folder changes later, entries that the parent
+ * grants (for example {@code Users}) can be inherited by what this rule made again.
+ *
  * <p><b>What exists is not judged.</b> The list of an existing folder or file is neither read nor changed: 2.x refused a path that another account could change and warned
  * about one that another account could read (PF-05), and 3.0 does neither (D-0117).
  *
