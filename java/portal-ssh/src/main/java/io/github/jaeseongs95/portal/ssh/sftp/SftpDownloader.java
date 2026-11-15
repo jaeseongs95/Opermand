@@ -111,6 +111,11 @@ public class SftpDownloader {
             case PathInspection.Absent absent -> changed();
             case PathInspection.Refused refused -> new DownloadResult.Refused(refused.code(), refused.diagnostic());
             case PathInspection.Lost lost -> {
+                // A time limit or a cancel that came after the last byte closes the channel, and the look at the file then fails: the cause stays what stopped the transfer
+                // (the same order as in failedReading), and only a loss that nobody caused is a lost connection (case S-D0013-05).
+                if (watch.fired().isPresent()) {
+                    yield new DownloadResult.Failed(watch.fired().orElseThrow());
+                }
                 lease.discard();
                 yield new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST);
             }
