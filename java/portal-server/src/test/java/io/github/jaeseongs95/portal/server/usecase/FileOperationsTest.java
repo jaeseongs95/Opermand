@@ -153,6 +153,7 @@ class FileOperationsTest {
 
         assertThat(((StagedPlacement.Placed) second).operation()).isEqualTo(((StagedPlacement.Placed) first).operation());
         assertThat(audit.actionsOf(((StagedPlacement.Placed) first).operation())).containsExactly(AuditAction.SUBMITTED);
+        intake.deny(((StagedPlacement.Placed) first).operation());
     }
 
     @Test
