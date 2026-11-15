@@ -3,6 +3,9 @@ package io.github.jaeseongs95.portal.store.journal;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -11,6 +14,8 @@ import java.util.TimeZone;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.core.BatchPreparedStatementSetter;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import io.github.jaeseongs95.portal.app.journal.ClaimResult;
 import io.github.jaeseongs95.portal.app.journal.JournalInsert;
@@ -70,11 +75,12 @@ class JdbcOperationJournalTest {
     private final Clock clock;
     private final Savepoints savepoints;
     private final Digester digester;
+    private final JdbcTemplate jdbc;
     private final JournalFixture fx = new JournalFixture();
 
     JdbcOperationJournalTest(JdbcOperationJournal journal, JdbcClaimStore claims, OperationRowRepository operations, OperationEventRowRepository events,
                              OperationLegacyRowRepository legacy, OperationStorage storage, OperationIdGenerator ids, Clock clock, Savepoints savepoints,
-                             Digester digester) {
+                             Digester digester, JdbcTemplate jdbc) {
         this.journal = journal;
         this.claims = claims;
         this.operations = operations;
@@ -85,6 +91,7 @@ class JdbcOperationJournalTest {
         this.clock = clock;
         this.savepoints = savepoints;
         this.digester = digester;
+        this.jdbc = jdbc;
     }
 
     private void assertConflict(NewOperation changed) {
@@ -145,19 +152,40 @@ class JdbcOperationJournalTest {
     }
 
     @Test
-    @DisplayName("RC-B-207: a journal that holds its limit of rows refuses a new intake with OPERATION_CAPACITY and stores nothing of it")
-    void theJournalRefusesAnIntakeBeyondItsLimit() {
-        JdbcOperationJournal small = new JdbcOperationJournal(operations, events, legacy, storage, ids, clock, savepoints, 3);
-        small.accept(fx.command("one", "alpha", "echo 1", new ConflictKey.None()));
-        small.accept(fx.command("two", "alpha", "echo 2", new ConflictKey.None()));
-        small.accept(fx.command("three", "alpha", "echo 3", new ConflictKey.None()));
-        NewOperation overflow = fx.command("overflow", "alpha", "echo 4", new ConflictKey.None());
+    @DisplayName("S-D0050-01: the journal has no row limit: with 10,000 non-legacy rows (the 2.x limit) a new intake is Inserted, one row is added and none is deleted")
+    void theJournalHasNoRowLimit() {
+        long before = operations.count();
+        int filler = 10_000;
+        Timestamp at = Timestamp.from(JournalFixture.NOW);
+        // The rows are written straight into the table (a bulk batch, ANSI SQL): 10,000 intakes through accept would only repeat the same insert. Every NOT NULL column is set.
+        jdbc.batchUpdate("INSERT INTO operation (id, request_key, owner_id, target_id, target_revision, kind, state, version, approval_mode, profile, contract_digest, "
+            + "created_at, updated_at, recovery_reason, audit_failure) VALUES (?, ?, 'owner', 'alpha', ?, 'COMMAND', 'ACCEPTED', 1, 'NOT_DECIDED', 'default', ?, ?, ?, 'NONE', 'NONE')",
+            new BatchPreparedStatementSetter() {
+                @Override
+                public void setValues(PreparedStatement ps, int i) throws SQLException {
+                    ps.setString(1, String.format("%048x", i));
+                    ps.setString(2, "filler-" + i);
+                    ps.setString(3, JournalFixture.REVISION);
+                    ps.setString(4, JournalFixture.REVISION);
+                    ps.setTimestamp(5, at);
+                    ps.setTimestamp(6, at);
+                }
 
-        assertThatThrownBy(() -> small.accept(overflow)).isInstanceOfSatisfying(RequestRefusedException.class,
-            e -> assertThat(e.code()).isEqualTo(OperationErrorCode.OPERATION_CAPACITY));
-        assertThat(small.findByRequestKey(overflow.requestKey())).isEmpty();
-        // The limit refuses new rows only: a key that is stored is still answered.
-        assertThat(small.accept(fx.command("one", "alpha", "echo 1", new ConflictKey.None()))).isInstanceOf(JournalInsert.Existing.class);
+                @Override
+                public int getBatchSize() {
+                    return filler;
+                }
+            });
+        assertThat(operations.count() - legacy.count()).isGreaterThanOrEqualTo(10_000);
+        long full = operations.count();
+        assertThat(full).isEqualTo(before + filler);
+
+        NewOperation next = fx.command("beyond", "alpha", "echo beyond", new ConflictKey.None());
+        JournalInsert inserted = journal.accept(next);
+
+        assertThat(inserted).isInstanceOf(JournalInsert.Inserted.class);
+        assertThat(journal.findByRequestKey(next.requestKey())).isPresent();
+        assertThat(operations.count()).isEqualTo(full + 1);
     }
 
     @Test
