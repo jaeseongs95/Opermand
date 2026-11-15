@@ -160,6 +160,8 @@ public final class TestFiles {
         for (Path root : FileSystems.getDefault().getRootDirectories()) {
             Optional<Path> found = foreignFileNear(root, me);
             if (found.isPresent()) {
+                // Written to the standard output of the test (it is in the JUnit XML of the run), so that a CI log shows which system file stood in for a key of another owner.
+                System.out.println("S-D0117-02: the file of another owner is " + found.get() + " (owner " + Files.getOwner(found.get()).getName() + ")");
                 return found.get();
             }
         }
