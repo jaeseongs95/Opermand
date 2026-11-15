@@ -10,7 +10,12 @@ import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
@@ -89,6 +94,34 @@ class PrivateStoragesTest {
 
         assertThatCode(() -> storages.requireRegularFile(file)).doesNotThrowAnyException();
         assertThatCode(() -> storages.requireFolder(directory)).doesNotThrowAnyException();
+    }
+
+    @Test
+    @DisplayName("S-D0117-10: several first starts that create the same new folder at the same moment all succeed (the one that loses a creation does not fail, and does not judge what the other made); the folder is owner only")
+    void severalCreationsOfTheSameFolderAllSucceed(@TempDir Path directory) throws Exception {
+        PrivateStorages storages = TestStorage.rules();
+        int threads = 8;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            for (int round = 0; round < 25; round++) {
+                Path folder = directory.resolve("round-" + round).resolve("inner");
+                CyclicBarrier together = new CyclicBarrier(threads);
+                List<Future<Void>> results = new ArrayList<>();
+                for (int thread = 0; thread < threads; thread++) {
+                    results.add(pool.submit(() -> {
+                        together.await();
+                        storages.createFolder(folder);
+                        return null;
+                    }));
+                }
+                for (Future<Void> result : results) {
+                    result.get(); // an ExecutionException here is a creation that failed
+                }
+                TestStorage.assertOwnerOnly(folder);
+            }
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     @Test

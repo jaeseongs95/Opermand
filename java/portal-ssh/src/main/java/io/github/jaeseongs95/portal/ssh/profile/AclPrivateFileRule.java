@@ -1,6 +1,7 @@
 package io.github.jaeseongs95.portal.ssh.profile;
 
 import java.io.IOException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileStore;
 import java.nio.file.FileSystem;
 import java.nio.file.Files;
@@ -61,7 +62,14 @@ public final class AclPrivateFileRule implements PrivateFileRule {
         }
         List<Path> created = new ArrayList<>();
         for (Path path : missing) {
-            Files.createDirectory(path);
+            try {
+                Files.createDirectory(path);
+            } catch (FileAlreadyExistsException e) {
+                if (Files.isDirectory(path)) {
+                    continue; // somebody made it between the check and the call (a second first start): it is not ours, and it is not judged
+                }
+                throw e;
+            }
             created.add(path);
             protectOrRemove(path, true, created.reversed());
         }
@@ -72,7 +80,11 @@ public final class AclPrivateFileRule implements PrivateFileRule {
         if (Files.exists(file, LinkOption.NOFOLLOW_LINKS)) {
             return;
         }
-        Files.createFile(file);
+        try {
+            Files.createFile(file);
+        } catch (FileAlreadyExistsException e) {
+            return; // somebody made it between the check and the call: it is not ours, and it is not judged
+        }
         protectOrRemove(file, false, List.of(file));
     }
 

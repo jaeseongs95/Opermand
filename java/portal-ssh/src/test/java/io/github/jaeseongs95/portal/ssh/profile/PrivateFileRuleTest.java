@@ -9,6 +9,10 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -50,6 +54,35 @@ class PrivateFileRuleTest {
         TestFiles.privateFiles().createPrivateFile(file);
 
         assertThat(Files.readString(file)).isEqualTo("kept\n");
+    }
+
+    @Test
+    @DisplayName("S-D0117-10: several first starts that create the same new folder and file at the same moment all succeed (the one that loses a creation does not fail, and does not judge what the other made)")
+    void severalCreationsOfTheSameFileAllSucceed() throws Exception {
+        int threads = 8;
+        ExecutorService pool = Executors.newFixedThreadPool(threads);
+        try {
+            for (int round = 0; round < 25; round++) {
+                Path file = directory.resolve("round-" + round).resolve("inner").resolve("known_hosts");
+                CyclicBarrier together = new CyclicBarrier(threads);
+                List<Future<Void>> results = new ArrayList<>();
+                for (int thread = 0; thread < threads; thread++) {
+                    results.add(pool.submit(() -> {
+                        together.await();
+                        TestFiles.privateFiles().createPrivateFile(file);
+                        return null;
+                    }));
+                }
+                for (Future<Void> result : results) {
+                    result.get(); // an ExecutionException here is a creation that failed
+                }
+                assertThat(file).exists().isEmptyFile();
+                TestFiles.assertOwnerOnly(file);
+                TestFiles.assertOwnerOnly(file.getParent());
+            }
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     @Test

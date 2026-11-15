@@ -93,7 +93,11 @@ public final class PosixPrivateFileRule implements PrivateFileRule {
         if (Files.exists(file)) {
             return;
         }
-        Files.createFile(file, FILE_MODE);
+        try {
+            Files.createFile(file, FILE_MODE);
+        } catch (FileAlreadyExistsException e) {
+            return; // somebody made it between the check and the call: it is not ours, and it is not judged
+        }
         requireOwnerOnly(file, List.of(file));
     }
 
