@@ -208,12 +208,17 @@ public class ExecutionDispatcher {
             refuseOrCancel(id, DispatchFailure.refused(DispatchReason.UNKNOWN, DispatchStage.UNKNOWN));
             return;
         }
+        StartGuard guard = checks.guardFor(id);
         ExecutionReport report;
         try {
-            report = runner.run(claimed, new ExecutionControl(cancel, () -> checks.beforeDispatch(id)));
+            report = runner.run(claimed, new ExecutionControl(cancel, guard));
         } catch (DispatchRefusedException refused) {
-            refuseOrCancel(id, refused.failure());
-            return;
+            if (!guard.started()) {
+                refuseOrCancel(id, refused.failure());
+                return;
+            }
+            LOG.error("A runner threw a dispatch refusal after the operation had already started; the operation is settled as unknown and is not sent again", refused);
+            report = new ExecutionReport(ExecutionOutcome.transportLost(new ExecutionFailure.Unclassified(), List.of()), ExecutionTimeline.empty());
         } catch (RuntimeException unexpected) {
             LOG.error("A runner failed after the operation may have started; the operation is settled as unknown and is not sent again", unexpected);
             report = new ExecutionReport(ExecutionOutcome.transportLost(new ExecutionFailure.Unclassified(), List.of()), ExecutionTimeline.empty());

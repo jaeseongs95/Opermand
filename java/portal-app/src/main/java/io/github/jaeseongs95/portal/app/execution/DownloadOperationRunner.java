@@ -59,8 +59,16 @@ public class DownloadOperationRunner implements OperationRunner {
             DownloadJob job = new DownloadJob(targets.of(operation), operation.targetRevision(), input);
             return new ExecutionReport(downloads.download(job, control).outcome(), ExecutionTimeline.empty());
         } catch (DispatchRefusedException e) {
+            if (control.guard() instanceof StartGuard startGuard && startGuard.started()) {
+                LOG.error("A download refused a step after its execution had started; it is settled as a local failure of the portal and the target was only read", e);
+                return new ExecutionReport(outcomes.portalFailure(e), ExecutionTimeline.empty());
+            }
             throw e;
         } catch (RequestRefusedException e) {
+            if (control.guard() instanceof StartGuard startGuard && startGuard.started()) {
+                LOG.error("A download refused a step after its execution had started; it is settled as a local failure of the portal and the target was only read", e);
+                return new ExecutionReport(outcomes.portalFailure(e), ExecutionTimeline.empty());
+            }
             throw new DispatchRefusedException(DispatchFailure.refused(DispatchReason.UNKNOWN, DispatchStage.FILE_GUARD), e);
         } catch (RuntimeException e) {
             LOG.error("A download failed with an exception that no result describes; it is settled as a local failure of the portal and the target was only read", e);

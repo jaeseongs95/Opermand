@@ -64,6 +64,11 @@ public class DispatchChecks {
         this.clock = clock;
     }
 
+    /** Creates a stateful guard for one execution of {@code id}, so multi-step runners check and record the start once before the first remote step (defect D-0149). */
+    StartGuard guardFor(OperationId id) {
+        return new StartGuard(this, id);
+    }
+
     /** @throws DispatchRefusedException a guard refused: the operation was cancelled meanwhile, the target or the policy changed, maintenance began, or the start could not be stored */
     public void beforeDispatch(OperationId id) {
         Operation operation = journal.find(id).orElseThrow(() -> refused(DispatchReason.REQUEST_STATE, DispatchStage.REQUEST_STATE));

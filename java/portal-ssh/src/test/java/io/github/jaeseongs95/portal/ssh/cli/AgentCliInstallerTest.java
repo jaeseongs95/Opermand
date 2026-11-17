@@ -1,6 +1,7 @@
 package io.github.jaeseongs95.portal.ssh.cli;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.jaeseongs95.portal.app.cli.CliVersion;
 import io.github.jaeseongs95.portal.app.cli.RemoteState;
@@ -41,6 +42,10 @@ import io.github.jaeseongs95.portal.app.remote.UploadResult;
 import io.github.jaeseongs95.portal.app.storage.PayloadRead;
 import io.github.jaeseongs95.portal.domain.agentcli.AgentCliProviderId;
 import io.github.jaeseongs95.portal.domain.agentcli.AgentRelease;
+import io.github.jaeseongs95.portal.domain.error.DispatchFailure;
+import io.github.jaeseongs95.portal.domain.error.DispatchReason;
+import io.github.jaeseongs95.portal.domain.error.DispatchRefusedException;
+import io.github.jaeseongs95.portal.domain.error.DispatchStage;
 import io.github.jaeseongs95.portal.domain.error.ExecutionErrorCode;
 import io.github.jaeseongs95.portal.domain.error.ExecutionFailure;
 import io.github.jaeseongs95.portal.domain.error.ExecutionStage;
@@ -182,6 +187,7 @@ class AgentCliInstallerTest {
 
         @Override
         public ExecutionReport run(RemoteExecution request, OutputSink sink, ExecutionControl control) {
+            control.guard().beforeDispatch();
             commandLines.add(request.command().commandLine());
             return switch (behaviour) {
                 case Unpacking.Lost lost -> new ExecutionReport(ExecutionOutcome.transportLost(new ExecutionFailure.Classified(ExecutionStage.SSH_EXECUTION,
@@ -216,6 +222,7 @@ class AgentCliInstallerTest {
 
         @Override
         public UploadResult upload(UploadRequest request, PayloadSource source, ExecutionControl control) {
+            control.guard().beforeDispatch();
             requests.add(request);
             try (PayloadRead read = source.open()) {
                 byte[] bytes = Channels.newInputStream(read.channel()).readAllBytes();
@@ -623,5 +630,28 @@ class AgentCliInstallerTest {
 
         assertThat(installed).isEqualTo(new AgentCliInstallResult.NotDispatched(TransferFailureCause.CONNECT_FAILED));
         assertThat(status).isEqualTo(new AgentCliStatusResult.Failed(TransferFailureCause.CONNECT_FAILED));
+    }
+
+    @Test
+    @DisplayName("S-D0149-03 D-0149 an agent CLI installation invokes the dispatch guard at SFTP preparation, tarball upload and unpack, and sends nothing when the first refuses")
+    void installationChecksTheGuardAcrossAllThreeSteps() throws IOException {
+        Bed bed = bed();
+        Release release = release("package guarded");
+        AtomicInteger guardCalls = new AtomicInteger();
+
+        AgentCliInstallResult result = bed.install(release, new ExecutionControl(new CancelSource(), guardCalls::incrementAndGet));
+
+        assertThat(result).isInstanceOf(AgentCliInstallResult.Installed.class);
+        assertThat(guardCalls).hasValue(3);
+
+        Bed refusedBed = new Bed(Clock.systemUTC());
+        DispatchRefusedException targetChanged = new DispatchRefusedException(DispatchFailure.refused(DispatchReason.TARGET_CHANGED, DispatchStage.TARGET_GUARD));
+        ExecutionControl refusing = new ExecutionControl(new CancelSource(), () -> {
+            throw targetChanged;
+        });
+
+        assertThatThrownBy(() -> refusedBed.install(release("package refused"), refusing)).isSameAs(targetChanged);
+        assertThat(refusedBed.transfer.requests).isEmpty();
+        assertThat(refusedBed.executor.commandLines).isEmpty();
     }
 }

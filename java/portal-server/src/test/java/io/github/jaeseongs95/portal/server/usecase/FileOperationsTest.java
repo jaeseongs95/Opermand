@@ -6,7 +6,11 @@ import static org.awaitility.Awaitility.await;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -23,6 +27,9 @@ import io.github.jaeseongs95.portal.app.journal.OperationJournal;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
 import io.github.jaeseongs95.portal.app.maintenance.OwnerHash;
 import io.github.jaeseongs95.portal.app.operation.OperationIntake;
+import io.github.jaeseongs95.portal.app.operation.OperationsService;
+import io.github.jaeseongs95.portal.app.remote.ExecutionReport;
+import io.github.jaeseongs95.portal.app.remote.ExecutionTimeline;
 import io.github.jaeseongs95.portal.domain.error.RequestErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.file.FileBinding;
@@ -38,6 +45,7 @@ import io.github.jaeseongs95.portal.domain.operation.ConflictKey;
 import io.github.jaeseongs95.portal.domain.operation.Deadline;
 import io.github.jaeseongs95.portal.domain.operation.DownloadInput;
 import io.github.jaeseongs95.portal.domain.operation.Elevation;
+import io.github.jaeseongs95.portal.domain.operation.ExecutionOutcome;
 import io.github.jaeseongs95.portal.domain.operation.NewOperation;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
 import io.github.jaeseongs95.portal.domain.operation.OperationEvent;
@@ -48,7 +56,6 @@ import io.github.jaeseongs95.portal.domain.operation.Reconciliation;
 import io.github.jaeseongs95.portal.domain.operation.RecordedResult;
 import io.github.jaeseongs95.portal.domain.operation.RemoteState;
 import io.github.jaeseongs95.portal.domain.operation.Settlement;
-import io.github.jaeseongs95.portal.domain.operation.StartAuthority;
 import io.github.jaeseongs95.portal.domain.operation.UploadInput;
 import io.github.jaeseongs95.portal.domain.operation.UploadProtocol;
 import io.github.jaeseongs95.portal.domain.path.PathSyntax;
@@ -65,21 +72,26 @@ class FileOperationsTest {
     private final StagedFileService staged;
     private final OperationUploadAdmission admission;
     private final OperationIntake intake;
+    private final OperationsService operations;
     private final OperationJournal journal;
     private final MaintenanceStore maintenance;
+    private final ScriptedExecutor executor;
     private final ScriptedTransfer transfer;
     private final RecordingAudit audit;
     private final FixedTargets targets;
     private final UseCaseKit kit;
     private final Digester digester;
 
-    FileOperationsTest(StagedFileService staged, OperationUploadAdmission admission, OperationIntake intake, OperationJournal journal, MaintenanceStore maintenance,
-                       ScriptedTransfer transfer, RecordingAudit audit, FixedTargets targets, UseCaseKit kit, Digester digester) {
+    FileOperationsTest(StagedFileService staged, OperationUploadAdmission admission, OperationIntake intake, OperationsService operations, OperationJournal journal,
+                       MaintenanceStore maintenance, ScriptedExecutor executor, ScriptedTransfer transfer, RecordingAudit audit, FixedTargets targets, UseCaseKit kit,
+                       Digester digester) {
         this.staged = staged;
         this.admission = admission;
         this.intake = intake;
+        this.operations = operations;
         this.journal = journal;
         this.maintenance = maintenance;
+        this.executor = executor;
         this.transfer = transfer;
         this.audit = audit;
         this.targets = targets;
@@ -89,6 +101,7 @@ class FileOperationsTest {
 
     @BeforeEach
     void start() {
+        executor.reset();
         transfer.reset();
         audit.failNothing();
         targets.reset();
@@ -288,5 +301,107 @@ class FileOperationsTest {
         NewOperation spec = NewOperation.of(digester, kit.newKey(), new OwnerId("owner"), FixedTargets.ID, targets.current().revision(), FixedTargets.READ_PROFILE, input,
             new ConflictKey.None(), new Deadline.None());
         return intake.submit(spec).id();
+    }
+
+    @Test
+    @DisplayName("S-D0149-01 D-0149 a Windows download runs the link probe and then the SFTP read under one start check: completed once, one RUNNING event, one start audit")
+    void aWindowsDownloadPassesBothGuardCallsAndCompletes() throws Exception {
+        byte[] content = "windows-download-bytes".getBytes(StandardCharsets.UTF_8);
+        transfer.onDownload(transfer.fetches(content));
+        DownloadInput input = new DownloadInput(PathSyntax.WINDOWS.path("C:\\srv\\app\\report.log"), Elevation.NONE,
+            new FileBinding.Bound(new FileTargetBinding(FixedTargets.WINDOWS_ID, targets.windows().revision())), new Utf8Text("caller"), new Utf8Text("display"));
+        NewOperation spec = NewOperation.of(digester, kit.newKey(), new OwnerId("owner"), FixedTargets.WINDOWS_ID, targets.windows().revision(),
+            FixedTargets.WINDOWS_READ_PROFILE, input, new ConflictKey.None(), new Deadline.None());
+        OperationId id = intake.submit(spec).id();
+
+        intake.approve(id);
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(kit.find(id).state().isTerminal())
+            .as("Windows download should reach terminal state instead of staying %s", kit.find(id).state()).isTrue());
+        Operation done = kit.find(id);
+
+        assertThat(done.state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(executor.sentLines()).containsExactly(ScriptedTransfer.WINDOWS_REPARSE_PROBE);
+        assertThat(transfer.downloadsSent()).isEqualTo(1);
+        assertThat(journal.events(id).stream().filter(event -> event.state() == OperationState.RUNNING).count()).isEqualTo(1);
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(audit.actionsOf(id))
+            .containsExactly(AuditAction.SUBMITTED, AuditAction.EXECUTION_QUEUED, AuditAction.APPROVED, AuditAction.COMPLETED));
+    }
+
+    @Test
+    @DisplayName("S-D0149-02 D-0149 an elevated Windows upload runs the link probe, the administrator probe and the SFTP write under one start check: completed once, one RUNNING event, one start audit")
+    void anElevatedWindowsUploadPassesAllThreeGuardCallsAndCompletes() throws Exception {
+        byte[] content = "windows-elevated-upload".getBytes(StandardCharsets.UTF_8);
+        OperationId id = placeWindows(content, "C:\\srv\\app\\elevated.bin", Elevation.SUDO);
+
+        intake.approve(id);
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(kit.find(id).state().isTerminal())
+            .as("Elevated Windows upload should reach terminal state instead of staying %s", kit.find(id).state()).isTrue());
+        Operation done = kit.find(id);
+
+        assertThat(done.state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(executor.sentLines()).containsExactly(ScriptedTransfer.WINDOWS_REPARSE_PROBE, TestPlatform.WINDOWS_ADMIN_PROBE);
+        assertThat(transfer.uploadsSent()).isEqualTo(1);
+        assertThat(transfer.uploaded()).containsExactly(content);
+        assertThat(journal.events(id).stream().filter(event -> event.state() == OperationState.RUNNING).count()).isEqualTo(1);
+        await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> assertThat(audit.actionsOf(id))
+            .containsExactly(AuditAction.SUBMITTED, AuditAction.EXECUTION_QUEUED, AuditAction.APPROVED, AuditAction.COMPLETED));
+    }
+
+    @Test
+    @DisplayName("S-D0149-04 D-0149 a cancel after the first step entered RUNNING moves the operation to TERMINATING and the second step's guard passes so the adapter settles from the cancel token")
+    void aCancelBetweenTwoStepsDoesNotThrowRequestStateAtTheSecondGuard() throws Exception {
+        CountDownLatch probeStarted = new CountDownLatch(1);
+        CountDownLatch cancelDone = new CountDownLatch(1);
+        AtomicReference<Throwable> secondGuardFailure = new AtomicReference<>();
+        executor.when(ScriptedTransfer.WINDOWS_REPARSE_PROBE, (request, sink, control) -> {
+            control.guard().beforeDispatch();
+            probeStarted.countDown();
+            try {
+                if (!cancelDone.await(10, TimeUnit.SECONDS)) {
+                    throw new IllegalStateException("The test did not cancel the operation in time");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException(e);
+            }
+            return new ExecutionReport(ExecutionOutcome.exited(0, List.of()), ExecutionTimeline.empty());
+        });
+        executor.when(TestPlatform.WINDOWS_ADMIN_PROBE, (request, sink, control) -> {
+            try {
+                control.guard().beforeDispatch();
+            } catch (Throwable t) {
+                secondGuardFailure.set(t);
+                throw t;
+            }
+            return new ExecutionReport(ExecutionOutcome.exited(0, List.of()), ExecutionTimeline.empty());
+        });
+
+        OperationId id = placeWindows("cancelled-after-probe".getBytes(StandardCharsets.UTF_8), "C:\\srv\\app\\cancelled.bin", Elevation.SUDO);
+        intake.approve(id);
+        assertThat(probeStarted.await(10, TimeUnit.SECONDS)).isTrue();
+        assertThat(kit.find(id).state()).isEqualTo(OperationState.RUNNING);
+
+        Operation cancelling = operations.cancel(id);
+        assertThat(cancelling.state()).isEqualTo(OperationState.TERMINATING);
+        cancelDone.countDown();
+
+        await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> assertThat(kit.find(id).state().isTerminal()).isTrue());
+        Operation done = kit.find(id);
+        assertThat(secondGuardFailure.get()).as("the second step's guard must not throw REQUEST_STATE after RUNNING").isNull();
+        assertThat(done.state()).isEqualTo(OperationState.CANCELLED);
+        assertThat(transfer.uploadsSent()).isZero();
+        assertThat(journal.events(id).stream().map(OperationEvent::state).toList())
+            .containsSubsequence(OperationState.STARTING, OperationState.RUNNING, OperationState.TERMINATING, OperationState.CANCELLED);
+    }
+
+    private OperationId placeWindows(byte[] content, String remotePath, Elevation elevation) {
+        OwnerId owner = new OwnerId("owner");
+        StagedBegin begun = staged.begin(owner, kit.newKey().value(), new FileName("staged-win.bin"), content.length);
+        ArtifactUuid uuid = ((StagedBegin.Begun) begun).uuid();
+        staged.append(owner, uuid, 0, content, digester.digest(content));
+        staged.complete(owner, uuid);
+        StagedPlacement placed = staged.place(new StagedPlacementRequest(owner, uuid, StagedActionKind.COPY, kit.newKey().value(), targets.windows(),
+            targets.windows().revision(), PathSyntax.WINDOWS.path(remotePath), OverwriteMode.REPLACE, elevation));
+        return ((StagedPlacement.Placed) placed).operation();
     }
 }

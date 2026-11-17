@@ -1,17 +1,21 @@
 package io.github.jaeseongs95.portal.ssh.sftp;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import io.github.jaeseongs95.portal.app.remote.CancelSource;
+import io.github.jaeseongs95.portal.app.remote.CommandKind;
 import io.github.jaeseongs95.portal.app.remote.DownloadRequest;
 import io.github.jaeseongs95.portal.app.remote.DownloadResult;
 import io.github.jaeseongs95.portal.app.remote.ElevationPlan;
 import io.github.jaeseongs95.portal.app.remote.ElevationRequest;
 import io.github.jaeseongs95.portal.app.remote.ElevationResult;
+import io.github.jaeseongs95.portal.app.remote.ExecReply;
+import io.github.jaeseongs95.portal.app.remote.ExecutionControl;
 import io.github.jaeseongs95.portal.app.remote.ExecutionLimits;
 import io.github.jaeseongs95.portal.app.remote.FileAccess;
 import io.github.jaeseongs95.portal.app.remote.FileDiagnostic;
@@ -21,15 +25,25 @@ import io.github.jaeseongs95.portal.app.remote.PathPolicyBinding;
 import io.github.jaeseongs95.portal.app.remote.PermissionRequest;
 import io.github.jaeseongs95.portal.app.remote.PermissionResult;
 import io.github.jaeseongs95.portal.app.remote.PermissionSupport;
+import io.github.jaeseongs95.portal.app.remote.PreparedCommand;
+import io.github.jaeseongs95.portal.app.remote.RemoteExecution;
+import io.github.jaeseongs95.portal.app.remote.RemoteTarget;
 import io.github.jaeseongs95.portal.app.remote.ReplaceMethod;
+import io.github.jaeseongs95.portal.app.remote.SinkResult;
+import io.github.jaeseongs95.portal.app.remote.StdinBytes;
 import io.github.jaeseongs95.portal.app.remote.TransferFailureCause;
 import io.github.jaeseongs95.portal.app.remote.TransferLimits;
 import io.github.jaeseongs95.portal.app.remote.UploadRequest;
 import io.github.jaeseongs95.portal.app.remote.UploadResult;
+import io.github.jaeseongs95.portal.domain.error.DispatchFailure;
+import io.github.jaeseongs95.portal.domain.error.DispatchReason;
+import io.github.jaeseongs95.portal.domain.error.DispatchRefusedException;
+import io.github.jaeseongs95.portal.domain.error.DispatchStage;
 import io.github.jaeseongs95.portal.domain.error.TransferErrorCode;
 import io.github.jaeseongs95.portal.domain.operation.CleanupState;
 import io.github.jaeseongs95.portal.domain.operation.OverwriteMode;
 import io.github.jaeseongs95.portal.domain.path.PosixRemotePath;
+import io.github.jaeseongs95.portal.domain.path.RemotePath;
 import java.io.IOException;
 import java.nio.channels.ClosedChannelException;
 import java.nio.charset.StandardCharsets;
@@ -42,6 +56,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import org.apache.sshd.client.session.ClientSession;
@@ -479,5 +494,46 @@ class ElevatedTransferTest {
         assertThat(none.transfer().checkElevation(new ElevationRequest(TransferBed.TARGET, new ElevationPlan.NotSupported(), ExecutionLimits.defaults()), none.control()))
             .isEqualTo(new ElevationResult.Unavailable(TransferFailureCause.CONNECT_FAILED));
         assertThat(none.sessions().leases()).isZero();
+    }
+
+    @Test
+    @DisplayName("S-D0149-03 D-0149 an upload with a link probe and Windows administrator elevation invokes the dispatch guard at each of its three remote steps and sends nothing when the first refuses")
+    void linkProbeAndAdministratorUploadCheckTheGuardAtEachStep() throws IOException {
+        ScriptedExecutor linkExecutor = ScriptedExecutor.everythingSucceeds();
+        HiddenLinkProbe linkProbe = new HiddenLinkProbe() {
+            @Override
+            public boolean applies(RemotePath path) {
+                return true;
+            }
+
+            @Override
+            public Verdict check(RemoteTarget target, RemotePath path, TransferLimits limits, ExecutionControl control) {
+                PreparedCommand command = new PreparedCommand("powershell.exe -NoLogo link-probe", StdinBytes.none(), CommandKind.COMMAND);
+                linkExecutor.run(new RemoteExecution(target, command, ExecutionLimits.defaults(), ExecReply.NOT_AWAITED), frame -> new SinkResult.Accepted(), control);
+                return new HiddenLinkProbe.Clear();
+            }
+        };
+        bed = TransferBed.start(root, List.of(linkProbe));
+        AtomicInteger guardCalls = new AtomicInteger();
+        ExecutionControl counting = new ExecutionControl(new CancelSource(), guardCalls::incrementAndGet);
+
+        UploadResult published = bed.transfer().upload(elevatedUpload("/guarded.bin", OverwriteMode.FAIL_IF_EXISTS, ADMINISTRATOR), TransferBed.source(CONTENT), counting);
+
+        assertThat(published).isInstanceOf(UploadResult.Published.class);
+        assertThat(guardCalls).hasValue(3);
+        assertThat(linkExecutor.commandLines()).containsExactly("powershell.exe -NoLogo link-probe");
+        assertThat(Files.readAllBytes(root.resolve("guarded.bin"))).isEqualTo(CONTENT);
+        assertThat(bed.sessions().leases()).isEqualTo(1);
+
+        DispatchRefusedException targetChanged = new DispatchRefusedException(DispatchFailure.refused(DispatchReason.TARGET_CHANGED, DispatchStage.TARGET_GUARD));
+        ExecutionControl refusing = new ExecutionControl(new CancelSource(), () -> {
+            throw targetChanged;
+        });
+
+        assertThatThrownBy(() -> bed.transfer().upload(elevatedUpload("/refused.bin", OverwriteMode.FAIL_IF_EXISTS, ADMINISTRATOR), TransferBed.source(CONTENT), refusing))
+            .isSameAs(targetChanged);
+        assertThat(linkExecutor.commandLines()).as("the first guard refused before the link probe sent a command").hasSize(1);
+        assertThat(bed.sessions().leases()).as("no second SFTP session was leased").isEqualTo(1);
+        assertThat(root.resolve("refused.bin")).doesNotExist();
     }
 }

@@ -7,11 +7,13 @@ import io.github.jaeseongs95.portal.app.remote.AgentCliPlan;
 import io.github.jaeseongs95.portal.app.remote.CommandKind;
 import io.github.jaeseongs95.portal.app.remote.ElevationPlan;
 import io.github.jaeseongs95.portal.app.remote.ExecReply;
+import io.github.jaeseongs95.portal.app.remote.FixedRemoteCommand;
 import io.github.jaeseongs95.portal.app.remote.PathPolicyBinding;
 import io.github.jaeseongs95.portal.app.remote.PermissionSupport;
 import io.github.jaeseongs95.portal.app.remote.PreparedCommand;
 import io.github.jaeseongs95.portal.app.remote.SourceArguments;
 import io.github.jaeseongs95.portal.app.remote.StdinBytes;
+import io.github.jaeseongs95.portal.app.remote.UnsupportedReason;
 import io.github.jaeseongs95.portal.app.remote.WorkingDirectory;
 import io.github.jaeseongs95.portal.app.target.TargetPlatform;
 import io.github.jaeseongs95.portal.domain.agentcli.AgentCliIntent;
@@ -43,6 +45,7 @@ import io.github.jaeseongs95.portal.domain.text.SourceText;
 final class TestPlatform implements TargetPlatform {
 
     static final String TOO_LARGE = "WINDOWS-LINE-TOO-LARGE";
+    static final String WINDOWS_ADMIN_PROBE = "powershell.exe -NoLogo admin-probe";
 
     private final TargetOs os;
     private final CommandClassifier classifier;
@@ -126,12 +129,14 @@ final class TestPlatform implements TargetPlatform {
 
     @Override
     public PermissionSupport permissionSupport() {
-        return new PermissionSupport.Supported();
+        return os == TargetOs.WINDOWS ? new PermissionSupport.Unsupported(UnsupportedReason.WINDOWS_SFTP_CHMOD) : new PermissionSupport.Supported();
     }
 
     @Override
     public ElevationPlan elevationPlan() {
-        return new ElevationPlan.NotSupported();
+        return os == TargetOs.WINDOWS
+            ? new ElevationPlan.WindowsAdministratorCheck(new FixedRemoteCommand("windows-admin-probe", WINDOWS_ADMIN_PROBE))
+            : new ElevationPlan.NotSupported();
     }
 
     @Override

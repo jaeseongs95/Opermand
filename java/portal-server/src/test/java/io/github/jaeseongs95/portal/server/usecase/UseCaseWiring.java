@@ -97,8 +97,8 @@ class UseCaseWiring {
 
     /** The SFTP boundary, the other thing that is not real: it follows the contract of the adapter and answers what a test says. */
     @Bean
-    ScriptedTransfer transfer() {
-        return new ScriptedTransfer();
+    ScriptedTransfer transfer(ScriptedExecutor executor) {
+        return new ScriptedTransfer(executor);
     }
 
     /** One pool serves as the {@code TaskScheduler} (timers) and the {@code TaskExecutor} (the dispatcher and the executions). */

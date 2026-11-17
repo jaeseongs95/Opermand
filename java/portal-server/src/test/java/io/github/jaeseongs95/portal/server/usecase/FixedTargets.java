@@ -28,18 +28,26 @@ final class FixedTargets implements TargetSource {
     static final TargetId ID = new TargetId("web-1");
     static final ProfileAlias READ_PROFILE = new ProfileAlias("web-ro");
     static final ProfileAlias WRITE_PROFILE = new ProfileAlias("web-rw");
+    static final TargetId WINDOWS_ID = new TargetId("win-1");
+    static final ProfileAlias WINDOWS_READ_PROFILE = new ProfileAlias("win-ro");
+    static final ProfileAlias WINDOWS_WRITE_PROFILE = new ProfileAlias("win-rw");
 
     private final Digester digester;
+    private final ResolvedTarget windows;
     private volatile ResolvedTarget current;
     private volatile boolean enabled = true;
 
     FixedTargets(Digester digester) {
         this.digester = digester;
+        this.windows = buildWindows();
         this.current = build("Web one", Toggle.ON);
     }
 
     @Override
     public TargetLookup lookup(TargetId id) {
+        if (WINDOWS_ID.equals(id)) {
+            return enabled ? new TargetLookup.Found(windows) : new TargetLookup.Disabled(id);
+        }
         ResolvedTarget target = current;
         if (!target.target().id().equals(id)) {
             return new TargetLookup.NotRegistered(id);
@@ -50,6 +58,11 @@ final class FixedTargets implements TargetSource {
     /** The target as it is now. */
     ResolvedTarget current() {
         return current;
+    }
+
+    /** The Windows target of the use case tests. */
+    ResolvedTarget windows() {
+        return windows;
     }
 
     /** The administrator changed the target: another display name gives another revision. */
@@ -70,6 +83,14 @@ final class FixedTargets implements TargetSource {
     private ResolvedTarget build(String displayName, Toggle toggle) {
         Target target = new Target(ID, new TargetDisplayName(displayName), READ_PROFILE, WRITE_PROFILE, new ProfileAlias("cred1"), toggle, TargetOs.LINUX,
             WindowsRuntime.none(), new CapacityOverride.Inherited(), new CapacityOverride.Inherited(), new DesktopSettings.NoDesktop());
+        ConnectionProfile reader = profile(AccessMode.READ_ONLY);
+        ConnectionProfile writer = profile(AccessMode.READ_WRITE);
+        return ResolvedTarget.of(target, reader, writer, digester);
+    }
+
+    private ResolvedTarget buildWindows() {
+        Target target = new Target(WINDOWS_ID, new TargetDisplayName("Windows one"), WINDOWS_READ_PROFILE, WINDOWS_WRITE_PROFILE, new ProfileAlias("cred1"), Toggle.ON,
+            TargetOs.WINDOWS, WindowsRuntime.none(), new CapacityOverride.Inherited(), new CapacityOverride.Inherited(), new DesktopSettings.NoDesktop());
         ConnectionProfile reader = profile(AccessMode.READ_ONLY);
         ConnectionProfile writer = profile(AccessMode.READ_WRITE);
         return ResolvedTarget.of(target, reader, writer, digester);

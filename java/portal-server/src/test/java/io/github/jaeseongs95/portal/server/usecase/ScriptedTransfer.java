@@ -5,22 +5,34 @@ import java.io.UncheckedIOException;
 import java.nio.channels.Channels;
 import java.time.Instant;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import io.github.jaeseongs95.portal.app.remote.CommandKind;
 import io.github.jaeseongs95.portal.app.remote.DownloadRequest;
 import io.github.jaeseongs95.portal.app.remote.DownloadResult;
+import io.github.jaeseongs95.portal.app.remote.ElevationPlan;
 import io.github.jaeseongs95.portal.app.remote.ElevationRequest;
 import io.github.jaeseongs95.portal.app.remote.ElevationResult;
+import io.github.jaeseongs95.portal.app.remote.ExecReply;
 import io.github.jaeseongs95.portal.app.remote.ExecutionControl;
+import io.github.jaeseongs95.portal.app.remote.ExecutionLimits;
+import io.github.jaeseongs95.portal.app.remote.ExecutionReport;
+import io.github.jaeseongs95.portal.app.remote.FileAccess;
 import io.github.jaeseongs95.portal.app.remote.FileDiagnostic;
 import io.github.jaeseongs95.portal.app.remote.PayloadSink;
 import io.github.jaeseongs95.portal.app.remote.PayloadSource;
 import io.github.jaeseongs95.portal.app.remote.PermissionRequest;
 import io.github.jaeseongs95.portal.app.remote.PermissionResult;
+import io.github.jaeseongs95.portal.app.remote.PreparedCommand;
+import io.github.jaeseongs95.portal.app.remote.RemoteExecution;
 import io.github.jaeseongs95.portal.app.remote.RemoteFileTransfer;
+import io.github.jaeseongs95.portal.app.remote.RemoteTarget;
 import io.github.jaeseongs95.portal.app.remote.ReplaceMethod;
 import io.github.jaeseongs95.portal.app.remote.RestoreEvidence;
+import io.github.jaeseongs95.portal.app.remote.SinkResult;
+import io.github.jaeseongs95.portal.app.remote.StdinBytes;
 import io.github.jaeseongs95.portal.app.remote.TransferFailureCause;
 import io.github.jaeseongs95.portal.app.remote.UnconfirmedCause;
 import io.github.jaeseongs95.portal.app.remote.UploadRequest;
@@ -30,13 +42,19 @@ import io.github.jaeseongs95.portal.domain.error.TransferErrorCode;
 import io.github.jaeseongs95.portal.domain.id.Digest;
 import io.github.jaeseongs95.portal.domain.id.Sha256Digester;
 import io.github.jaeseongs95.portal.domain.operation.CleanupState;
+import io.github.jaeseongs95.portal.domain.operation.ExecutionReason;
+import io.github.jaeseongs95.portal.domain.path.RemotePath;
+import io.github.jaeseongs95.portal.domain.path.WindowsRemotePath;
 
 /**
  * The SFTP boundary of the use case tests, the other thing that is not real: a {@link RemoteFileTransfer} that answers what the test says and counts what it did. It
- * follows the contract of the real adapter in what the use cases depend on: it calls the guard once before it "writes", it reads the bytes of an upload from the source
- * the use case gave it, and it writes the bytes of a download to the sink the use case gave it. The counters rise only after the guard passed.
+ * follows the contract of the real adapter in what the use cases depend on: on a Windows path it runs the link probe first, on a Windows elevated request it runs the
+ * administrator probe next (each through the {@link ScriptedExecutor}, which calls the guard once as {@code MinaRemoteExecutor} does), and then it calls the guard once
+ * before the SFTP work itself (as {@code MinaRemoteFileTransfer#withLease} does). The counters rise only after the SFTP guard passed and no cancel stopped the transfer.
  */
 final class ScriptedTransfer implements RemoteFileTransfer {
+
+    static final String WINDOWS_REPARSE_PROBE = "powershell.exe -NoLogo reparse-probe";
 
     /** What the transfer answers to an upload. */
     @FunctionalInterface
@@ -52,15 +70,26 @@ final class ScriptedTransfer implements RemoteFileTransfer {
         DownloadResult run(DownloadRequest request, PayloadSink sink);
     }
 
+    private final ScriptedExecutor executor;
     private final AtomicInteger uploadsSent = new AtomicInteger();
     private final AtomicInteger downloadsSent = new AtomicInteger();
     private final List<byte[]> uploaded = new CopyOnWriteArrayList<>();
     private volatile UploadBehavior upload = publishes();
     private volatile DownloadBehavior download = disconnects();
 
+    ScriptedTransfer(ScriptedExecutor executor) {
+        this.executor = Objects.requireNonNull(executor, "executor");
+    }
+
     @Override
     public UploadResult upload(UploadRequest request, PayloadSource source, ExecutionControl control) {
+        if (probeStopped(request.target(), request.path(), request.access(), control)) {
+            return new UploadResult.NotDispatched(TransferFailureCause.CANCELLED);
+        }
         control.guard().beforeDispatch();
+        if (control.cancel().requested()) {
+            return new UploadResult.NotDispatched(TransferFailureCause.CANCELLED);
+        }
         uploadsSent.incrementAndGet();
         try (PayloadRead read = source.open()) {
             uploaded.add(Channels.newInputStream(read.channel()).readAllBytes());
@@ -72,9 +101,32 @@ final class ScriptedTransfer implements RemoteFileTransfer {
 
     @Override
     public DownloadResult download(DownloadRequest request, PayloadSink sink, ExecutionControl control) {
+        if (probeStopped(request.target(), request.path(), request.access(), control)) {
+            return new DownloadResult.Failed(TransferFailureCause.CANCELLED);
+        }
         control.guard().beforeDispatch();
+        if (control.cancel().requested()) {
+            return new DownloadResult.Failed(TransferFailureCause.CANCELLED);
+        }
         downloadsSent.incrementAndGet();
         return download.run(request, sink);
+    }
+
+    private boolean probeStopped(RemoteTarget target, RemotePath path, FileAccess access, ExecutionControl control) {
+        if (path instanceof WindowsRemotePath && runProbe(target, WINDOWS_REPARSE_PROBE, control).outcome().reason() == ExecutionReason.CANCEL) {
+            return true;
+        }
+        if (access instanceof FileAccess.Elevated(ElevationPlan.WindowsAdministratorCheck check)
+            && runProbe(target, check.probe().commandLine(), control).outcome().reason() == ExecutionReason.CANCEL) {
+            return true;
+        }
+        return false;
+    }
+
+    private ExecutionReport runProbe(RemoteTarget target, String commandLine, ExecutionControl control) {
+        RemoteExecution execution = new RemoteExecution(target, new PreparedCommand(commandLine, StdinBytes.none(), CommandKind.COMMAND),
+            ExecutionLimits.defaults(), ExecReply.AWAITED);
+        return executor.run(execution, frame -> new SinkResult.Accepted(), control);
     }
 
     @Override

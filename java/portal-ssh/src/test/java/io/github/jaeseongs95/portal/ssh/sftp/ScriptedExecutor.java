@@ -67,8 +67,11 @@ final class ScriptedExecutor implements RemoteExecutor {
 
     @Override
     public ExecutionReport run(RemoteExecution request, OutputSink sink, ExecutionControl control) {
-        runs.add(new Run(request.command().commandLine(), request.command().stdin().bytes()));
         Answer answer = rule.apply(request.command().commandLine());
+        if (!(answer instanceof Answer.NotSent)) {
+            control.guard().beforeDispatch();
+        }
+        runs.add(new Run(request.command().commandLine(), request.command().stdin().bytes()));
         return switch (answer) {
             case Answer.Exits exits -> {
                 if (!exits.stdout().isEmpty()) {
