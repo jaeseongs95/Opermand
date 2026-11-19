@@ -60,19 +60,11 @@ class AclPrivateStorageTest {
         return allowed;
     }
 
-    /** The principals that may be in the list of a private path: its owner and the system account. */
+    /** The principals that may be in the list of a private path: its owner and (optionally) the system account resolved by well-known SID S-1-5-18. */
     private Set<UserPrincipal> ownerAndSystem(Path path) throws IOException {
         Set<UserPrincipal> expected = new HashSet<>();
         expected.add(view(path).getOwner());
-        for (String name : List.of("NT AUTHORITY\\SYSTEM", "SYSTEM")) {
-            try {
-                expected.add(path.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName(name));
-                break;
-            } catch (IOException e) {
-                // The account is known under another name on this machine; the next name is tried.
-                continue;
-            }
-        }
+        expected.add(TestStorage.lookupBySid(path, "S-1-5-18"));
         return expected;
     }
 

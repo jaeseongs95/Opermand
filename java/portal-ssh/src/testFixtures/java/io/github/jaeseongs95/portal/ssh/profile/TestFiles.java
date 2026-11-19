@@ -20,8 +20,6 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.nio.file.attribute.UserPrincipal;
-import java.nio.file.attribute.UserPrincipalLookupService;
-import java.nio.file.attribute.UserPrincipalNotFoundException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -31,7 +29,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.regex.Pattern;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Assumptions;
@@ -81,6 +82,8 @@ public final class TestFiles {
         }
     }
 
+    private static final Pattern SID_PATTERN = Pattern.compile("S-1-[0-9]+(-[0-9]+)+");
+    private static final long SID_TIMEOUT_SECONDS = 5L;
     private static final Map<String, String> SID_ACCOUNT_CACHE = new ConcurrentHashMap<>();
 
     /** The creator with both rules, in the order of the product. */
@@ -89,63 +92,77 @@ public final class TestFiles {
     }
 
     /**
-     * Resolves a Windows well-known SID to a {@link UserPrincipal} regardless of Windows display language (SSH_PORTAL-D-0140): translates the SID to the machine's localized
-     * {@code NTAccount} name once per JVM and falls back to English names if translation is unavailable.
+     * Resolves a Windows well-known SID to its localized {@code NTAccount} name with separated stdout/stderr, 5s timeout, no silent English fallback, and no failure caching
+     * (SSH_PORTAL-D-0140).
      */
-    private static Optional<UserPrincipal> lookupBySid(UserPrincipalLookupService lookup, String sid, List<String> fallbackNames) throws IOException {
-        List<String> candidates = new ArrayList<>();
-        String translated = SID_ACCOUNT_CACHE.computeIfAbsent(sid, TestFiles::translateWellKnownSid);
-        if (!translated.isEmpty()) {
-            candidates.add(translated);
+    public static String resolveWellKnownSid(String sid) {
+        if (sid == null || !SID_PATTERN.matcher(sid).matches()) {
+            throw new IllegalArgumentException("Invalid Windows SID: " + sid);
         }
-        candidates.addAll(fallbackNames);
-        for (String name : candidates) {
-            try {
-                return Optional.of(lookup.lookupPrincipalByName(name));
-            } catch (UserPrincipalNotFoundException ignored) {
-                // try next candidate
-            }
+        String cached = SID_ACCOUNT_CACHE.get(sid);
+        if (cached != null) {
+            return cached;
         }
-        return Optional.empty();
+        String resolved = translateWellKnownSid(sid);
+        SID_ACCOUNT_CACHE.put(sid, resolved);
+        return resolved;
+    }
+
+    public static UserPrincipal lookupBySid(Path anyPath, String sid) throws IOException {
+        String account = resolveWellKnownSid(sid);
+        return anyPath.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName(account);
     }
 
     private static String translateWellKnownSid(String sid) {
+        Process process = null;
         try {
-            Process process = new ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-Command",
+            process = new ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-Command",
                 "[Console]::OutputEncoding=[Text.Encoding]::UTF8; (New-Object System.Security.Principal.SecurityIdentifier('" + sid
                     + "')).Translate([System.Security.Principal.NTAccount]).Value")
-                .redirectErrorStream(true).start();
-            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
-            return process.waitFor() == 0 && !output.isEmpty() ? output : "";
-        } catch (IOException | InterruptedException e) {
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
+                .redirectErrorStream(false)
+                .start();
+            Process started = process;
+            CompletableFuture<String> stdoutFuture = CompletableFuture.supplyAsync(() -> readStreamUtf8(started.getInputStream()));
+            CompletableFuture<String> stderrFuture = CompletableFuture.supplyAsync(() -> readStreamUtf8(started.getErrorStream()));
+            if (!started.waitFor(SID_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                started.destroyForcibly();
+                throw new IllegalStateException("Timed out translating Windows SID " + sid + " after " + SID_TIMEOUT_SECONDS + "s");
             }
+            String stdout = stdoutFuture.join().trim();
+            String stderr = stderrFuture.join().trim();
+            int exit = started.exitValue();
+            if (exit != 0 || stdout.isEmpty() || stdout.contains("\n") || stdout.contains("\r")) {
+                throw new IllegalStateException("Failed to translate Windows SID " + sid + " (exit=" + exit + ", stderr=" + stderr + ")");
+            }
+            return stdout;
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to invoke Windows SID translation for " + sid, e);
+        } catch (InterruptedException e) {
+            if (process != null) {
+                process.destroyForcibly();
+            }
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("Interrupted while translating Windows SID " + sid, e);
+        }
+    }
+
+    private static String readStreamUtf8(java.io.InputStream in) {
+        try (in) {
+            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
             return "";
         }
     }
 
     private static UserPrincipal ownerRights(Path anyPath) throws IOException {
-        UserPrincipalLookupService lookup = anyPath.getFileSystem().getUserPrincipalLookupService();
-        return lookupBySid(lookup, "S-1-3-4", List.of("OWNER RIGHTS"))
-            .orElseThrow(() -> new IllegalStateException("The machine cannot resolve well-known SID S-1-3-4 (OWNER RIGHTS)"));
+        return lookupBySid(anyPath, "S-1-3-4");
     }
 
     /**
-     * A principal that the product must not let in, looked up by well-known Windows SIDs (S-1-1-0 Everyone, S-1-5-32-545 Users, S-1-5-11 Authenticated Users).
+     * A principal that the product must not let in, looked up by well-known Windows SID S-1-1-0 (Everyone).
      */
     public static UserPrincipal outsider(Path anyPath) throws IOException {
-        UserPrincipalLookupService lookup = anyPath.getFileSystem().getUserPrincipalLookupService();
-        for (List<String> spec : List.of(
-            List.of("S-1-1-0", "Everyone"),
-            List.of("S-1-5-32-545", "BUILTIN\\Users", "Users"),
-            List.of("S-1-5-11", "NT AUTHORITY\\Authenticated Users", "Authenticated Users"))) {
-            Optional<UserPrincipal> found = lookupBySid(lookup, spec.getFirst(), spec.subList(1, spec.size()));
-            if (found.isPresent()) {
-                return found.get();
-            }
-        }
-        throw new IllegalStateException("The machine knows none of the well-known groups S-1-1-0, S-1-5-32-545, S-1-5-11");
+        return lookupBySid(anyPath, "S-1-1-0");
     }
 
     /**
@@ -297,9 +314,8 @@ public final class TestFiles {
         assertThat(view).as("the acl view of %s", path).isNotNull();
         Set<UserPrincipal> allowed = new HashSet<>();
         allowed.add(view.getOwner());
-        UserPrincipalLookupService lookup = path.getFileSystem().getUserPrincipalLookupService();
-        lookupBySid(lookup, "S-1-5-18", List.of("NT AUTHORITY\\SYSTEM", "SYSTEM")).ifPresent(allowed::add);
-        lookupBySid(lookup, "S-1-5-32-544", List.of("BUILTIN\\Administrators", "Administrators")).ifPresent(allowed::add);
+        allowed.add(lookupBySid(path, "S-1-5-18"));
+        allowed.add(lookupBySid(path, "S-1-5-32-544"));
         for (AclEntry entry : view.getAcl()) {
             if (entry.type() == AclEntryType.ALLOW && entry.permissions().stream().anyMatch(DATA_ACCESS::contains)) {
                 assertThat(allowed).as("the entry %s of %s", entry, path).contains(entry.principal());

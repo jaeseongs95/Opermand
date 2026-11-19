@@ -5,7 +5,6 @@ import java.nio.channels.FileChannel;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileStore;
-import java.nio.file.FileSystem;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.OpenOption;
@@ -17,31 +16,26 @@ import java.nio.file.attribute.AclEntryPermission;
 import java.nio.file.attribute.AclEntryType;
 import java.nio.file.attribute.AclFileAttributeView;
 import java.nio.file.attribute.UserPrincipal;
-import java.nio.file.attribute.UserPrincipalNotFoundException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
 import java.util.EnumSet;
 import java.util.List;
-import java.util.Optional;
 import java.util.Set;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 /**
  * {@link PrivateStorage} for a file store with the {@code acl} view (an NTFS volume), where there are no permission bits.
- * Replaces the ACL of newly created folders/files with full control for the owner and the system account; existing paths are neither read nor changed (decision D-0117).
+ * Replaces the ACL of newly created folders/files with full control for the owner only (locale-independent, no hardcoded English account names — SSH_PORTAL-D-0140);
+ * existing paths are neither read nor changed (decision D-0117).
  */
 @Component
 @Order(2)
 public final class AclPrivateStorage implements PrivateStorage {
 
-    private static final Logger LOG = LoggerFactory.getLogger(AclPrivateStorage.class);
     private static final String ACL_VIEW = "acl";
-    private static final List<String> SYSTEM_NAMES = List.of("NT AUTHORITY\\SYSTEM", "SYSTEM");
 
     @Override
     public boolean supports(FileStore store) {
@@ -119,10 +113,7 @@ public final class AclPrivateStorage implements PrivateStorage {
 
     private void protect(Path path, boolean folder) throws IOException {
         AclFileAttributeView view = view(path);
-        List<AclEntry> acl = new ArrayList<>();
-        acl.add(fullControl(view.getOwner(), folder));
-        firstKnown(path.getFileSystem(), SYSTEM_NAMES).ifPresent(system -> acl.add(fullControl(system, folder)));
-        view.setAcl(acl);
+        view.setAcl(List.of(fullControl(view.getOwner(), folder)));
     }
 
     private AclEntry fullControl(UserPrincipal principal, boolean inheritable) {
@@ -139,18 +130,5 @@ public final class AclPrivateStorage implements PrivateStorage {
             throw new UnsafeStorageException(path.toString(), "the file store has no access control list view");
         }
         return view;
-    }
-
-    private Optional<UserPrincipal> firstKnown(FileSystem system, List<String> names) {
-        for (String name : names) {
-            try {
-                return Optional.of(system.getUserPrincipalLookupService().lookupPrincipalByName(name));
-            } catch (UserPrincipalNotFoundException e) {
-                LOG.debug("The account {} is not known to this machine", name, e);
-            } catch (IOException e) {
-                LOG.warn("The account {} could not be looked up", name, e);
-            }
-        }
-        return Optional.empty();
     }
 }
