@@ -154,7 +154,7 @@ class AssemblyContextTest {
         assertThat(artifactLimits).isSameAs(settings.artifactLimits());
         assertThat(audit.file()).isEqualTo(settings.auditFile());
         assertThat(transferLimits.maxFileSize().toBytes()).isEqualTo(artifactLimits.maxFileBytes());
-        assertThat(providers.providers()).extracting(AgentCliProvider::id).containsExactlyInAnyOrder(AgentCliProviderId.CODEX, AgentCliProviderId.CLAUDE);
+        assertThat(providers.providers()).extracting(AgentCliProvider::id).containsExactlyInAnyOrder(AgentCliProviderId.parse("codex"), AgentCliProviderId.parse("claude"));
         assertThat(protection.check()).isEqualTo(new ProtectionCheck.Protected());
     }
 

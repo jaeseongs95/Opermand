@@ -6,6 +6,7 @@ import io.github.jaeseongs95.portal.app.cli.AgentCliInstallRecord;
 import io.github.jaeseongs95.portal.app.cli.CliVersion;
 import io.github.jaeseongs95.portal.app.cli.RemoteState;
 import io.github.jaeseongs95.portal.app.cli.RemoteStatus;
+import io.github.jaeseongs95.portal.domain.agentcli.AgentCliProviderId;
 import io.github.jaeseongs95.portal.domain.agentcli.AgentRelease;
 import io.github.jaeseongs95.portal.domain.id.Digest;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
@@ -19,7 +20,7 @@ class AgentCliMapper {
     /** The row of a new request, with the remote status of the record. */
     AgentCliRequestRow row(AgentCliInstallRecord record) {
         AgentRelease release = record.release();
-        AgentCliRequestRow base = new AgentCliRequestRow(record.operationId().value(), record.provider(), record.action(), release.packageName(), release.version(),
+        AgentCliRequestRow base = new AgentCliRequestRow(record.operationId().value(), record.provider().wire(), record.action(), release.packageName(), release.version(),
             release.tarball(), release.integrity(), release.releaseDigestLabel(), record.expectedInstallationRevision().hex(), record.intentDigest(),
             record.planExpiresAt(), null, null, null, null);
         return withRemote(base, record.remote());
@@ -38,9 +39,10 @@ class AgentCliMapper {
 
     /** The record of a stored row. */
     AgentCliInstallRecord record(AgentCliRequestRow row) {
-        AgentRelease release = new AgentRelease(row.provider(), row.packageName(), row.releaseVersion(), row.releaseTarball(), row.releaseIntegrity(),
+        AgentCliProviderId provider = AgentCliProviderId.parse(row.provider());
+        AgentRelease release = new AgentRelease(provider, row.packageName(), row.releaseVersion(), row.releaseTarball(), row.releaseIntegrity(),
             new Digest(digestHex(row.releaseDigest())));
-        return new AgentCliInstallRecord(new OperationId(row.operationId()), row.provider(), row.action(), release, new Digest(row.expectedInstallationRevision()),
+        return new AgentCliInstallRecord(new OperationId(row.operationId()), provider, row.action(), release, new Digest(row.expectedInstallationRevision()),
             row.intentDigest(), row.planExpiresAt(), remote(row));
     }
 

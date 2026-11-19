@@ -3,9 +3,11 @@ package io.github.jaeseongs95.portal.app.capacity;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import io.github.jaeseongs95.portal.app.config.AvailableCpus;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
@@ -44,19 +46,25 @@ public class CapacityService {
     }
 
     /**
-     * Replaces the limits with {@code proposed}, under the version the administrator saw. The version of {@code proposed} is ignored: the store advances the version by 1. A
-     * refusal changes nothing.
+     * Replaces the limits with {@code proposed}, under the version the administrator saw. The version of {@code proposed} is ignored: the store advances the version by 1.
+     * Runs inside one transaction: maintenance, version, and target validation are checked against read-only state before any write or default initialization, so a refusal
+     * never mutates or initializes the database (SSH_PORTAL-D-0124).
      */
+    @Transactional
     public CapacityState update(long expectedVersion, CapacityState proposed) {
         Objects.requireNonNull(proposed, "proposed");
         if (maintenance.occupied()) {
             throw new RequestRefusedException(RequestErrorCode.MAINTENANCE_ACTIVE);
         }
-        CapacityState stored = current();
-        if (stored.version() != expectedVersion) {
+        Optional<CapacityState> existing = store.read();
+        CapacityState current = existing.orElseGet(this::defaults);
+        if (current.version() != expectedVersion) {
             throw new RequestRefusedException(CapacityErrorCode.CAPACITY_REVISION_CONFLICT);
         }
-        requireKnownTargets(stored, proposed.targets());
+        requireKnownTargets(current, proposed.targets());
+        if (existing.isEmpty()) {
+            store.initialize(current);
+        }
         return store.compareAndSet(expectedVersion, proposed);
     }
 

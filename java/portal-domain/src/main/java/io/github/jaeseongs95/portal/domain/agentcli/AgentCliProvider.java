@@ -19,9 +19,14 @@ public interface AgentCliProvider {
     String distributionUrl(String version);
 
     /**
-     * Validates a provider-specific integrity checksum format (for example, canonical SRI {@code sha512-...} for npm packages).
+     * Validates a provider-specific integrity checksum format (fail-closed: every provider must explicitly implement its checksum rule).
      * Throws {@link IllegalArgumentException} if the checksum does not satisfy this provider's distribution contract.
      */
-    default void verifyIntegrity(String integrity) {
-    }
+    void verifyIntegrity(String integrity);
+
+    /**
+     * Relative path under the remote user's home directory where this tool stores its login state (for example {@code .tool/auth.json}).
+     * Owned by each provider so the SSH installer holds no hardcoded vendor table.
+     */
+    String credentialFileName();
 }

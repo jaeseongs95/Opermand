@@ -140,6 +140,16 @@ class CapacityServiceTest {
         assertThat(next.version()).isEqualTo(stored.version() + 1L);
     }
 
+    @Test
+    @DisplayName("TC-R3-F6: a stale version on an uninitialized database is refused without persisting default row v1")
+    void staleVersionOnUninitializedDbDoesNotPersistDefaults() {
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM runtime_capacity", Integer.class)).isZero();
+        CapacityState proposed = new CapacityState(99L, new Capacity(2), new Capacity(2), List.of());
+
+        assertRefused(() -> service.update(99L, proposed), CapacityErrorCode.CAPACITY_REVISION_CONFLICT);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM runtime_capacity", Integer.class)).isZero();
+    }
+
     // ---- helpers ----
 
     private void assertRefused(Runnable call, io.github.jaeseongs95.portal.domain.error.ErrorCode code) {

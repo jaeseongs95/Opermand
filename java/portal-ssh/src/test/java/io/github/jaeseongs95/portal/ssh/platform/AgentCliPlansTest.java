@@ -44,7 +44,7 @@ class AgentCliPlansTest {
     @Test
     @DisplayName("S3-AG-10 the remote commands of a plan are the unpacking of the package and nothing else, on both platforms")
     void onlyTheUnpackIsRemote() {
-        for (AgentCliPlan plan : List.of(linuxPlan(AgentCliProviderId.CODEX), windowsPlan(AgentCliProviderId.CLAUDE))) {
+        for (AgentCliPlan plan : List.of(linuxPlan(AgentCliProviderId.parse("codex")), windowsPlan(AgentCliProviderId.parse("claude")))) {
             assertThat(plan.commands().stream().map(FixedRemoteCommand::label).toList()).containsExactly("unpack");
             assertThat(AgentCliStep.values()).containsExactly(AgentCliStep.UNPACK);
             assertThat(AgentCliStep.UNPACK.in(plan).label()).isEqualTo(AgentCliStep.UNPACK.label());
@@ -54,7 +54,7 @@ class AgentCliPlansTest {
     @Test
     @DisplayName("S3-AG-10 the POSIX unpack command is tar on the package file in the partial directory of the release, and nothing else: no readlink, mkdir, sed, grep, cp, rm, mv or ln")
     void linuxCommand() {
-        AgentRelease release = release(AgentCliProviderId.CODEX);
+        AgentRelease release = release(AgentCliProviderId.parse("codex"));
         AgentCliPlan plan = linux.agentCliPlan(fixtures.intent(release), release);
         String directory = PlatformFixtures.VERSION + "-" + release.releaseDigest().hex().substring(0, 16);
 
@@ -67,8 +67,8 @@ class AgentCliPlansTest {
     @Test
     @DisplayName("S3-AG-10 the commands of the two tools differ only in the tool's directory; no step runs an installed program")
     void toolsAndNoInstalledProgram() {
-        AgentCliPlan codex = linuxPlan(AgentCliProviderId.CODEX);
-        AgentCliPlan claude = linuxPlan(AgentCliProviderId.CLAUDE);
+        AgentCliPlan codex = linuxPlan(AgentCliProviderId.parse("codex"));
+        AgentCliPlan claude = linuxPlan(AgentCliProviderId.parse("claude"));
 
         assertThat(AgentCliStep.UNPACK.in(codex).commandLine()).contains("/agent-cli/codex/");
         assertThat(AgentCliStep.UNPACK.in(claude).commandLine()).contains("/agent-cli/claude/");
@@ -78,7 +78,7 @@ class AgentCliPlansTest {
     @Test
     @DisplayName("S3-AG-10 RC-B-625 the Windows unpack command is one PowerShell line under the shell's 8000-character limit")
     void windowsCommand() {
-        AgentCliPlan plan = windowsPlan(AgentCliProviderId.CODEX);
+        AgentCliPlan plan = windowsPlan(AgentCliProviderId.parse("codex"));
 
         assertThat(plan.commands()).hasSize(1);
         assertThat(plan.commands().get(0).commandLine()).startsWith("powershell.exe ").hasSizeLessThanOrEqualTo(8000).doesNotContain("fixture-request-key");
@@ -87,8 +87,8 @@ class AgentCliPlansTest {
     @Test
     @DisplayName("S3-AG-10 the intent decides the tool only: a plan for another provider than its release is refused by the plan itself")
     void planChecksProvider() {
-        AgentRelease codex = release(AgentCliProviderId.CODEX);
-        AgentCliIntent claudeIntent = fixtures.intent(release(AgentCliProviderId.CLAUDE));
+        AgentRelease codex = release(AgentCliProviderId.parse("codex"));
+        AgentCliIntent claudeIntent = fixtures.intent(release(AgentCliProviderId.parse("claude")));
 
         assertThatThrownBy(() -> linux.agentCliPlan(claudeIntent, codex)).isInstanceOf(IllegalArgumentException.class);
     }

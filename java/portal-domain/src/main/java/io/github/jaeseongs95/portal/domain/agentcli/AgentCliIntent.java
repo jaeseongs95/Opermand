@@ -57,7 +57,7 @@ public record AgentCliIntent(TargetId targetId, TargetRevision targetRevision, P
         Objects.requireNonNull(expiresAt, "expiresAt");
         Objects.requireNonNull(now, "now");
         Objects.requireNonNull(digester, "digester");
-        if (provider.id() != request.provider()) {
+        if (!provider.id().equals(request.provider())) {
             throw new IllegalArgumentException("Unsupported CLI provider");
         }
         if (!binding.enabled()) {
@@ -66,7 +66,7 @@ public record AgentCliIntent(TargetId targetId, TargetRevision targetRevision, P
         if (!request.targets(binding)) {
             throw new IllegalArgumentException("Stale CLI target binding");
         }
-        if (release.provider() != request.provider() || !release.packageName().equals(provider.packageName())
+        if (!release.provider().equals(request.provider()) || !release.packageName().equals(provider.packageName())
                 || !release.tarball().equals(provider.distributionUrl(release.version())) || !release.digestMatches(digester)
                 || !request.releaseDigest().equals(release.releaseDigestLabel())) {
             throw new IllegalArgumentException("CLI release plan changed");

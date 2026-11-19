@@ -20,7 +20,7 @@ public record AgentCliPlan(AgentCliProviderId provider, AgentRelease release, Li
         Objects.requireNonNull(provider, "provider");
         Objects.requireNonNull(release, "release");
         commands = List.copyOf(commands);
-        if (release.provider() != provider) {
+        if (!release.provider().equals(provider)) {
             throw new IllegalArgumentException("The release is of another provider");
         }
         if (commands.isEmpty()) {

@@ -1,6 +1,7 @@
 package io.github.jaeseongs95.portal.app.storage;
 
 import java.time.Instant;
+import java.util.Optional;
 
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
 
@@ -13,25 +14,30 @@ public final class ReapFixtures {
     /** A maintenance store that is only the answer to "is it occupied". */
     public static final class Maintenance implements MaintenanceStore {
 
-        private boolean occupied;
+        private Instant reservedAt;
 
         public void occupy(boolean value) {
-            this.occupied = value;
+            this.reservedAt = value ? Instant.EPOCH : null;
         }
 
         @Override
         public boolean occupied() {
-            return occupied;
+            return reservedAt != null;
+        }
+
+        @Override
+        public Optional<Instant> reservedAt() {
+            return Optional.ofNullable(reservedAt);
         }
 
         @Override
         public void reserve(Instant reservedAt) {
-            occupied = true;
+            this.reservedAt = reservedAt;
         }
 
         @Override
         public void release() {
-            occupied = false;
+            this.reservedAt = null;
         }
     }
 

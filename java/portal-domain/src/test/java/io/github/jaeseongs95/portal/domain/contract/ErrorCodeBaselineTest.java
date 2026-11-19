@@ -66,9 +66,9 @@ class ErrorCodeBaselineTest {
     }
 
     @Test
-    @DisplayName("S2-CO-01 S3-UC-07 the categories hold the counted number of codes: 32, 24, 45, 9, 13, 72, 18 and 8 (stage 3 moved one code and added three)")
+    @DisplayName("S2-CO-01 S3-UC-07 the categories hold the counted number of codes: 31, 24, 45, 9, 13, 72, 18 and 8 (D-0124 removed MAINTENANCE_OWNER_USED)")
     void categoriesHoldTheCountedCodes() {
-        assertThat(RequestErrorCode.values()).hasSize(32);
+        assertThat(RequestErrorCode.values()).hasSize(31);
         assertThat(OperationErrorCode.values()).hasSize(24);
         assertThat(ArtifactErrorCode.values()).hasSize(45);
         assertThat(HistoryErrorCode.values()).hasSize(9);
@@ -76,7 +76,7 @@ class ErrorCodeBaselineTest {
         assertThat(DesktopErrorCode.values()).hasSize(72);
         assertThat(TransferErrorCode.values()).hasSize(18);
         assertThat(ExecutionErrorCode.values()).hasSize(8);
-        assertThat(allNames()).hasSize(221);
+        assertThat(allNames()).hasSize(220);
     }
 
     @Test
@@ -88,8 +88,8 @@ class ErrorCodeBaselineTest {
             listed.add(entry.get(0).stringValue());
             assertThat(entry.get(1).stringValue()).isNotBlank();
         }
-        assertThat(listed).containsExactlyInAnyOrder("POLICY_REVISION_CONFLICT", "MAINTENANCE_OWNER_USED", "OUTPUT_VERSION_CONFLICT");
-        assertThat(Arrays.stream(RequestErrorCode.values()).map(ErrorCode::name)).contains("POLICY_REVISION_CONFLICT", "MAINTENANCE_OWNER_USED");
+        assertThat(listed).containsExactlyInAnyOrder("POLICY_REVISION_CONFLICT", "OUTPUT_VERSION_CONFLICT");
+        assertThat(Arrays.stream(RequestErrorCode.values()).map(ErrorCode::name)).contains("POLICY_REVISION_CONFLICT").doesNotContain("MAINTENANCE_OWNER_USED");
         assertThat(Arrays.stream(OperationErrorCode.values()).map(ErrorCode::name)).contains("OUTPUT_VERSION_CONFLICT");
         assertThat(Arrays.stream(ArtifactErrorCode.values()).map(ErrorCode::name)).doesNotContain("ARTIFACT_STORAGE_FULL");
         assertThat(Arrays.stream(ExecutionErrorCode.values()).map(ErrorCode::name)).contains("ARTIFACT_STORAGE_FULL");

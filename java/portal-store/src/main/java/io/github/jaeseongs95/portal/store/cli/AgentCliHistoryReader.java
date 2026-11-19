@@ -79,7 +79,7 @@ class AgentCliHistoryReader {
     }
 
     private Slice page(AgentCliBinding binding, HistoryCursor.After cursor) {
-        MapSqlParameterSource parameters = new MapSqlParameterSource().addValue("provider", binding.provider().name())
+        MapSqlParameterSource parameters = new MapSqlParameterSource().addValue("provider", binding.provider().wire())
             .addValue("targetId", binding.targetId().value()).addValue("targetRevision", binding.targetRevision().hex())
             .addValue("profile", binding.profile().value()).addValue("limit", PAGE_SIZE + 1);
         if (cursor != null) {

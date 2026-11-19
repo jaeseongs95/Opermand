@@ -2,6 +2,7 @@ package io.github.jaeseongs95.portal.store.maintenance;
 
 import java.time.Instant;
 import java.util.Objects;
+import java.util.Optional;
 
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.jdbc.core.JdbcAggregateOperations;
@@ -33,6 +34,12 @@ public class JdbcMaintenanceStore implements MaintenanceStore {
     @Transactional(readOnly = true)
     public boolean occupied() {
         return reservations.existsById(THE_ROW);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public Optional<Instant> reservedAt() {
+        return reservations.findById(THE_ROW).map(MaintenanceReservationRow::reservedAt);
     }
 
     @Override

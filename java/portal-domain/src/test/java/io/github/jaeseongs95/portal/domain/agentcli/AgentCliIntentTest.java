@@ -74,7 +74,7 @@ class AgentCliIntentTest {
 
         assertThat(intent.intentDigest()).isEqualTo(expected);
         assertThat(intent.targetId()).isEqualTo(fx.targetId);
-        assertThat(intent.provider()).isEqualTo(AgentCliProviderId.CODEX);
+        assertThat(intent.provider()).isEqualTo(fx.codexId);
         assertThat(intent.action()).isEqualTo(AgentCliAction.INSTALL);
         assertThat(intent.expectedInstallationRevision()).isEqualTo(fx.installed);
     }
@@ -84,11 +84,11 @@ class AgentCliIntentTest {
     void refusesAStaleTarget() {
         AgentRelease release = fx.release(fx.codex, "1.2.3");
         String label = release.releaseDigestLabel();
-        AgentCliRequest otherTarget = new AgentCliRequest(new TargetId("beta"), fx.revision, fx.profile, AgentCliProviderId.CODEX, AgentCliAction.INSTALL, label,
+        AgentCliRequest otherTarget = new AgentCliRequest(new TargetId("beta"), fx.revision, fx.profile, fx.codexId, AgentCliAction.INSTALL, label,
                 fx.installed, fx.key(1));
-        AgentCliRequest otherRevision = new AgentCliRequest(fx.targetId, new TargetRevision(new Digest("f".repeat(64))), fx.profile, AgentCliProviderId.CODEX,
+        AgentCliRequest otherRevision = new AgentCliRequest(fx.targetId, new TargetRevision(new Digest("f".repeat(64))), fx.profile, fx.codexId,
                 AgentCliAction.INSTALL, label, fx.installed, fx.key(1));
-        AgentCliRequest otherProfile = new AgentCliRequest(fx.targetId, fx.revision, new ProfileAlias("other"), AgentCliProviderId.CODEX,
+        AgentCliRequest otherProfile = new AgentCliRequest(fx.targetId, fx.revision, new ProfileAlias("other"), fx.codexId,
                 AgentCliAction.INSTALL, label, fx.installed, fx.key(1));
 
         assertThatThrownBy(() -> fx.intent(fx.codex, otherTarget, release, fx.expiry)).as("target").isInstanceOf(IllegalArgumentException.class);
@@ -138,9 +138,9 @@ class AgentCliIntentTest {
 
         assertThatThrownBy(() -> new RequestKey("short")).as("short key").isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new RequestKey("x".repeat(129))).as("long key").isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new AgentCliRequest(fx.targetId, fx.revision, fx.profile, AgentCliProviderId.CODEX, AgentCliAction.INSTALL,
+        assertThatThrownBy(() -> new AgentCliRequest(fx.targetId, fx.revision, fx.profile, fx.codexId, AgentCliAction.INSTALL,
                 release.releaseDigestLabel(), null, fx.key(1))).as("installation revision").isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new AgentCliRequest(fx.targetId, fx.revision, fx.profile, AgentCliProviderId.CODEX, AgentCliAction.INSTALL,
+        assertThatThrownBy(() -> new AgentCliRequest(fx.targetId, fx.revision, fx.profile, fx.codexId, AgentCliAction.INSTALL,
                 "sha256:short", fx.installed, fx.key(1))).as("release digest").isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -154,7 +154,7 @@ class AgentCliIntentTest {
                 missing == 0 ? null : fx.targetId,
                 missing == 1 ? null : fx.revision,
                 missing == 2 ? null : fx.profile,
-                missing == 3 ? null : AgentCliProviderId.CODEX,
+                missing == 3 ? null : fx.codexId,
                 missing == 4 ? null : AgentCliAction.INSTALL,
                 missing == 5 ? null : label,
                 missing == 6 ? null : fx.installed,
@@ -179,7 +179,7 @@ class AgentCliIntentTest {
                 new Digest("f".repeat(64)));
         AgentRelease otherVersion = new AgentRelease(original.provider(), original.packageName(), "1.2.4", fx.tarball(fx.codex, "1.2.4"), original.integrity(),
                 original.releaseDigest());
-        AgentRelease otherProvider = new AgentRelease(AgentCliProviderId.CLAUDE, original.packageName(), original.version(), original.tarball(),
+        AgentRelease otherProvider = new AgentRelease(fx.claudeId, original.packageName(), original.version(), original.tarball(),
                 original.integrity(), original.releaseDigest());
         AgentRelease otherIntegrity = new AgentRelease(original.provider(), original.packageName(), original.version(), original.tarball(),
                 fx.integrityOf(8), original.releaseDigest());
@@ -197,7 +197,7 @@ class AgentCliIntentTest {
     @DisplayName("RC-A-096 a request that names a different release digest is refused")
     void detectsATamperedRequestDigest() {
         AgentRelease release = fx.release(fx.codex, "1.2.3");
-        AgentCliRequest request = new AgentCliRequest(fx.targetId, fx.revision, fx.profile, AgentCliProviderId.CODEX, AgentCliAction.INSTALL,
+        AgentCliRequest request = new AgentCliRequest(fx.targetId, fx.revision, fx.profile, fx.codexId, AgentCliAction.INSTALL,
                 "sha256:" + "f".repeat(64), fx.installed, fx.key(1));
 
         assertThatThrownBy(() -> fx.intent(fx.codex, request, release, fx.expiry)).isInstanceOf(IllegalArgumentException.class);

@@ -60,11 +60,12 @@ jobs:
       # is not one of the sizes of the test JVM (portal.test.cpus, heap, forks), so the step above is not affected. The whole of portal-store is run; of portal-ssh the two packages
       # that use the file rules (profile and hostkey): the rest of the module has a Linux-only race of its own that is reported as a defect and not hidden here (defect
       # SSH_PORTAL-D-0131: UploadTest S3-SF-16 / RC-B-924, two concurrent uploads to one new name were both published once on this runner).
-      - name: Unit tests of portal-store and the file rules of portal-ssh with permission bits and symbolic links required
+      - name: Unit tests of all modules and file rules of portal-ssh with permission bits and symbolic links required
         working-directory: java
         run: >-
-          ./gradlew --no-daemon --console=plain --continue :portal-store:test :portal-ssh:test
-          --tests 'io.github.jaeseongs95.portal.ssh.profile.*' --tests 'io.github.jaeseongs95.portal.ssh.hostkey.*'
+          ./gradlew --no-daemon --console=plain --continue
+          :portal-domain:test :portal-app:test :portal-store:test :portal-server:test :portal-web:test
+          :portal-ssh:test --tests 'io.github.jaeseongs95.portal.ssh.profile.*' --tests 'io.github.jaeseongs95.portal.ssh.hostkey.*'
           -Pportal.test.require=posix,links
       - name: Stop the OpenSSH server and remove the account
         if: always()
@@ -77,8 +78,7 @@ jobs:
           path: |
             java/portal-ssh/build/test-results/realOpenSshTest/*.xml
             java/portal-ssh/build/reports/tests/realOpenSshTest
-            java/portal-store/build/test-results/test/*.xml
-            java/portal-ssh/build/test-results/test/*.xml
+            java/*/build/test-results/test/*.xml
           if-no-files-found: warn
           retention-days: 14
 
@@ -119,14 +119,11 @@ jobs:
       # The classes run are the ACL rule tests and the classes whose tests go through the ACL rules on this volume (the storage package and the payload store of portal-store, the
       # profile and hostkey packages of portal-ssh, with the host key test for a folder in place of the file); the module tests as a whole are not part of this job.
       # The tests change real ACLs in the runner's temporary folder.
-      - name: Unit tests of the ACL rules with access control lists required
+      - name: Full Gradle check across all modules with access control lists required
         shell: bash
         working-directory: java
         run: >-
-          ./gradlew --no-daemon --console=plain --continue
-          :portal-store:test --tests 'io.github.jaeseongs95.portal.store.storage.*' --tests 'io.github.jaeseongs95.portal.store.artifact.FileArtifactPayloadStoreTest'
-          :portal-ssh:test --tests 'io.github.jaeseongs95.portal.ssh.profile.*' --tests 'io.github.jaeseongs95.portal.ssh.hostkey.*'
-          -Pportal.test.require=acl
+          ./gradlew --no-daemon --console=plain --continue check -Pportal.test.require=acl
       # Diagnostic: the server log (LogLevel VERBOSE, no command text) of the sshd the preparation script started.
       # It runs whatever the tests did and cannot fail the job (continue-on-error), so it never hides the result of the tests. First it prints, for reference only, how many ping commands
       # started after the prepared sshd are running and how many sshd processes exist. The ping count is not evidence for case S-D0038-02: a 15 s command ends by itself
@@ -175,7 +172,6 @@ jobs:
           path: |
             java/portal-ssh/build/test-results/realOpenSshTest/*.xml
             java/portal-ssh/build/reports/tests/realOpenSshTest
-            java/portal-store/build/test-results/test/*.xml
-            java/portal-ssh/build/test-results/test/*.xml
+            java/*/build/test-results/test/*.xml
           if-no-files-found: warn
           retention-days: 14

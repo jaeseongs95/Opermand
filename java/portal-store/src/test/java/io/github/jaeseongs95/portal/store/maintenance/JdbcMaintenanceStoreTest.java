@@ -38,18 +38,22 @@ class JdbcMaintenanceStoreTest {
     @DisplayName("TC-D0124-01: a single reservation excludes duplicates with MAINTENANCE_ACTIVE, and release frees it for reuse")
     void reservationExcludesDuplicatesAndReleasesCleanly() {
         assertThat(store.occupied()).isFalse();
+        assertThat(store.reservedAt()).isEmpty();
         assertThatThrownBy(() -> savepoints.run(() -> store.release())).isInstanceOfSatisfying(RequestRefusedException.class,
             e -> assertThat(e.code()).isEqualTo(RequestErrorCode.REQUEST_REFUSED));
 
         store.reserve(T1);
         assertThat(store.occupied()).isTrue();
+        assertThat(store.reservedAt()).contains(T1);
         refusedReservation(T2);
 
         store.release();
         assertThat(store.occupied()).isFalse();
+        assertThat(store.reservedAt()).isEmpty();
 
         store.reserve(T2);
         assertThat(store.occupied()).isTrue();
+        assertThat(store.reservedAt()).contains(T2);
     }
 
     @Test

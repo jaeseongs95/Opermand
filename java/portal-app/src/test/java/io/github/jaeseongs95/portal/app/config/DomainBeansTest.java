@@ -13,7 +13,6 @@ import org.springframework.boot.test.context.runner.ApplicationContextRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import io.github.jaeseongs95.portal.domain.approval.MaintenancePolicy;
 import io.github.jaeseongs95.portal.domain.classify.CommandClass;
 import io.github.jaeseongs95.portal.domain.classify.CommandClassifier;
 import io.github.jaeseongs95.portal.domain.id.ArtifactIdGenerator;
@@ -61,14 +60,13 @@ class DomainBeansTest {
     }
 
     @Test
-    @DisplayName("S3-UC-03: DomainBeans gives one CommandClassifier, one OutputRedactor, one OperationScheduler and one MaintenancePolicy, and they work")
+    @DisplayName("S3-UC-03: DomainBeans gives one CommandClassifier, one OutputRedactor and one OperationScheduler, and they work")
     void theClassifierTheRedactorAndThePoliciesAreBeans() {
         runner.run(context -> {
             assertThat(context).hasNotFailed();
             assertThat(context).hasSingleBean(CommandClassifier.class);
             assertThat(context).hasSingleBean(OutputRedactor.class);
             assertThat(context).hasSingleBean(OperationScheduler.class);
-            assertThat(context).hasSingleBean(MaintenancePolicy.class);
             assertThat(context.getBean(CommandClassifier.class).classify(new CommandText("cat /tmp/a")).commandClass()).isEqualTo(CommandClass.READ_ONLY);
             assertThat(context.getBean(OutputRedactor.class).redact("key AKIAABCDEFGHIJKLMNOP end").value()).doesNotContain("AKIAABCDEFGHIJKLMNOP");
         });

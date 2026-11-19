@@ -34,12 +34,14 @@ class NpmCliProvidersTest {
     void npmProvidersExposeExpectedMetadata() {
         AgentCliCatalog catalog = new AgentCliCatalog(List.of(codex, claude));
         assertThat(catalog.providers().stream().map(AgentCliProvider::id).toList())
-            .containsExactly(AgentCliProviderId.CODEX, AgentCliProviderId.CLAUDE);
+            .containsExactly(CodexCliProvider.ID, ClaudeCliProvider.ID);
         assertThat(codex.packageName()).isEqualTo("@openai/codex");
         assertThat(codex.command()).isEqualTo("codex");
+        assertThat(codex.credentialFileName()).isEqualTo(".codex/auth.json");
         assertThat(codex.distributionUrl("1.2.3")).isEqualTo("https://registry.npmjs.org/@openai/codex/-/codex-1.2.3.tgz");
         assertThat(claude.packageName()).isEqualTo("@anthropic-ai/claude-code");
         assertThat(claude.command()).isEqualTo("claude");
+        assertThat(claude.credentialFileName()).isEqualTo(".claude/.credentials.json");
         assertThat(claude.distributionUrl("1.2.3")).isEqualTo("https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-1.2.3.tgz");
 
         String validIntegrity = "sha512-" + Base64.getEncoder().encodeToString(sevens(64));

@@ -11,7 +11,6 @@ import java.util.stream.Stream;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -25,9 +24,10 @@ class AgentReleaseTest {
     private final AgentCliFixture fx = new AgentCliFixture();
 
     @ParameterizedTest(name = "[{index}] {0}")
-    @EnumSource(AgentCliProviderId.class)
+    @ValueSource(strings = {"codex", "claude"})
     @DisplayName("RC-A-089 the official public release of each provider is kept as the six public fields")
-    void keepsOnlyThePublicFields(AgentCliProviderId id) {
+    void keepsOnlyThePublicFields(String wire) {
+        AgentCliProviderId id = AgentCliProviderId.parse(wire);
         AgentCliProvider provider = fx.provider(id);
 
         AgentRelease release = fx.release(provider, "1.2.3");
@@ -61,10 +61,11 @@ class AgentReleaseTest {
         assertThat(fx.release(fx.codex, "1.2.4").releaseDigest()).isNotEqualTo(release.releaseDigest());
         assertThat(fx.release(fx.claude, "1.2.3").releaseDigest()).isNotEqualTo(release.releaseDigest());
 
-        // Custom provider with a non-npm package id, non-npm host, and sha256 integrity proves portal-domain is registry-neutral (SSH_PORTAL-D-0061).
+        // Custom third-party provider with an open id, non-npm host, sha256 integrity, and own credential file proves portal-domain is vendor-neutral (SSH_PORTAL-D-0061).
         String sha256Integrity = "sha256:" + "a".repeat(64);
+        AgentCliProviderId customId = AgentCliProviderId.parse("acme-cli");
         AgentCliProvider custom = new AgentCliProvider() {
-            @Override public AgentCliProviderId id() { return AgentCliProviderId.CODEX; }
+            @Override public AgentCliProviderId id() { return customId; }
             @Override public String packageName() { return "org.acme:tool-cli"; }
             @Override public String command() { return "tool"; }
             @Override public String distributionUrl(String version) { return "https://releases.acme.example/tool-" + version + ".tar.gz"; }
@@ -73,6 +74,7 @@ class AgentReleaseTest {
                     throw new IllegalArgumentException("Expected sha256 hex integrity");
                 }
             }
+            @Override public String credentialFileName() { return ".acme/credentials.json"; }
         };
         AgentRelease customRelease = AgentRelease.verify(custom, "org.acme:tool-cli", "2.0.0", "https://releases.acme.example/tool-2.0.0.tar.gz", sha256Integrity, fx.digester);
         assertThat(customRelease.tarball()).isEqualTo("https://releases.acme.example/tool-2.0.0.tar.gz");

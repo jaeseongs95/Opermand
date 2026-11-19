@@ -1,6 +1,6 @@
 package io.github.jaeseongs95.portal.domain.agentcli;
 
-import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Set;
@@ -19,7 +19,7 @@ public final class AgentCliCatalog {
         if (copy.isEmpty()) {
             throw new IllegalArgumentException("The provider catalog is empty");
         }
-        Set<AgentCliProviderId> seen = EnumSet.noneOf(AgentCliProviderId.class);
+        Set<AgentCliProviderId> seen = new HashSet<>();
         for (AgentCliProvider provider : copy) {
             if (!seen.add(provider.id())) {
                 throw new IllegalArgumentException("Two providers have the same id: " + provider.id().wire());
@@ -36,7 +36,7 @@ public final class AgentCliCatalog {
     public AgentCliProvider provider(AgentCliProviderId id) {
         Objects.requireNonNull(id, "id");
         for (AgentCliProvider provider : providers) {
-            if (provider.id() == id) {
+            if (provider.id().equals(id)) {
                 return provider;
             }
         }

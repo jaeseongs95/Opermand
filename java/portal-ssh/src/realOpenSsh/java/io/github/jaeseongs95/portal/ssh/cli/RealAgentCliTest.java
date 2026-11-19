@@ -110,7 +110,7 @@ class RealAgentCliTest {
             PayloadSource source = () -> new PayloadRead(Channels.newChannel(new ByteArrayInputStream(tarball)), tarball.length);
 
             AgentCliInstallResult installed = installer.install(new AgentCliInstallRequest(target, plan, source, TransferLimits.defaults()), control);
-            AgentCliStatusResult status = installer.status(new AgentCliStatusRequest(target, AgentCliProviderId.CLAUDE, ExecutionLimits.defaults()), control);
+            AgentCliStatusResult status = installer.status(new AgentCliStatusRequest(target, ClaudeCliProvider.ID, new ClaudeCliProvider().credentialFileName(), ExecutionLimits.defaults()), control);
             AgentCliInstallResult again = installer.install(new AgentCliInstallRequest(target, plan, source, TransferLimits.defaults()), control);
 
             try {

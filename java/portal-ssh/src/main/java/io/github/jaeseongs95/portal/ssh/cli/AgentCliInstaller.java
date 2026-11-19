@@ -110,9 +110,6 @@ public class AgentCliInstaller implements AgentCliInstallerPort {
     private static final int TAR_NOT_FOUND = 127;
     private static final Pattern VERSION_DIRECTORY = Pattern.compile("(\\d{1,6}\\.\\d{1,6}\\.\\d{1,6})-[0-9a-f]{16}");
     private static final Pattern DRIVE_PATH = Pattern.compile("/[A-Za-z]:/.*");
-    /** The file each tool keeps its login in, under the home directory; only its existence is looked at. */
-    private static final Map<AgentCliProviderId, String> CREDENTIAL_FILES = Map.of(AgentCliProviderId.CODEX, ".codex/auth.json", AgentCliProviderId.CLAUDE,
-        ".claude/.credentials.json");
 
     private final RemoteExecutor executor;
     private final RemoteFileTransfer transfer;
@@ -626,12 +623,12 @@ public class AgentCliInstaller implements AgentCliInstallerPort {
             return new AgentCliStatusResult.Observed(new RemoteStatus.NotFound(), revisionOf(name.isEmpty() ? "none" : name), LoginState.NOT_INSTALLED);
         }
         RemoteStatus remote = new RemoteStatus.Known(RemoteState.COMPLETED, new CliVersion(directory.group(1)), 0);
-        return new AgentCliStatusResult.Observed(remote, revisionOf(name), loginOf(client, base, request.provider()));
+        return new AgentCliStatusResult.Observed(remote, revisionOf(name), loginOf(client, base, request.credentialFileName()));
     }
 
-    private LoginState loginOf(SftpClient client, String base, AgentCliProviderId provider) throws IOException {
+    private LoginState loginOf(SftpClient client, String base, String credentialFileName) throws IOException {
         try {
-            client.stat(base + CREDENTIAL_FILES.get(provider));
+            client.stat(base + credentialFileName);
             return LoginState.SIGNED_IN;
         } catch (SftpException e) {
             if (e.getStatus() == SftpConstants.SSH_FX_NO_SUCH_FILE || e.getStatus() == SftpConstants.SSH_FX_NO_SUCH_PATH) {

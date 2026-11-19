@@ -165,14 +165,14 @@ class AssemblyDefaultsTest {
         ResolvedTarget target = targets.target();
         RequestKey key = new RequestKey("agentcli-default-" + UUID.randomUUID());
         Digest expected = new Digest("e".repeat(64));
-        AgentCliRequest request = new AgentCliRequest(EmbeddedTargets.ID, target.revision(), EmbeddedTargets.WRITE_PROFILE, AgentCliProviderId.CODEX, AgentCliAction.INSTALL,
+        AgentCliRequest request = new AgentCliRequest(EmbeddedTargets.ID, target.revision(), EmbeddedTargets.WRITE_PROFILE, CodexCliProvider.ID, AgentCliAction.INSTALL,
             release.releaseDigestLabel(), expected, key);
         Instant now = clock.instant();
         AgentCliIntent intent = AgentCliIntent.of(provider, request, new AgentCliTargetBinding(EmbeddedTargets.ID, target.revision(), EmbeddedTargets.WRITE_PROFILE, true),
             release, now.plus(Duration.ofMinutes(5)).truncatedTo(ChronoUnit.MILLIS), now, digester);
         OperationId id = journal.accept(NewOperation.of(digester, key, new OwnerId("owner"), EmbeddedTargets.ID, target.revision(), EmbeddedTargets.WRITE_PROFILE,
             new AgentCliInput(intent.intentDigest()), new ConflictKey.None(), new Deadline.None()), Admission.of(DecisionReason.AGENT_CLI_REVIEW, OperationKind.AGENT_CLI, 0L)).operation().id();
-        store.insert(new AgentCliInstallRecord(id, AgentCliProviderId.CODEX, AgentCliAction.INSTALL, release, expected, "sha256:" + intent.intentDigest().hex(),
+        store.insert(new AgentCliInstallRecord(id, CodexCliProvider.ID, AgentCliAction.INSTALL, release, expected, "sha256:" + intent.intentDigest().hex(),
             intent.expiresAt(), new RemoteStatus.NotReported()));
         return new AgentCliRun(id, key, target, target.revision(), EmbeddedTargets.WRITE_PROFILE);
     }

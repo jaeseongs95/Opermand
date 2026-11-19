@@ -2,7 +2,7 @@ package io.github.jaeseongs95.portal.domain.error;
 
 /**
  * Request-level refusals: input the contract does not accept, a target or operation that is not there, a read command that cannot run, a maintenance window.
- * {@link #POLICY_REVISION_CONFLICT} (the stored command policy has another revision than the request expected) and {@link #MAINTENANCE_OWNER_USED} (an owner that
+ * {@link #POLICY_REVISION_CONFLICT} (the stored command policy has another revision than the request expected) is added in stage 3.
  * held the maintenance reservation once asks for it again) are stored-state refusals that 2.x raised without a public code; 3.0 adds them (stage 3 design D3-13).
  */
 public enum RequestErrorCode implements ErrorCode {
@@ -11,7 +11,7 @@ public enum RequestErrorCode implements ErrorCode {
     INVALID_OPERATION_INPUT, OPERATION_KEY_CONFLICT, TARGET_REVISION_CONFLICT, TARGET_UNAVAILABLE, TARGET_CAPABILITY_UNSUPPORTED, OPERATION_ACCEPTANCE_NOT_CONFIRMED,
     INVALID_COMMAND_CONTEXT, COMMAND_CONTEXT_TOO_LARGE, COMMAND_CONTEXT_CONTAINS_SECRET, SOURCE_CREDENTIAL_MATERIAL, SOURCE_ARGUMENTS_SENSITIVE,
     SOURCE_WORKDIR_SENSITIVE, READ_COMMAND_BUSY, READ_COMMAND_REQUIRES_APPROVAL, READ_COMMAND_NOT_STARTED, READ_COMMAND_EXECUTION_UNKNOWN, MAINTENANCE,
-    MAINTENANCE_ACTIVE, POLICY_REVISION_CONFLICT, MAINTENANCE_OWNER_USED;
+    MAINTENANCE_ACTIVE, POLICY_REVISION_CONFLICT;
 
     @Override
     public boolean retryableByDefault() {

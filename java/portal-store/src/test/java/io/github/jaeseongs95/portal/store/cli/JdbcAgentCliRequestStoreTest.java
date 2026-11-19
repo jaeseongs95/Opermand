@@ -100,23 +100,23 @@ class JdbcAgentCliRequestStoreTest {
     void onlyTheCurrentBindingIsListed() {
         OperationId own = operationId(1);
         insertOperation(own, T1000, "alpha", REVISION_A, "alpha-write");
-        store.insert(install(own, AgentCliProviderId.CODEX, new RemoteStatus.NotReported()));
+        store.insert(install(own, AgentCliProviderId.parse("codex"), new RemoteStatus.NotReported()));
         OperationId otherProvider = operationId(2);
         insertOperation(otherProvider, T1000, "alpha", REVISION_A, "alpha-write");
-        store.insert(install(otherProvider, AgentCliProviderId.CLAUDE, new RemoteStatus.NotReported()));
+        store.insert(install(otherProvider, AgentCliProviderId.parse("claude"), new RemoteStatus.NotReported()));
         OperationId otherTarget = operationId(3);
         insertOperation(otherTarget, T1000, "beta", REVISION_A, "alpha-write");
-        store.insert(install(otherTarget, AgentCliProviderId.CODEX, new RemoteStatus.NotReported()));
+        store.insert(install(otherTarget, AgentCliProviderId.parse("codex"), new RemoteStatus.NotReported()));
         OperationId otherRevision = operationId(4);
         insertOperation(otherRevision, T1000, "alpha", REVISION_B, "alpha-write");
-        store.insert(install(otherRevision, AgentCliProviderId.CODEX, new RemoteStatus.NotReported()));
+        store.insert(install(otherRevision, AgentCliProviderId.parse("codex"), new RemoteStatus.NotReported()));
         OperationId otherProfile = operationId(5);
         insertOperation(otherProfile, T1000, "alpha", REVISION_A, "beta-write");
-        store.insert(install(otherProfile, AgentCliProviderId.CODEX, new RemoteStatus.NotReported()));
+        store.insert(install(otherProfile, AgentCliProviderId.parse("codex"), new RemoteStatus.NotReported()));
         List<Map<String, Object>> requestsBefore = jdbc.queryForList("SELECT * FROM agent_cli_request ORDER BY operation_id");
         List<Map<String, Object>> operationsBefore = jdbc.queryForList("SELECT * FROM operation ORDER BY id");
 
-        AgentCliHistoryReader.Slice slice = reader.slice(binding(AgentCliProviderId.CODEX), new HistoryCursor.FirstPage());
+        AgentCliHistoryReader.Slice slice = reader.slice(binding(AgentCliProviderId.parse("codex")), new HistoryCursor.FirstPage());
 
         assertThat(slice.hits()).extracting(hit -> hit.install().operationId()).containsExactly(own);
         assertThat(slice.hits().get(0).createdAt()).isEqualTo(T1000);
@@ -131,22 +131,22 @@ class JdbcAgentCliRequestStoreTest {
         for (int number = 1; number <= 41; number++) {
             OperationId id = operationId(number);
             insertOperation(id, T1000, "alpha", REVISION_A, "alpha-write");
-            store.insert(install(id, AgentCliProviderId.CODEX, new RemoteStatus.NotReported()));
+            store.insert(install(id, AgentCliProviderId.parse("codex"), new RemoteStatus.NotReported()));
         }
 
-        AgentCliHistoryReader.Slice first = reader.slice(binding(AgentCliProviderId.CODEX), new HistoryCursor.FirstPage());
+        AgentCliHistoryReader.Slice first = reader.slice(binding(AgentCliProviderId.parse("codex")), new HistoryCursor.FirstPage());
 
         assertThat(ids(first)).isEqualTo(numbers(41, 22));
         assertThat(first.next()).isEqualTo(new HistoryCursor.After(T1000, operationId(22)));
 
         OperationId arrival = operationId(42);
         insertOperation(arrival, T2000, "alpha", REVISION_A, "alpha-write");
-        store.insert(install(arrival, AgentCliProviderId.CODEX, new RemoteStatus.NotReported()));
-        AgentCliHistoryReader.Slice second = reader.slice(binding(AgentCliProviderId.CODEX), first.next());
+        store.insert(install(arrival, AgentCliProviderId.parse("codex"), new RemoteStatus.NotReported()));
+        AgentCliHistoryReader.Slice second = reader.slice(binding(AgentCliProviderId.parse("codex")), first.next());
 
         assertThat(ids(second)).isEqualTo(numbers(21, 2));
         assertThat(second.next()).isEqualTo(new HistoryCursor.After(T1000, operationId(2)));
-        AgentCliHistoryReader.Slice third = reader.slice(binding(AgentCliProviderId.CODEX), second.next());
+        AgentCliHistoryReader.Slice third = reader.slice(binding(AgentCliProviderId.parse("codex")), second.next());
 
         assertThat(ids(third)).isEqualTo(numbers(1, 1));
         assertThat(third.next()).isEqualTo(new HistoryCursor.End());
@@ -155,7 +155,7 @@ class JdbcAgentCliRequestStoreTest {
         union.addAll(ids(second));
         union.addAll(ids(third));
         assertThat(union).hasSize(41);
-        assertThat(ids(reader.slice(binding(AgentCliProviderId.CODEX), new HistoryCursor.FirstPage())).get(0)).isEqualTo(arrival);
+        assertThat(ids(reader.slice(binding(AgentCliProviderId.parse("codex")), new HistoryCursor.FirstPage())).get(0)).isEqualTo(arrival);
     }
 
     @Test
@@ -178,7 +178,7 @@ class JdbcAgentCliRequestStoreTest {
             insertRequest(number, T1000);
         }
 
-        AgentCliHistoryReader.Slice page = reader.slice(binding(AgentCliProviderId.CODEX), new HistoryCursor.FirstPage());
+        AgentCliHistoryReader.Slice page = reader.slice(binding(AgentCliProviderId.parse("codex")), new HistoryCursor.FirstPage());
 
         assertThat(ids(page)).isEqualTo(numbers(20, 1));
         assertThat(page.next()).isEqualTo(new HistoryCursor.End());
@@ -191,11 +191,11 @@ class JdbcAgentCliRequestStoreTest {
             insertRequest(number, T1000);
         }
 
-        AgentCliHistoryReader.Slice first = reader.slice(binding(AgentCliProviderId.CODEX), new HistoryCursor.FirstPage());
+        AgentCliHistoryReader.Slice first = reader.slice(binding(AgentCliProviderId.parse("codex")), new HistoryCursor.FirstPage());
         assertThat(ids(first)).isEqualTo(numbers(21, 2));
         assertThat(first.next()).isEqualTo(new HistoryCursor.After(T1000, operationId(2)));
 
-        AgentCliHistoryReader.Slice second = reader.slice(binding(AgentCliProviderId.CODEX), first.next());
+        AgentCliHistoryReader.Slice second = reader.slice(binding(AgentCliProviderId.parse("codex")), first.next());
         assertThat(ids(second)).isEqualTo(numbers(1, 1));
         assertThat(second.next()).isEqualTo(new HistoryCursor.End());
     }
@@ -210,11 +210,11 @@ class JdbcAgentCliRequestStoreTest {
             insertRequest(number, T2000);
         }
 
-        AgentCliHistoryReader.Slice first = reader.slice(binding(AgentCliProviderId.CODEX), new HistoryCursor.FirstPage());
+        AgentCliHistoryReader.Slice first = reader.slice(binding(AgentCliProviderId.parse("codex")), new HistoryCursor.FirstPage());
         assertThat(ids(first)).isEqualTo(numbers(22, 3));
         assertThat(first.next()).isEqualTo(new HistoryCursor.After(T1000, operationId(3)));
 
-        AgentCliHistoryReader.Slice second = reader.slice(binding(AgentCliProviderId.CODEX), first.next());
+        AgentCliHistoryReader.Slice second = reader.slice(binding(AgentCliProviderId.parse("codex")), first.next());
         assertThat(ids(second)).isEqualTo(numbers(2, 1));
         assertThat(second.next()).isEqualTo(new HistoryCursor.End());
     }
@@ -224,10 +224,10 @@ class JdbcAgentCliRequestStoreTest {
     void unknownCursorsAreRefused() {
         OperationId own = operationId(1);
         insertOperation(own, T1000, "alpha", REVISION_A, "alpha-write");
-        store.insert(install(own, AgentCliProviderId.CODEX, new RemoteStatus.NotReported()));
+        store.insert(install(own, AgentCliProviderId.parse("codex"), new RemoteStatus.NotReported()));
         OperationId noRequest = operationId(2);
         insertOperation(noRequest, T1000, "alpha", REVISION_A, "alpha-write");
-        AgentCliBinding codex = binding(AgentCliProviderId.CODEX);
+        AgentCliBinding codex = binding(AgentCliProviderId.parse("codex"));
 
         assertThatThrownBy(() -> reader.slice(codex, new HistoryCursor.After(T1000, operationId(99)))).isInstanceOfSatisfying(RequestRefusedException.class,
             e -> assertThat(e.code()).isEqualTo(HistoryErrorCode.HISTORY_INVALID_CURSOR));
@@ -236,7 +236,7 @@ class JdbcAgentCliRequestStoreTest {
         assertThatThrownBy(() -> reader.slice(codex, new HistoryCursor.After(T1000, noRequest))).isInstanceOfSatisfying(RequestRefusedException.class,
             e -> assertThat(e.code()).isEqualTo(HistoryErrorCode.HISTORY_INVALID_CURSOR));
 
-        AgentCliHistoryReader.Slice otherScope = reader.slice(binding(AgentCliProviderId.CLAUDE), new HistoryCursor.FirstPage());
+        AgentCliHistoryReader.Slice otherScope = reader.slice(binding(AgentCliProviderId.parse("claude")), new HistoryCursor.FirstPage());
         assertThat(otherScope.hits()).isEmpty();
         assertThat(otherScope.next()).isEqualTo(new HistoryCursor.End());
         AgentCliHistoryReader.Slice ended = reader.slice(codex, new HistoryCursor.End());
@@ -249,11 +249,11 @@ class JdbcAgentCliRequestStoreTest {
     void theStoreAsksTheJournalForTheOperation() {
         OperationId own = operationId(1);
         insertOperation(own, T1000, "alpha", REVISION_A, "alpha-write");
-        store.insert(install(own, AgentCliProviderId.CODEX, new RemoteStatus.NotReported()));
+        store.insert(install(own, AgentCliProviderId.parse("codex"), new RemoteStatus.NotReported()));
 
-        assertThatThrownBy(() -> store.history(binding(AgentCliProviderId.CODEX), new HistoryCursor.FirstPage())).isInstanceOfSatisfying(
+        assertThatThrownBy(() -> store.history(binding(AgentCliProviderId.parse("codex")), new HistoryCursor.FirstPage())).isInstanceOfSatisfying(
             RequestRefusedException.class, e -> assertThat(e.code()).isEqualTo(HistoryErrorCode.HISTORY_METADATA_UNAVAILABLE));
-        assertThat(store.history(binding(AgentCliProviderId.CLAUDE), new HistoryCursor.FirstPage()).entries()).isEmpty();
+        assertThat(store.history(binding(AgentCliProviderId.parse("claude")), new HistoryCursor.FirstPage()).entries()).isEmpty();
     }
 
     @Test
@@ -265,7 +265,7 @@ class JdbcAgentCliRequestStoreTest {
         for (int number = 0; number < variants.size(); number++) {
             OperationId id = operationId(number + 1);
             insertOperation(id, T1000, "alpha", REVISION_A, "alpha-write");
-            AgentCliInstallRecord record = install(id, AgentCliProviderId.CLAUDE, variants.get(number));
+            AgentCliInstallRecord record = install(id, AgentCliProviderId.parse("claude"), variants.get(number));
 
             store.insert(record);
 
@@ -279,12 +279,12 @@ class JdbcAgentCliRequestStoreTest {
     void theRemoteStatusIsRecorded() {
         OperationId id = operationId(1);
         insertOperation(id, T1000, "alpha", REVISION_A, "alpha-write");
-        AgentCliInstallRecord record = install(id, AgentCliProviderId.CODEX, new RemoteStatus.NotReported());
+        AgentCliInstallRecord record = install(id, AgentCliProviderId.parse("codex"), new RemoteStatus.NotReported());
         store.insert(record);
 
         RemoteStatus failed = new RemoteStatus.Failed(new CliVersion("2.0.0"), 1);
         assertThat(store.recordRemote(id, failed)).isEqualTo(failed);
-        assertThat(store.findByOperation(id)).contains(install(id, AgentCliProviderId.CODEX, failed));
+        assertThat(store.findByOperation(id)).contains(install(id, AgentCliProviderId.parse("codex"), failed));
         RemoteStatus completed = new RemoteStatus.Known(RemoteState.COMPLETED, new CliVersion("2.0.0"), 0);
         assertThat(store.recordRemote(id, completed)).isEqualTo(completed);
         assertThat(jdbc.queryForObject("SELECT remote_error FROM agent_cli_request WHERE operation_id = ?", String.class, id.value())).isNull();
@@ -307,7 +307,7 @@ class JdbcAgentCliRequestStoreTest {
     void aFailedRemoteStatusIsStoredWithItsErrorAndCount() {
         OperationId id = operationId(1);
         insertOperation(id, T1000, "alpha", REVISION_A, "alpha-write");
-        store.insert(install(id, AgentCliProviderId.CODEX, new RemoteStatus.NotReported()));
+        store.insert(install(id, AgentCliProviderId.parse("codex"), new RemoteStatus.NotReported()));
         RemoteStatus failed = new RemoteStatus.Failed(new CliVersion("2.0.0"), 3);
 
         assertThat(store.recordRemote(id, failed)).isEqualTo(failed);
@@ -315,7 +315,7 @@ class JdbcAgentCliRequestStoreTest {
         assertThat(jdbc.queryForObject("SELECT remote_state FROM agent_cli_request WHERE operation_id = ?", String.class, id.value())).isEqualTo("FAILED");
         assertThat(jdbc.queryForObject("SELECT remote_error FROM agent_cli_request WHERE operation_id = ?", String.class, id.value())).isEqualTo(RemoteError.INSTALL_FAILED.name());
         assertThat(jdbc.queryForObject("SELECT remote_cleanup_failures FROM agent_cli_request WHERE operation_id = ?", Integer.class, id.value())).isEqualTo(3);
-        assertThat(store.findByOperation(id)).contains(install(id, AgentCliProviderId.CODEX, failed));
+        assertThat(store.findByOperation(id)).contains(install(id, AgentCliProviderId.parse("codex"), failed));
         Map<String, Object> row = jdbc.queryForList("SELECT * FROM agent_cli_request WHERE operation_id = ?", id.value()).get(0);
         assertThat(row.keySet().stream().map(name -> name.toLowerCase(Locale.ROOT)).toList()).containsExactlyInAnyOrder("operation_id", "provider", "action", "package_name",
             "release_version", "release_tarball", "release_integrity", "release_digest", "expected_installation_revision", "intent_digest", "plan_expires_at", "remote_state",
@@ -336,7 +336,7 @@ class JdbcAgentCliRequestStoreTest {
     private void insertRequest(int number, Instant createdAt) {
         OperationId id = operationId(number);
         insertOperation(id, createdAt, "alpha", REVISION_A, "alpha-write");
-        store.insert(install(id, AgentCliProviderId.CODEX, new RemoteStatus.NotReported()));
+        store.insert(install(id, AgentCliProviderId.parse("codex"), new RemoteStatus.NotReported()));
     }
 
     private List<OperationId> ids(AgentCliHistoryReader.Slice slice) {
@@ -364,8 +364,8 @@ class JdbcAgentCliRequestStoreTest {
     }
 
     private AgentCliInstallRecord install(OperationId id, AgentCliProviderId provider, RemoteStatus remote) {
-        String packageName = provider == AgentCliProviderId.CODEX ? "@openai/codex" : "@anthropic-ai/claude-code";
-        String shortName = provider == AgentCliProviderId.CODEX ? "codex" : "claude-code";
+        String packageName = "codex".equals(provider.wire()) ? "@openai/codex" : "@anthropic-ai/claude-code";
+        String shortName = "codex".equals(provider.wire()) ? "codex" : "claude-code";
         AgentRelease release = new AgentRelease(provider, packageName, "1.2.3", "https://registry.npmjs.org/" + packageName + "/-/" + shortName + "-1.2.3.tgz",
             "sha512-" + "A".repeat(86) + "==", new Digest("d".repeat(64)));
         return new AgentCliInstallRecord(id, provider, AgentCliAction.INSTALL, release, new Digest("e".repeat(64)), "sha256:" + "f".repeat(64), T2000, remote);

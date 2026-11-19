@@ -6,7 +6,6 @@ import java.time.Clock;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import io.github.jaeseongs95.portal.domain.approval.MaintenancePolicy;
 import io.github.jaeseongs95.portal.domain.command.RuleApprovalPolicy;
 import io.github.jaeseongs95.portal.domain.classify.CommandClassifier;
 import io.github.jaeseongs95.portal.domain.classify.VendorCommandClassifier;
@@ -91,12 +90,6 @@ public class DomainBeans {
     @Bean
     public RuleApprovalPolicy ruleApprovalPolicy() {
         return new RuleApprovalPolicy();
-    }
-
-    /** The maintenance rules, pure judgements. A plain class of portal-domain, so a bean here. */
-    @Bean
-    public MaintenancePolicy maintenancePolicy() {
-        return new MaintenancePolicy();
     }
 
     /** The JVM's processor count; the interface lets a test answer another one. */

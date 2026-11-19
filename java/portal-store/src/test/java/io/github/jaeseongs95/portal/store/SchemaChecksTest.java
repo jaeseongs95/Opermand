@@ -121,7 +121,7 @@ class SchemaChecksTest {
             new Column("command_policy_rule", "automatic_uploads"),
             new Column("command_policy_rule", "automatic_downloads"), new Column("command_policy_rule", "automatic_sudo"), new Column("command_policy_rule", "test_server"),
             new Column("command_policy_rule", "source_contract"), new Column("command_policy_name", "list_kind"),
-            new Column("agent_cli_request", "provider"), new Column("agent_cli_request", "action"), new Column("agent_cli_request", "remote_state"),
+            new Column("agent_cli_request", "action"), new Column("agent_cli_request", "remote_state"),
             new Column("agent_cli_request", "remote_error"));
     }
 
@@ -177,6 +177,9 @@ class SchemaChecksTest {
         assertThatThrownBy(() -> inSavepoint("UPDATE operation_result SET exit_kind = 'SIGNALED'")).as("a signal exit needs a signal name").isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> inSavepoint("UPDATE operation SET input_digest = '" + HEX + "'")).as("only an agent CLI operation has an input digest")
             .isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> inSavepoint("UPDATE agent_cli_request SET provider = ''")).as("provider cannot be empty")
+            .isInstanceOf(DataIntegrityViolationException.class);
+        inSavepoint("UPDATE agent_cli_request SET provider = 'custom-provider'");
     }
 
     @Test

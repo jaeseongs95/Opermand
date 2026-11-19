@@ -22,7 +22,7 @@ public record AgentCliLayout(AgentCliProviderId provider, AgentRelease release) 
     public AgentCliLayout {
         Objects.requireNonNull(provider, "provider");
         Objects.requireNonNull(release, "release");
-        if (release.provider() != provider) {
+        if (!release.provider().equals(provider)) {
             throw new IllegalArgumentException("The release is of another provider");
         }
     }

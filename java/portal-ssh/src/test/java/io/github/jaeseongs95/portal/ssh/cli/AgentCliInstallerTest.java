@@ -142,9 +142,9 @@ class AgentCliInstallerTest {
 
     private Release release(String contents) {
         byte[] bytes = contents.getBytes(StandardCharsets.UTF_8);
-        AgentRelease release = fixtures.release(AgentCliProviderId.CLAUDE, integrityOf(bytes));
+        AgentRelease release = fixtures.release(AgentCliProviderId.parse("claude"), integrityOf(bytes));
         AgentCliPlan plan = platform.agentCliPlan(fixtures.intent(release), release);
-        return new Release(bytes, release, plan, new AgentCliLayout(AgentCliProviderId.CLAUDE, release).versionDirectory());
+        return new Release(bytes, release, plan, new AgentCliLayout(AgentCliProviderId.parse("claude"), release).versionDirectory());
     }
 
     private Path toolDirectory() {
@@ -600,7 +600,7 @@ class AgentCliInstallerTest {
     @DisplayName("S3-AG-07 the status reads the version and the login over SFTP, and runs nothing: not installed, then installed and signed out, then signed in")
     void status() throws IOException {
         Bed bed = bed();
-        AgentCliStatusRequest request = new AgentCliStatusRequest(TARGET, AgentCliProviderId.CLAUDE, ExecutionLimits.defaults());
+        AgentCliStatusRequest request = new AgentCliStatusRequest(TARGET, AgentCliProviderId.parse("claude"), ".claude/.credentials.json", ExecutionLimits.defaults());
         ExecutionControl control = new ExecutionControl(new CancelSource(), () -> { });
 
         AgentCliStatusResult before = bed.installer.status(request, control);
@@ -625,7 +625,7 @@ class AgentCliInstallerTest {
         bed.server.close();
 
         AgentCliInstallResult installed = bed.install(release("package one"));
-        AgentCliStatusResult status = bed.installer.status(new AgentCliStatusRequest(TARGET, AgentCliProviderId.CLAUDE, ExecutionLimits.defaults()),
+        AgentCliStatusResult status = bed.installer.status(new AgentCliStatusRequest(TARGET, AgentCliProviderId.parse("claude"), ".claude/.credentials.json", ExecutionLimits.defaults()),
             new ExecutionControl(new CancelSource(), () -> { }));
 
         assertThat(installed).isEqualTo(new AgentCliInstallResult.NotDispatched(TransferFailureCause.CONNECT_FAILED));

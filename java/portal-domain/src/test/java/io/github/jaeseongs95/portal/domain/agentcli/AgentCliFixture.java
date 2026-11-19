@@ -19,8 +19,10 @@ import io.github.jaeseongs95.portal.domain.target.TargetRevision;
 final class AgentCliFixture {
 
     final Digester digester = new Sha256Digester();
-    final AgentCliProvider codex = testProvider(AgentCliProviderId.CODEX, "acme/tool-alpha", "alpha-cli");
-    final AgentCliProvider claude = testProvider(AgentCliProviderId.CLAUDE, "acme/tool-beta", "beta-cli");
+    final AgentCliProviderId codexId = new AgentCliProviderId("codex");
+    final AgentCliProviderId claudeId = new AgentCliProviderId("claude");
+    final AgentCliProvider codex = testProvider(codexId, "acme/tool-alpha", "alpha-cli", ".alpha/auth.json");
+    final AgentCliProvider claude = testProvider(claudeId, "acme/tool-beta", "beta-cli", ".beta/auth.json");
     final String integrity = integrityOf(7);
     final TargetId targetId = new TargetId("alpha");
     final TargetRevision revision = new TargetRevision(new Digest("a".repeat(64)));
@@ -30,7 +32,7 @@ final class AgentCliFixture {
     final Instant now = Instant.ofEpochMilli(1000);
     final Instant expiry = Instant.ofEpochMilli(1001);
 
-    private static AgentCliProvider testProvider(AgentCliProviderId id, String packageName, String command) {
+    private static AgentCliProvider testProvider(AgentCliProviderId id, String packageName, String command, String credentialFile) {
         return new AgentCliProvider() {
             @Override
             public AgentCliProviderId id() {
@@ -51,6 +53,18 @@ final class AgentCliFixture {
             public String distributionUrl(String version) {
                 return "https://releases.example.test/" + packageName + "/" + command + "-" + version + ".tgz";
             }
+
+            @Override
+            public void verifyIntegrity(String integrity) {
+                if (!integrity.startsWith("sha512-") || integrity.length() < 80) {
+                    throw new IllegalArgumentException("Invalid test integrity");
+                }
+            }
+
+            @Override
+            public String credentialFileName() {
+                return credentialFile;
+            }
         };
     }
 
@@ -66,10 +80,13 @@ final class AgentCliFixture {
     }
 
     AgentCliProvider provider(AgentCliProviderId id) {
-        return switch (id) {
-            case CODEX -> codex;
-            case CLAUDE -> claude;
-        };
+        if (codexId.equals(id)) {
+            return codex;
+        }
+        if (claudeId.equals(id)) {
+            return claude;
+        }
+        throw new IllegalArgumentException("Unknown test provider: " + id);
     }
 
     AgentRelease release(AgentCliProvider provider, String version) {
