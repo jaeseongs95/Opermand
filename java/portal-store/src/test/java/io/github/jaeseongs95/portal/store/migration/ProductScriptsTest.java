@@ -36,7 +36,7 @@ class ProductScriptsTest {
     private static final Pattern VENDOR_TYPE = Pattern.compile("(?i)\\b(CLOB|MEDIUMTEXT|LONGTEXT|TEXT|BLOB|BYTEA)\\b");
 
     /** The long-text columns of the schema. */
-    private static final List<String> LONG_TEXT_COLUMNS = List.of("maintenance_reservation.baseline", "operation_command.caller_context", "operation_command.command_text",
+    private static final List<String> LONG_TEXT_COLUMNS = List.of("operation_command.caller_context", "operation_command.command_text",
         "operation_command.display_context", "operation_download.caller_context", "operation_download.display_context",
         "operation_result.result_texts", "operation_source.argv_json", "operation_source.caller_context", "operation_source.display_context", "operation_source.launcher_command");
 
@@ -60,7 +60,7 @@ class ProductScriptsTest {
     }
 
     @Test
-    @DisplayName("S-D0109-20: on an embedded H2 database without a compatibility mode the whole set applies: mode REGULAR, 7 scripts, 24 tables, and no Flyway table")
+    @DisplayName("S-D0109-20: on an embedded H2 database without a compatibility mode the whole set applies: mode REGULAR, 7 scripts, 23 tables, and no Flyway table")
     void theWholeSetAppliesOnPlainH2() {
         assertThat(freshUrl()).doesNotContain("MODE=");
         DataSource database = freshDatabase();
@@ -70,7 +70,7 @@ class ProductScriptsTest {
 
         assertThat(jdbc.queryForObject("SELECT SETTING_VALUE FROM INFORMATION_SCHEMA.SETTINGS WHERE SETTING_NAME = 'MODE'", String.class)).isEqualTo("REGULAR");
         assertThat(history(jdbc, Phase.EXPAND)).containsExactly("1/1/SUCCEEDED", "2/1/SUCCEEDED", "3/1/SUCCEEDED", "4/1/SUCCEEDED", "5/1/SUCCEEDED", "6/1/SUCCEEDED", "7/1/SUCCEEDED");
-        assertThat(count(jdbc, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'PUBLIC' AND TABLE_TYPE = 'BASE TABLE'")).isEqualTo(24);
+        assertThat(count(jdbc, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'PUBLIC' AND TABLE_TYPE = 'BASE TABLE'")).isEqualTo(23);
         assertThat(tableExists(jdbc, "PUBLIC", "flyway_schema_history")).isFalse();
     }
 

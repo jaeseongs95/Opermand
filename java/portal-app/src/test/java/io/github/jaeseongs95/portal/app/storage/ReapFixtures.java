@@ -1,11 +1,8 @@
 package io.github.jaeseongs95.portal.app.storage;
 
-import java.util.Optional;
+import java.time.Instant;
 
-import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStatus;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
-import io.github.jaeseongs95.portal.app.maintenance.OwnerHash;
-import io.github.jaeseongs95.portal.app.maintenance.PreservationBaseline;
 
 /** The two guards a reaper asks, as plain test classes: whether a maintenance reservation holds the installation, and what the protection of the file stores answers. */
 public final class ReapFixtures {
@@ -28,27 +25,12 @@ public final class ReapFixtures {
         }
 
         @Override
-        public MaintenanceStatus status(OwnerHash owner) {
-            return new MaintenanceStatus.Unknown();
-        }
-
-        @Override
-        public void reserve(OwnerHash owner) {
+        public void reserve(Instant reservedAt) {
             occupied = true;
         }
 
         @Override
-        public void saveBaseline(OwnerHash owner, PreservationBaseline baseline) {
-            throw new IllegalStateException("not used");
-        }
-
-        @Override
-        public Optional<PreservationBaseline> baseline(OwnerHash owner) {
-            return Optional.empty();
-        }
-
-        @Override
-        public void release(OwnerHash owner) {
+        public void release() {
             occupied = false;
         }
     }

@@ -1,12 +1,11 @@
 package io.github.jaeseongs95.portal.store.maintenance;
 
+import java.time.Instant;
+
 import org.springframework.data.annotation.Id;
 import org.springframework.data.relational.core.mapping.Table;
 
-/**
- * Table {@code maintenance_reservation}: the one row (id 1) of the installation. {@code baseline} is the long-text column (${long_text}) of V6 and is
- * {@code null} until a baseline is stored; the nullable column is a nullable property of this persistence record, which no other layer sees.
- */
+/** Table {@code maintenance_reservation}: the single active reservation row (id 1) with its reservation timestamp (SSH_PORTAL-D-0124). */
 @Table("maintenance_reservation")
-public record MaintenanceReservationRow(@Id int id, String ownerHash, String baseline) {
+public record MaintenanceReservationRow(@Id int id, Instant reservedAt) {
 }

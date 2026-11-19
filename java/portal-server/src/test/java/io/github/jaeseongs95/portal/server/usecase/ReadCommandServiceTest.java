@@ -14,7 +14,6 @@ import org.junit.jupiter.api.Test;
 import io.github.jaeseongs95.portal.app.audit.AuditAction;
 import io.github.jaeseongs95.portal.app.journal.OperationJournal;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
-import io.github.jaeseongs95.portal.app.maintenance.OwnerHash;
 import io.github.jaeseongs95.portal.app.operation.ReadCommandRequest;
 import io.github.jaeseongs95.portal.app.operation.ReadCommandService;
 import io.github.jaeseongs95.portal.domain.error.DispatchFailure;
@@ -105,13 +104,12 @@ class ReadCommandServiceTest {
             e -> assertThat(e.code()).isEqualTo(RequestErrorCode.READ_COMMAND_REQUIRES_APPROVAL));
         assertThat(journal.findByRequestKey(key)).isEmpty();
 
-        OwnerHash owner = new OwnerHash((UUID.randomUUID().toString() + UUID.randomUUID()).replace("-", ""));
-        maintenance.reserve(owner);
+        maintenance.reserve(java.time.Instant.EPOCH);
         try {
             assertThatThrownBy(() -> reads.run(request("cat /tmp/a"))).isInstanceOfSatisfying(RequestRefusedException.class,
                 e -> assertThat(e.code()).isEqualTo(RequestErrorCode.MAINTENANCE_ACTIVE));
         } finally {
-            maintenance.release(owner);
+            maintenance.release();
         }
         assertThat(executor.requestsSent()).isZero();
     }

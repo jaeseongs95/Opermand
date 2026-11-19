@@ -7,7 +7,9 @@ import java.util.Set;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.jdbc.core.JdbcAggregateOperations;
+import org.springframework.data.relational.core.conversion.DbActionExecutionException;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Isolation;
@@ -21,16 +23,16 @@ import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.store.Savepoints;
 
 /**
- * {@link RuntimeCapacityStore} over {@code runtime_capacity} (one row) and {@code runtime_capacity_target} (migration V6, 2.x {@code runtime-capacity-state.mjs}).
- * {@link #compareAndSet} is a conditional UPDATE on the contract revision: the winner replaces the override rows in the same transaction and a stale writer matches no
- * row. The store keeps every override it is given, also one of a target that left the configuration (no foreign key); which overrides to keep is the use case's rule.
+ * {@link RuntimeCapacityStore} over {@code runtime_capacity} (one row, Spring Data JDBC {@code @Version}) and {@code runtime_capacity_target} (SSH_PORTAL-D-0124).
+ * {@link #compareAndSet} delegates optimistic locking to Spring Data JDBC {@code @Version}: the winner increments {@code version} and replaces override rows in one transaction,
+ * while a stale writer receives {@link OptimisticLockingFailureException} translated to {@code CAPACITY_REVISION_CONFLICT}.
  */
 @Repository
 public class JdbcRuntimeCapacityStore implements RuntimeCapacityStore {
 
     private static final Logger LOG = LoggerFactory.getLogger(JdbcRuntimeCapacityStore.class);
     private static final int THE_ROW = 1;
-    private static final long FIRST_VERSION = 1;
+    private static final long FIRST_VERSION = 1L;
 
     private final RuntimeCapacityRowRepository capacities;
     private final RuntimeCapacityTargetRowRepository targets;
@@ -56,11 +58,6 @@ public class JdbcRuntimeCapacityStore implements RuntimeCapacityStore {
         return load();
     }
 
-    /**
-     * Stores {@code initial} when no state exists and returns the stored state. Two first writers collide on the primary key; the loser reads the winner's state.
-     * The insert runs in its own transaction, or in a savepoint when the caller has one, so that the failed insert is rolled back before the winner's state is read
-     * (PostgreSQL aborts a transaction after an error; S2-DB-17).
-     */
     @Override
     public CapacityState initialize(CapacityState initial) {
         requireDistinctTargets(initial);
@@ -70,7 +67,7 @@ public class JdbcRuntimeCapacityStore implements RuntimeCapacityStore {
         }
         try {
             savepoints.run(() -> insertFirst(initial));
-            return initial;
+            return new CapacityState(FIRST_VERSION, initial.queueCapacity(), initial.maxConcurrency(), initial.targets());
         } catch (DuplicateKeyException e) {
             LOG.info("Another writer initialized the runtime capacity first; the stored state is used", e);
             Optional<CapacityState> winner = transactions.execute(status -> load());
@@ -80,15 +77,27 @@ public class JdbcRuntimeCapacityStore implements RuntimeCapacityStore {
 
     @Override
     @Transactional
-    public void compareAndSet(String expectedRevision, CapacityState next) {
+    public CapacityState compareAndSet(long expectedVersion, CapacityState next) {
         requireDistinctTargets(next);
-        if (capacities.replaceIfRevision(expectedRevision, next.revision(), next.queueCapacity().value(), next.maxConcurrency().value()) != 1) {
+        if (expectedVersion < FIRST_VERSION) {
             throw new RequestRefusedException(CapacityErrorCode.CAPACITY_REVISION_CONFLICT);
+        }
+        RuntimeCapacityRow saved;
+        try {
+            saved = capacities.save(mapper.row(next, expectedVersion));
+        } catch (OptimisticLockingFailureException e) {
+            throw new RequestRefusedException(CapacityErrorCode.CAPACITY_REVISION_CONFLICT, e);
+        } catch (DbActionExecutionException e) {
+            if (e.getCause() instanceof OptimisticLockingFailureException) {
+                throw new RequestRefusedException(CapacityErrorCode.CAPACITY_REVISION_CONFLICT, e);
+            }
+            throw e;
         }
         targets.deleteAllTargets();
         for (RuntimeCapacityTargetRow row : mapper.targetRows(next)) {
             aggregates.insert(row);
         }
+        return new CapacityState(saved.version(), next.queueCapacity(), next.maxConcurrency(), next.targets());
     }
 
     private Optional<CapacityState> load() {
@@ -102,7 +111,6 @@ public class JdbcRuntimeCapacityStore implements RuntimeCapacityStore {
         }
     }
 
-    /** A state with one target twice cannot be stored (primary key); it is refused before any write so that a key violation always means a competing writer. */
     private void requireDistinctTargets(CapacityState state) {
         Set<String> seen = new HashSet<>();
         for (CapacityState.TargetCapacity target : state.targets()) {

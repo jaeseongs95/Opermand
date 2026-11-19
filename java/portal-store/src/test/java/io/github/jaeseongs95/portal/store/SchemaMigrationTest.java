@@ -22,11 +22,11 @@ import io.github.jaeseongs95.portal.store.migration.Migrations;
 @StoreTest
 class SchemaMigrationTest {
 
-    /** The 24 tables after removing dead 2.x model-evaluation tables (D-0122) and operation_legacy (D-0127): V1 10, V2 3, V3 3, V4 3, V5 1, V6 4. */
+    /** The 23 tables after removing dead 2.x model-evaluation tables (D-0122), operation_legacy (D-0127), and maintenance_release (D-0124): V1 10, V2 3, V3 3, V4 3, V5 1, V6 3. */
     static final Set<String> TABLES = Set.of("operation", "operation_event", "operation_command", "operation_source", "operation_upload", "operation_download",
         "operation_decision", "operation_result", "operation_slot", "operation_fence",
         "artifact", "artifact_chunk", "staged_action", "command_output", "command_output_format", "command_output_page", "command_policy", "command_policy_rule",
-        "command_policy_name", "agent_cli_request", "maintenance_reservation", "maintenance_release", "runtime_capacity",
+        "command_policy_name", "agent_cli_request", "maintenance_reservation", "runtime_capacity",
         "runtime_capacity_target");
 
     private final JdbcTemplate jdbc;
@@ -38,13 +38,13 @@ class SchemaMigrationTest {
     }
 
     @Test
-    @DisplayName("S2-DB-01: the migration of an empty database creates exactly the 24 tables")
-    void createsTheTwentyFourTables() {
+    @DisplayName("S2-DB-01: the migration of an empty database creates exactly the 23 tables")
+    void createsTheTwentyThreeTables() {
         List<String> names = jdbc.queryForList(
             "SELECT LOWER(TABLE_NAME) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = CURRENT_SCHEMA AND TABLE_TYPE = 'BASE TABLE'", String.class);
         Set<String> product = new TreeSet<>(names);
 
-        assertThat(TABLES).hasSize(24);
+        assertThat(TABLES).hasSize(23);
         assertThat(product).isEqualTo(new TreeSet<>(TABLES));
     }
 

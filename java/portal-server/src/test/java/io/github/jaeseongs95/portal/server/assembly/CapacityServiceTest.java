@@ -19,7 +19,6 @@ import io.github.jaeseongs95.portal.app.journal.ClaimResult;
 import io.github.jaeseongs95.portal.app.journal.ClaimStore;
 import io.github.jaeseongs95.portal.app.journal.OperationJournal;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
-import io.github.jaeseongs95.portal.app.maintenance.OwnerHash;
 import io.github.jaeseongs95.portal.domain.capacity.Capacity;
 import io.github.jaeseongs95.portal.domain.error.CapacityErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestErrorCode;
@@ -50,7 +49,6 @@ import io.github.jaeseongs95.portal.domain.text.Utf8Text;
 class CapacityServiceTest {
 
     private static final AtomicInteger KEYS = new AtomicInteger();
-    private static final OwnerHash OWNER = new OwnerHash("c".repeat(64));
 
     private final CapacityService service;
     private final OperationJournal journal;
@@ -77,15 +75,15 @@ class CapacityServiceTest {
     void clean() {
         jdbc.update("DELETE FROM runtime_capacity_target");
         jdbc.update("DELETE FROM runtime_capacity");
-        jdbc.update("DELETE FROM maintenance_release");
         jdbc.update("DELETE FROM maintenance_reservation");
     }
 
     @Test
-    @DisplayName("S3-UC-08 / RC-B-410: the first read stores the installation defaults (ten queued requests and one operation per CPU, and the limits of each configured target) and a second read answers the same revision")
+    @DisplayName("S3-UC-08 / RC-B-410: the first read stores the installation defaults (ten queued requests and one operation per CPU, and the limits of each configured target) at version 1")
     void theFirstReadStoresTheDefaults() {
         CapacityState state = service.current();
 
+        assertThat(state.version()).isEqualTo(1L);
         assertThat(state.queueCapacity()).isEqualTo(new Capacity(cpus.count() * 10));
         assertThat(state.maxConcurrency()).isEqualTo(new Capacity(cpus.count()));
         assertThat(state.targets()).extracting(CapacityState.TargetCapacity::targetId).containsExactlyInAnyOrder(FakeTargets.LINUX_ID, FakeTargets.WINDOWS_ID);
@@ -93,15 +91,15 @@ class CapacityServiceTest {
     }
 
     @Test
-    @DisplayName("RC-B-410: lowering the limits to 1 and 1 while one operation runs and one waits changes no operation and stores a new revision")
+    @DisplayName("RC-B-410: lowering the limits to 1 and 1 while one operation runs and one waits changes no operation and advances @Version by 1")
     void loweringTheLimitsLeavesTheWorkAlone() {
         Operation running = running();
         Operation queued = queued();
         CapacityState stored = service.current();
 
-        CapacityState next = service.update(stored.revision(), new CapacityState(stored.revision(), new Capacity(1), new Capacity(1), stored.targets()));
+        CapacityState next = service.update(stored.version(), new CapacityState(stored.version(), new Capacity(1), new Capacity(1), stored.targets()));
 
-        assertThat(next.revision()).isNotEqualTo(stored.revision());
+        assertThat(next.version()).isEqualTo(stored.version() + 1L);
         assertThat(next.queueCapacity()).isEqualTo(new Capacity(1));
         assertThat(next.maxConcurrency()).isEqualTo(new Capacity(1));
         assertThat(service.current()).isEqualTo(next);
@@ -110,16 +108,16 @@ class CapacityServiceTest {
     }
 
     @Test
-    @DisplayName("RC-B-410: a stale revision, a target that appears twice and a target that is not configured are refused with their own codes, and the stored value is not changed by any of them")
+    @DisplayName("RC-B-410: a stale version, a target that appears twice and a target that is not configured are refused with their own codes, and the stored value is not changed by any of them")
     void aRefusedChangeLeavesTheStoredValueAlone() {
         CapacityState stored = service.current();
         TargetId unknown = new TargetId("not-configured");
         CapacityState.TargetCapacity own = new CapacityState.TargetCapacity(FakeTargets.LINUX_ID, new CapacityOverride.Inherited(), new CapacityOverride.Inherited());
 
-        assertRefused(() -> service.update("0".repeat(32), stored), CapacityErrorCode.CAPACITY_REVISION_CONFLICT);
-        assertRefused(() -> service.update(stored.revision(), new CapacityState(stored.revision(), new Capacity(1), new Capacity(1), List.of(own, own))),
+        assertRefused(() -> service.update(stored.version() + 99L, stored), CapacityErrorCode.CAPACITY_REVISION_CONFLICT);
+        assertRefused(() -> service.update(stored.version(), new CapacityState(stored.version(), new Capacity(1), new Capacity(1), List.of(own, own))),
             CapacityErrorCode.INVALID_CAPACITY_TARGETS);
-        assertRefused(() -> service.update(stored.revision(), new CapacityState(stored.revision(), new Capacity(1), new Capacity(1), List.of(
+        assertRefused(() -> service.update(stored.version(), new CapacityState(stored.version(), new Capacity(1), new Capacity(1), List.of(
             new CapacityState.TargetCapacity(unknown, new CapacityOverride.Inherited(), new CapacityOverride.Inherited())))), CapacityErrorCode.UNKNOWN_CAPACITY_TARGET);
 
         assertThat(service.current()).isEqualTo(stored);
@@ -129,17 +127,17 @@ class CapacityServiceTest {
     @DisplayName("RC-B-410: while a maintenance reservation holds the installation the limits cannot be changed (MAINTENANCE_ACTIVE) and the stored value stays; after the release the change goes through")
     void maintenanceRefusesAChange() {
         CapacityState stored = service.current();
-        maintenance.reserve(OWNER);
+        maintenance.reserve(clock.instant());
         try {
-            assertRefused(() -> service.update(stored.revision(), new CapacityState(stored.revision(), new Capacity(1), new Capacity(1), stored.targets())),
+            assertRefused(() -> service.update(stored.version(), new CapacityState(stored.version(), new Capacity(1), new Capacity(1), stored.targets())),
                 RequestErrorCode.MAINTENANCE_ACTIVE);
             assertThat(service.current()).isEqualTo(stored);
         } finally {
-            maintenance.release(OWNER);
+            maintenance.release();
         }
 
-        CapacityState next = service.update(stored.revision(), new CapacityState(stored.revision(), new Capacity(1), new Capacity(1), stored.targets()));
-        assertThat(next.revision()).isNotEqualTo(stored.revision());
+        CapacityState next = service.update(stored.version(), new CapacityState(stored.version(), new Capacity(1), new Capacity(1), stored.targets()));
+        assertThat(next.version()).isEqualTo(stored.version() + 1L);
     }
 
     // ---- helpers ----

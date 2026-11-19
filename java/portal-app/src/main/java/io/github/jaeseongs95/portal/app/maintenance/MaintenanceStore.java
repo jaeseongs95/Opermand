@@ -1,30 +1,20 @@
 package io.github.jaeseongs95.portal.app.maintenance;
 
-import java.util.Optional;
+import java.time.Instant;
 
 /**
- * The maintenance reservation, one row for the installation (2.x {@code maintenance-state.mjs}). It is stored, so it survives a restart. At most one owner holds it,
- * and an owner that has held it once may not reserve again.
+ * The maintenance reservation, one row for the single-owner installation (SSH_PORTAL-D-0124). It is stored with its reservation timestamp so it survives a restart.
  */
 public interface MaintenanceStore {
 
-    MaintenanceStatus status(OwnerHash owner);
-
-    /** True while some owner holds the reservation. */
+    /** True while a maintenance reservation is active. */
     boolean occupied();
 
     /**
-     * Takes the reservation. Another holder throws {@code RequestRefusedException(MAINTENANCE_ACTIVE)}; the owner of the last release throws
-     * {@code RequestRefusedException(MAINTENANCE_OWNER_USED)}.
+     * Takes the maintenance reservation at {@code reservedAt}. If a reservation is already active, throws {@code RequestRefusedException(MAINTENANCE_ACTIVE)}.
      */
-    void reserve(OwnerHash owner);
+    void reserve(Instant reservedAt);
 
-    /** Stores the baseline once; a second call or another owner throws and changes nothing. */
-    void saveBaseline(OwnerHash owner, PreservationBaseline baseline);
-
-    /** {@code Optional} here has the one meaning "no baseline was stored for this owner". */
-    Optional<PreservationBaseline> baseline(OwnerHash owner);
-
-    /** Deletes the reservation and records the owner as the last release, in one transaction. */
-    void release(OwnerHash owner);
+    /** Releases the active maintenance reservation. If no reservation is active, throws {@code RequestRefusedException(REQUEST_REFUSED)}. */
+    void release();
 }

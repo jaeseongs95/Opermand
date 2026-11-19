@@ -33,7 +33,6 @@ import io.github.jaeseongs95.portal.app.artifact.ChunkDigest;
 import io.github.jaeseongs95.portal.app.artifact.ImportResult;
 import io.github.jaeseongs95.portal.app.file.OutputStreamImport;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
-import io.github.jaeseongs95.portal.app.maintenance.OwnerHash;
 import io.github.jaeseongs95.portal.app.output.OutputId;
 import io.github.jaeseongs95.portal.app.output.OutputPayloadStore;
 import io.github.jaeseongs95.portal.app.output.StreamFrame;
@@ -61,7 +60,6 @@ import io.github.jaeseongs95.portal.domain.id.OperationId;
 class ReapAndImportTest {
 
     private static final Sha256Digester DIGEST = new Sha256Digester();
-    private static final OwnerHash OWNER = new OwnerHash("b".repeat(64));
 
     private final ArtifactReaper reaper;
     private final ArtifactPinning pinning;
@@ -93,7 +91,6 @@ class ReapAndImportTest {
         jdbc.update("DELETE FROM staged_action");
         jdbc.update("DELETE FROM artifact_chunk");
         jdbc.update("DELETE FROM artifact");
-        jdbc.update("DELETE FROM maintenance_release");
         jdbc.update("DELETE FROM maintenance_reservation");
     }
 
@@ -105,10 +102,10 @@ class ReapAndImportTest {
         byte[] bytes = bytes(300, 1);
         ArtifactId id = expiredArtifact(bytes);
         assertThat(registry.budget().chargedBytes()).isEqualTo(300);
-        maintenance.reserve(OWNER);
+        maintenance.reserve(clock.instant());
 
         ReapReport held = reaper.reap();
-        maintenance.release(OWNER);
+        maintenance.release();
 
         assertThat(held).isEqualTo(new ReapReport.Suspended(ReapPermission.SuspendReason.MAINTENANCE));
         assertThat(payloads.stored()).as("the bytes are untouched").contains(id);

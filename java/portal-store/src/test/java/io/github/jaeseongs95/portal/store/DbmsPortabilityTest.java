@@ -177,23 +177,24 @@ class DbmsPortabilityTest {
     @Test
     @DisplayName("S2-DB-14: a CHAR column keeps a short value and compares equal to it: the padding is blanks only, equality and a join ignore it, and a value over the width is refused")
     void shortValuesInCharColumnsCompareByTheirContent() {
-        jdbc.update("INSERT INTO maintenance_release (id, owner_hash) VALUES (1, ?)", "abc");
-        jdbc.update("INSERT INTO maintenance_reservation (id, owner_hash) VALUES (1, ?)", "abc");
+        String insert = "INSERT INTO command_policy_rule (target_id, target_connection, rule_revision, profile, os, automatic_uploads, automatic_downloads, automatic_sudo, test_server, source_contract) "
+            + "VALUES (?, ?, 1, 'default', 'LINUX', 'OFF', 'OFF', 'OFF', 'OFF', 'NONE')";
+        jdbc.update(insert, "char-a", "abc");
+        jdbc.update(insert, "char-b", "abc");
 
-        // PostgreSQL and H2 return the value padded to 64 characters (JdbcRuntimeCapacityStoreTest sees the padding of CHAR(32)), MariaDB without it: what the DBMS adds is blanks.
-        String stored = jdbc.queryForObject("SELECT owner_hash FROM maintenance_release WHERE id = 1", String.class);
+        String stored = jdbc.queryForObject("SELECT target_connection FROM command_policy_rule WHERE target_id = 'char-a'", String.class);
         assertThat(stored).startsWith("abc");
         assertThat(stored.substring(3)).isBlank();
         assertThat(stored.stripTrailing()).isEqualTo("abc");
 
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM maintenance_release WHERE owner_hash = ?", Long.class, "abc")).isEqualTo(1L);
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM maintenance_release WHERE owner_hash = ?", Long.class, "abd")).isZero();
-        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM maintenance_release r JOIN maintenance_reservation s ON r.owner_hash = s.owner_hash", Long.class)).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM command_policy_rule WHERE target_id = 'char-a' AND target_connection = ?", Long.class, "abc")).isEqualTo(1L);
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM command_policy_rule WHERE target_id = 'char-a' AND target_connection = ?", Long.class, "abd")).isZero();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM command_policy_rule a JOIN command_policy_rule b ON a.target_connection = b.target_connection WHERE a.target_id = 'char-a' AND b.target_id = 'char-b'", Long.class)).isEqualTo(1L);
 
         String exact = "f".repeat(64);
-        jdbc.update("UPDATE maintenance_release SET owner_hash = ?", exact);
-        assertThat(jdbc.queryForObject("SELECT owner_hash FROM maintenance_release WHERE id = 1", String.class)).isEqualTo(exact);
-        assertThatThrownBy(() -> jdbc.update("UPDATE maintenance_release SET owner_hash = ?", "f".repeat(65))).isInstanceOf(DataIntegrityViolationException.class);
+        jdbc.update("UPDATE command_policy_rule SET target_connection = ? WHERE target_id = 'char-a'", exact);
+        assertThat(jdbc.queryForObject("SELECT target_connection FROM command_policy_rule WHERE target_id = 'char-a'", String.class)).isEqualTo(exact);
+        assertThatThrownBy(() -> jdbc.update("UPDATE command_policy_rule SET target_connection = ? WHERE target_id = 'char-a'", "f".repeat(65))).isInstanceOf(DataIntegrityViolationException.class);
     }
 
     // ---- S2-DB-15: migration scripts and schema ----

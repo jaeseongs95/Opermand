@@ -25,7 +25,6 @@ import io.github.jaeseongs95.portal.app.file.StagedPlacement;
 import io.github.jaeseongs95.portal.app.file.StagedPlacementRequest;
 import io.github.jaeseongs95.portal.app.journal.OperationJournal;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
-import io.github.jaeseongs95.portal.app.maintenance.OwnerHash;
 import io.github.jaeseongs95.portal.app.operation.OperationIntake;
 import io.github.jaeseongs95.portal.app.operation.OperationsService;
 import io.github.jaeseongs95.portal.app.remote.ExecutionReport;
@@ -275,14 +274,13 @@ class FileOperationsTest {
             OverwriteMode.REPLACE, Elevation.NONE, new FileBinding.Bound(new FileTargetBinding(FixedTargets.ID, targets.current().revision())), UploadProtocol.UNSPECIFIED);
         NewOperation upload = NewOperation.of(digester, kit.newKey(), new OwnerId("owner"), FixedTargets.ID, targets.current().revision(), FixedTargets.WRITE_PROFILE, input,
             new ConflictKey.None(), new Deadline.None());
-        OwnerHash window = new OwnerHash((UUID.randomUUID().toString() + UUID.randomUUID()).replace("-", ""));
-        maintenance.reserve(window);
+        maintenance.reserve(java.time.Instant.EPOCH);
         try {
             assertThatThrownBy(() -> admission.admit(upload)).isInstanceOfSatisfying(RequestRefusedException.class,
                 e -> assertThat(e.code()).isEqualTo(RequestErrorCode.MAINTENANCE_ACTIVE));
             assertThat(journal.findByRequestKey(upload.requestKey())).isEmpty();
         } finally {
-            maintenance.release(window);
+            maintenance.release();
         }
 
         OperationId id = admission.admit(upload);

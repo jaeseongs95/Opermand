@@ -14,9 +14,9 @@ import io.github.jaeseongs95.portal.domain.target.CapacityOverride;
 @Component
 class CapacityMapper {
 
-    /** The row of the global values; {@code version} is the write counter the caller gives (1 for the first write). */
+    /** The row of the global values with the given optimistic-locking version. */
     RuntimeCapacityRow row(CapacityState state, long version) {
-        return new RuntimeCapacityRow(1, state.revision(), state.queueCapacity().value(), state.maxConcurrency().value(), version);
+        return new RuntimeCapacityRow(1, state.queueCapacity().value(), state.maxConcurrency().value(), version);
     }
 
     /** One row per target override of the state. */
@@ -28,13 +28,13 @@ class CapacityMapper {
         return rows;
     }
 
-    /** The state of the stored rows. A damaged revision is refused by the {@link CapacityState} constructor, which is not caught here. */
+    /** The state of the stored rows. */
     CapacityState state(RuntimeCapacityRow row, List<RuntimeCapacityTargetRow> targets) {
         List<CapacityState.TargetCapacity> overrides = new ArrayList<>();
         for (RuntimeCapacityTargetRow target : targets) {
             overrides.add(new CapacityState.TargetCapacity(new TargetId(target.targetId()), override(target.queueCapacity()), override(target.maxConcurrency())));
         }
-        return new CapacityState(row.revision(), new Capacity(row.queueCapacity()), new Capacity(row.maxConcurrency()), overrides);
+        return new CapacityState(row.version(), new Capacity(row.queueCapacity()), new Capacity(row.maxConcurrency()), overrides);
     }
 
     private Integer column(CapacityOverride override) {

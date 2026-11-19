@@ -34,7 +34,6 @@ import io.github.jaeseongs95.portal.app.file.StagedFileService;
 import io.github.jaeseongs95.portal.app.file.StagedPlacement;
 import io.github.jaeseongs95.portal.app.file.StagedPlacementRequest;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
-import io.github.jaeseongs95.portal.app.maintenance.OwnerHash;
 import io.github.jaeseongs95.portal.domain.error.ArtifactErrorCode;
 import io.github.jaeseongs95.portal.domain.error.ErrorCode;
 import io.github.jaeseongs95.portal.domain.error.ExecutionErrorCode;
@@ -95,7 +94,6 @@ class StagedFileServiceTest {
         jdbc.update("DELETE FROM staged_action");
         jdbc.update("DELETE FROM artifact_chunk");
         jdbc.update("DELETE FROM artifact");
-        jdbc.update("DELETE FROM maintenance_release");
         jdbc.update("DELETE FROM maintenance_reservation");
     }
 
@@ -248,8 +246,7 @@ class StagedFileServiceTest {
     @DisplayName("RC-A-776 / RC-A-777: while a maintenance reservation holds the installation no staged file is begun, appended or sent; after the release it works again")
     void maintenanceRefusesStagedWork() {
         ArtifactUuid uuid = stage("maint-key-00000000001", bytes(100, 1));
-        OwnerHash owner = new OwnerHash("a".repeat(64));
-        maintenance.reserve(owner);
+        maintenance.reserve(java.time.Instant.EPOCH);
         try {
             assertThatThrownBy(() -> staged.begin(OWNER, "maint-key-00000000002", new FileName("f.bin"), 5)).isInstanceOfSatisfying(RequestRefusedException.class,
                 e -> assertThat(e.code()).isEqualTo(ArtifactErrorCode.ARTIFACT_MAINTENANCE));
@@ -258,7 +255,7 @@ class StagedFileServiceTest {
             assertThatThrownBy(() -> staged.remove(OWNER, uuid)).isInstanceOfSatisfying(RequestRefusedException.class,
                 e -> assertThat(e.code()).isEqualTo(ArtifactErrorCode.ARTIFACT_MAINTENANCE));
         } finally {
-            maintenance.release(owner);
+            maintenance.release();
         }
 
         assertThat(staged.begin(OWNER, "maint-key-00000000002", new FileName("f.bin"), 5)).isInstanceOf(StagedBegin.Begun.class);

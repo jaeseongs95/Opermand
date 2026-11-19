@@ -19,7 +19,6 @@ import org.junit.jupiter.api.Test;
 import io.github.jaeseongs95.portal.app.audit.AuditAction;
 import io.github.jaeseongs95.portal.app.journal.OperationJournal;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
-import io.github.jaeseongs95.portal.app.maintenance.OwnerHash;
 import io.github.jaeseongs95.portal.app.operation.Observation;
 import io.github.jaeseongs95.portal.app.operation.OperationIntake;
 import io.github.jaeseongs95.portal.app.operation.OperationsService;
@@ -84,10 +83,6 @@ class OperationIntakeTest {
         return (RequestRefusedException) error;
     }
 
-    private static OwnerHash newOwner() {
-        return new OwnerHash((UUID.randomUUID().toString() + UUID.randomUUID()).replace("-", ""));
-    }
-
     @Test
     @DisplayName("RC-B-233 the same key and contract is one operation: a second and a parallel submit return the same identity, and the journal holds one row for the key")
     void theSameKeyIsOneOperation() throws Exception {
@@ -136,15 +131,14 @@ class OperationIntakeTest {
     @Test
     @DisplayName("RC-B-238 RC-A-469 a request in a maintenance window is MAINTENANCE_ACTIVE and writes nothing, so the same key is accepted after the window")
     void aRefusedRequestFreesItsKey() {
-        OwnerHash owner = newOwner();
         NewOperation spec = kit.command("touch window");
-        maintenance.reserve(owner);
+        maintenance.reserve(java.time.Instant.EPOCH);
         try {
             assertThatThrownBy(() -> intake.submit(spec)).isInstanceOfSatisfying(RequestRefusedException.class,
                 e -> assertThat(e.code()).isEqualTo(RequestErrorCode.MAINTENANCE_ACTIVE));
             assertThat(journal.findByRequestKey(spec.requestKey())).isEmpty();
         } finally {
-            maintenance.release(owner);
+            maintenance.release();
         }
         Operation accepted = intake.submit(spec);
         assertThat(accepted.state()).isEqualTo(OperationState.PENDING);
