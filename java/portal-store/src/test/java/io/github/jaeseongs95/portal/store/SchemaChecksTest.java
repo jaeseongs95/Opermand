@@ -89,8 +89,9 @@ class SchemaChecksTest {
         jdbc.update("INSERT INTO command_output (id, execution_id, state, expires_at, charge_bytes, stream_state, stream_truncated, version) VALUES ('" + OUTPUT + "', '" + OP
             + "', 'PENDING', " + STAMP + ", 1, 'OPEN', 'COMPLETE', 1)");
         jdbc.update("INSERT INTO command_output_format (output_id, format, offset_bytes, size_bytes, sha256) VALUES ('" + OUTPUT + "', 'JSON', 0, 1, '" + HEX + "')");
-        jdbc.update("INSERT INTO command_policy_rule (target_id, target_revision, profile, os, external_disclosure, model_execution, automatic_uploads, automatic_downloads,"
-            + " automatic_sudo, test_server, source_contract, fallback) VALUES ('alpha', '" + HEX + "', 'default', 'LINUX', 'ON', 'ON', 'OFF', 'OFF', 'OFF', 'OFF', 'NONE', 'NONE')");
+        jdbc.update("INSERT INTO command_policy_rule (target_id, target_connection, rule_revision, profile, os, external_disclosure, model_execution, automatic_uploads,"
+            + " automatic_downloads, automatic_sudo, test_server, source_contract, fallback) VALUES ('alpha', '" + HEX + "', 1, 'default', 'LINUX', 'ON', 'ON', 'OFF', 'OFF',"
+            + " 'OFF', 'OFF', 'NONE', 'NONE')");
         jdbc.update("INSERT INTO command_policy_name (target_id, list_kind, position, command_name) VALUES ('alpha', 'ALLOWED', 1, 'ls')");
         jdbc.update("INSERT INTO command_policy_threshold (target_id, provider, model, question_version, basis, min_low_risk, validation_ref) VALUES ('alpha', 'JEV',"
             + " 'jev-1.14.0', 'V5', 'SAFETY_PROBABILITY_V1', 0.9, 'ref')");
@@ -179,6 +180,7 @@ class SchemaChecksTest {
         assertThatThrownBy(() -> inSavepoint("UPDATE artifact SET size_bytes = 67108865")).isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> inSavepoint("UPDATE artifact_chunk SET size_bytes = 262145")).isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> inSavepoint("UPDATE command_policy SET id = 2")).isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> inSavepoint("UPDATE command_policy_rule SET rule_revision = 0")).isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> inSavepoint("UPDATE command_policy_threshold SET min_low_risk = 0.5")).isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> inSavepoint("UPDATE operation_result SET exit_kind = 'SIGNALED'")).as("a signal exit needs a signal name").isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> inSavepoint("UPDATE operation SET input_digest = '" + HEX + "'")).as("only an agent CLI operation has an input digest")

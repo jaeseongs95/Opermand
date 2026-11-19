@@ -5,6 +5,7 @@ import java.util.List;
 import org.springframework.data.jdbc.repository.query.Modifying;
 import org.springframework.data.jdbc.repository.query.Query;
 import org.springframework.data.repository.CrudRepository;
+import org.springframework.data.repository.query.Param;
 
 /** Spring Data JDBC repository of the command names (composite key: only the statements below are used). */
 interface PolicyNameRowRepository extends CrudRepository<PolicyNameRow, String> {
@@ -12,6 +13,10 @@ interface PolicyNameRowRepository extends CrudRepository<PolicyNameRow, String> 
     /** Every name, ordered by the key so that the lists keep their positions. */
     @Query("SELECT * FROM command_policy_name ORDER BY target_id, list_kind, position")
     List<PolicyNameRow> findAllOrdered();
+
+    /** The names of one target, ordered by list kind and position. */
+    @Query("SELECT * FROM command_policy_name WHERE target_id = :targetId ORDER BY list_kind, position")
+    List<PolicyNameRow> findByTargetIdOrdered(@Param("targetId") String targetId);
 
     /** Deletes every name. */
     @Modifying

@@ -2,8 +2,8 @@ package io.github.jaeseongs95.portal.domain.command;
 
 import io.github.jaeseongs95.portal.domain.id.TargetId;
 import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
+import io.github.jaeseongs95.portal.domain.target.TargetConnection;
 import io.github.jaeseongs95.portal.domain.target.TargetOs;
-import io.github.jaeseongs95.portal.domain.target.TargetRevision;
 import io.github.jaeseongs95.portal.domain.target.Toggle;
 import io.github.jaeseongs95.portal.domain.text.CommandText;
 import java.util.ArrayList;
@@ -16,11 +16,12 @@ import java.util.regex.Pattern;
 /**
  * What the owner allowed for one target: which command names run without asking, which are never run, whether the command may be shown to a model evaluator,
  * whether a model answer may approve and the thresholds for that, and the switches for sudo, file transfer, source code and the test server
- * (command-policy.mjs:43-71). A rule belongs to one target at one revision and one profile; a rule written for another revision of the target does not apply.
+ * (command-policy.mjs:43-71). A rule belongs to one target, its connection identity ({@link TargetConnection}), write profile and operating system (defect D-0121);
+ * a rule written for another machine, account, authentication method, write profile or operating system does not apply.
  *
  * <p>A switch that 2.x left out of a stored rule is {@link Toggle#OFF}; the rule never has an "unknown" switch.
  */
-public record TargetRule(TargetId targetId, TargetRevision targetRevision, ProfileAlias profile, TargetOs os, CommandNames commands, CommandNames deniedCommands,
+public record TargetRule(TargetId targetId, TargetConnection targetConnection, ProfileAlias profile, TargetOs os, CommandNames commands, CommandNames deniedCommands,
                          Toggle externalDisclosure, Toggle modelExecution, Toggle automaticUploads, Toggle automaticDownloads, Toggle automaticSudo, Toggle testServer,
                          SourceContract sourceExecutionContract, Fallback fallback, Thresholds thresholds) {
 
@@ -30,7 +31,7 @@ public record TargetRule(TargetId targetId, TargetRevision targetRevision, Profi
 
     public TargetRule {
         Objects.requireNonNull(targetId, "targetId");
-        Objects.requireNonNull(targetRevision, "targetRevision");
+        Objects.requireNonNull(targetConnection, "targetConnection");
         Objects.requireNonNull(profile, "profile");
         Objects.requireNonNull(os, "os");
         Objects.requireNonNull(commands, "commands");
@@ -114,8 +115,8 @@ public record TargetRule(TargetId targetId, TargetRevision targetRevision, Profi
         return List.copyOf(approved);
     }
 
-    /** True when this rule is the one for the given target, revision and profile; a rule of another revision does not apply (command-automation.mjs:28). */
-    public boolean appliesTo(TargetId target, TargetRevision revision, ProfileAlias writeProfile) {
-        return targetId.equals(target) && targetRevision.equals(revision) && profile.equals(writeProfile);
+    /** True when this rule matches the given target, connection identity, write profile and operating system (defect D-0121). */
+    public boolean appliesTo(TargetId target, TargetConnection connection, ProfileAlias writeProfile, TargetOs targetOs) {
+        return targetId.equals(target) && targetConnection.equals(connection) && profile.equals(writeProfile) && os == targetOs;
     }
 }

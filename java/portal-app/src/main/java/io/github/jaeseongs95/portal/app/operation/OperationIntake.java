@@ -198,11 +198,12 @@ public class OperationIntake {
     public Operation approve(OperationId id) {
         StartAuthority authority = new StartAuthority.Owner();
         Operation operation = require(id);
-        targets.requireAt(operation.targetId(), operation.targetRevision());
+        ResolvedTarget target = targets.requireAt(operation.targetId(), operation.targetRevision());
         Instant now = clock.instant();
         if (approvalPolicy.checkStart(operation, authority, maintenance.state(), now) instanceof StartDecision.Refused refused) {
             throw new DispatchRefusedException(refused.failure());
         }
+        judge.checkBeforeOwnerApprove(operation, target);
         requireRoomInQueue(operation.targetId());
         audit.appendBefore(DispatchStage.START_AUDIT, new AuditEvent(AuditAction.EXECUTION_QUEUED, id, "authority " + authority.mode().wire()));
         // The room is counted again inside the transaction of the write, after the place in the queue was read: an approval, or an intake, that commits in between cannot

@@ -30,7 +30,9 @@ import io.github.jaeseongs95.portal.domain.command.PolicyName;
 import io.github.jaeseongs95.portal.domain.command.PolicySnapshot;
 import io.github.jaeseongs95.portal.domain.command.ProbabilityThreshold;
 import io.github.jaeseongs95.portal.domain.command.QuestionVersion;
+import io.github.jaeseongs95.portal.domain.command.RuleLookup;
 import io.github.jaeseongs95.portal.domain.command.SourceContract;
+import io.github.jaeseongs95.portal.domain.command.TargetPolicy;
 import io.github.jaeseongs95.portal.domain.command.TargetRule;
 import io.github.jaeseongs95.portal.domain.command.ThresholdTerms;
 import io.github.jaeseongs95.portal.domain.command.Thresholds;
@@ -38,8 +40,8 @@ import io.github.jaeseongs95.portal.domain.command.WindowsPolicyName;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.TargetId;
 import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
+import io.github.jaeseongs95.portal.domain.target.TargetConnection;
 import io.github.jaeseongs95.portal.domain.target.TargetOs;
-import io.github.jaeseongs95.portal.domain.target.TargetRevision;
 import io.github.jaeseongs95.portal.domain.target.Toggle;
 import io.github.jaeseongs95.portal.store.StoreTest;
 
@@ -107,6 +109,43 @@ class JdbcCommandPolicyStoreTest {
     }
 
     @Test
+    @DisplayName("S-D0121-06: targetPolicy reads a single target with monotonic rule_revision (preserved on unchanged, incremented on add/change/re-add)")
+    void targetPolicyTracksMonotonicPerTargetRuleRevision() {
+        TargetId alphaId = new TargetId("alpha");
+        TargetId betaId = new TargetId("beta");
+        assertThat(store.targetPolicy(alphaId)).isEqualTo(TargetPolicy.none());
+
+        TargetRule alpha1 = linuxRule("alpha", 'a', List.of("ls"), List.of(), Thresholds.none());
+        TargetRule beta1 = windowsRule("beta", 'b', List.of("powershell.exe"));
+        store.replace(new CommandPolicyDocument(List.of(alpha1, beta1)), 0);
+        assertThat(store.targetPolicy(alphaId)).isEqualTo(new TargetPolicy(1L, new RuleLookup.Rule(alpha1)));
+        assertThat(store.targetPolicy(betaId)).isEqualTo(new TargetPolicy(1L, new RuleLookup.Rule(beta1)));
+
+        // Change only beta -> alpha stays at 1, beta advances to 2
+        TargetRule beta2 = windowsRule("beta", 'b', List.of("powershell.exe", "whoami.exe"));
+        store.replace(new CommandPolicyDocument(List.of(alpha1, beta2)), 1);
+        assertThat(store.targetPolicy(alphaId)).isEqualTo(new TargetPolicy(1L, new RuleLookup.Rule(alpha1)));
+        assertThat(store.targetPolicy(betaId)).isEqualTo(new TargetPolicy(2L, new RuleLookup.Rule(beta2)));
+
+        // Change only alpha -> alpha advances to 3, beta stays at 2
+        TargetRule alpha2 = linuxRule("alpha", 'a', List.of("ls", "cat"), List.of(), Thresholds.none());
+        store.replace(new CommandPolicyDocument(List.of(alpha2, beta2)), 2);
+        assertThat(store.targetPolicy(alphaId)).isEqualTo(new TargetPolicy(3L, new RuleLookup.Rule(alpha2)));
+        assertThat(store.targetPolicy(betaId)).isEqualTo(new TargetPolicy(2L, new RuleLookup.Rule(beta2)));
+
+        // Delete alpha -> alpha returns TargetPolicy.none(), beta stays at 2
+        store.replace(new CommandPolicyDocument(List.of(beta2)), 3);
+        assertThat(store.targetPolicy(alphaId)).isEqualTo(TargetPolicy.none());
+        assertThat(store.targetPolicy(betaId)).isEqualTo(new TargetPolicy(2L, new RuleLookup.Rule(beta2)));
+
+        // Re-add alpha with identical content -> alpha advances to 5, beta stays at 2
+        store.replace(new CommandPolicyDocument(List.of(alpha2, beta2)), 4);
+        assertThat(store.targetPolicy(alphaId)).isEqualTo(new TargetPolicy(5L, new RuleLookup.Rule(alpha2)));
+        assertThat(store.targetPolicy(betaId)).isEqualTo(new TargetPolicy(2L, new RuleLookup.Rule(beta2)));
+        assertThat(store.current()).isEqualTo(new PolicySnapshot(5L, new CommandPolicyDocument(List.of(alpha2, beta2))));
+    }
+
+    @Test
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     @DisplayName("S2-DB-08: two replaces with the same expected revision succeed once; the loser is refused and the child tables hold the winner only")
     void theSameExpectedRevisionWinsOnce() throws Exception {
@@ -152,14 +191,14 @@ class JdbcCommandPolicyStoreTest {
     }
 
     private TargetRule linuxRule(String id, char revision, List<String> allowed, List<String> denied, Thresholds thresholds) {
-        return new TargetRule(new TargetId(id), TargetRevision.of(String.valueOf(revision).repeat(64)), new ProfileAlias(id + "-write"), TargetOs.LINUX,
+        return new TargetRule(new TargetId(id), TargetConnection.of(String.valueOf(revision).repeat(64)), new ProfileAlias(id + "-write"), TargetOs.LINUX,
             new CommandNames(linuxNames(allowed)), new CommandNames(linuxNames(denied)), Toggle.OFF, Toggle.ON, Toggle.OFF, Toggle.OFF, Toggle.ON, Toggle.OFF,
             SourceContract.PYTHON_SOURCE_V1, Fallback.LUNA, thresholds);
     }
 
     private TargetRule windowsRule(String id, char revision, List<String> allowed) {
         List<PolicyName> names = allowed.stream().<PolicyName>map(WindowsPolicyName::new).toList();
-        return new TargetRule(new TargetId(id), TargetRevision.of(String.valueOf(revision).repeat(64)), new ProfileAlias(id + "-write"), TargetOs.WINDOWS,
+        return new TargetRule(new TargetId(id), TargetConnection.of(String.valueOf(revision).repeat(64)), new ProfileAlias(id + "-write"), TargetOs.WINDOWS,
             new CommandNames(names), CommandNames.none(), Toggle.ON, Toggle.OFF, Toggle.ON, Toggle.ON, Toggle.OFF, Toggle.ON, SourceContract.NONE, Fallback.NONE,
             Thresholds.none());
     }

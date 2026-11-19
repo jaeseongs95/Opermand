@@ -45,6 +45,15 @@ public record ConnectionProfile(String host, int port, String user, Setting<Stri
             && auth == other.auth && keyRef.equals(other.keyRef);
     }
 
+    /** Writes only the seven connection core fields into a canonical form, for the connection identity of a target (defect D-0121). */
+    CanonicalForm describeConnectionTo(CanonicalForm form) {
+        form.field("connection.host", host).field("connection.port", port).field("connection.user", user);
+        pinnedHostKey.describeTo(form, "connection.pinnedHostKey", key -> key);
+        via.describeTo(form, "connection.via", ProfileAlias::value);
+        form.field("connection.auth", auth.name());
+        return keyRef.describeTo(form, "connection.keyRef", key -> key);
+    }
+
     /** Writes every field into a canonical form under the prefix, for the revision of the target. */
     CanonicalForm describeTo(CanonicalForm form, String prefix) {
         form.field(prefix + ".host", host).field(prefix + ".port", port).field(prefix + ".user", user);

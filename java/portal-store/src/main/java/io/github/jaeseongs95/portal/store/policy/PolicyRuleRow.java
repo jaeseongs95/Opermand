@@ -13,7 +13,7 @@ import io.github.jaeseongs95.portal.domain.target.Toggle;
  * the migration V4 list; the long-form wire values of the 2.x JSON are not stored.
  */
 @Table("command_policy_rule")
-public record PolicyRuleRow(@Id String targetId, String targetRevision, String profile, TargetOs os, Toggle externalDisclosure, Toggle modelExecution,
-                            Toggle automaticUploads, Toggle automaticDownloads, Toggle automaticSudo, Toggle testServer, SourceContract sourceContract,
-                            Fallback fallback) {
+public record PolicyRuleRow(@Id String targetId, String targetConnection, long ruleRevision, String profile, TargetOs os, Toggle externalDisclosure,
+                            Toggle modelExecution, Toggle automaticUploads, Toggle automaticDownloads, Toggle automaticSudo, Toggle testServer,
+                            SourceContract sourceContract, Fallback fallback) {
 }

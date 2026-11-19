@@ -1,5 +1,11 @@
 package io.github.jaeseongs95.portal.store.policy;
 
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.jdbc.core.JdbcAggregateOperations;
 import org.springframework.stereotype.Repository;
@@ -9,8 +15,12 @@ import org.springframework.transaction.annotation.Transactional;
 import io.github.jaeseongs95.portal.app.policy.CommandPolicyStore;
 import io.github.jaeseongs95.portal.domain.command.CommandPolicyDocument;
 import io.github.jaeseongs95.portal.domain.command.PolicySnapshot;
+import io.github.jaeseongs95.portal.domain.command.RuleLookup;
+import io.github.jaeseongs95.portal.domain.command.TargetPolicy;
+import io.github.jaeseongs95.portal.domain.command.TargetRule;
 import io.github.jaeseongs95.portal.domain.error.RequestErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
+import io.github.jaeseongs95.portal.domain.id.TargetId;
 
 /**
  * {@link CommandPolicyStore} over the tables of the migration V4 (design 8.2, 2.x {@code command-state.mjs}). The policy is a single revision row plus child rows
@@ -49,6 +59,20 @@ public class JdbcCommandPolicyStore implements CommandPolicyStore {
         return new PolicySnapshot(row.revision(), mapper.document(rules.findAllOrdered(), names.findAllOrdered(), thresholds.findAllOrdered()));
     }
 
+    /** Reads only the target's rule row and its child rows in one {@code REPEATABLE_READ} snapshot (defect D-0121). */
+    @Override
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
+    public TargetPolicy targetPolicy(TargetId targetId) {
+        Objects.requireNonNull(targetId, "targetId");
+        Optional<PolicyRuleRow> found = rules.findByTargetId(targetId.value());
+        if (found.isEmpty()) {
+            return TargetPolicy.none();
+        }
+        PolicyRuleRow row = found.orElseThrow();
+        TargetRule rule = mapper.rule(row, names.findByTargetIdOrdered(targetId.value()), thresholds.findByTargetIdOrdered(targetId.value()));
+        return new TargetPolicy(row.ruleRevision(), new RuleLookup.Rule(rule));
+    }
+
     @Override
     @Transactional
     public PolicySnapshot replace(CommandPolicyDocument next, long expectedRevision) {
@@ -56,11 +80,28 @@ public class JdbcCommandPolicyStore implements CommandPolicyStore {
             // The contract has no code of its own for a policy revision conflict yet (reported as a need); REQUEST_REFUSED is the closest.
             throw new RequestRefusedException(RequestErrorCode.REQUEST_REFUSED);
         }
+        long nextRevision = expectedRevision + 1;
+        List<PolicyRuleRow> previousRows = rules.findAllOrdered();
+        Map<String, Long> previousRevisions = new HashMap<>();
+        for (PolicyRuleRow row : previousRows) {
+            previousRevisions.put(row.targetId(), row.ruleRevision());
+        }
+        CommandPolicyDocument previousDoc = mapper.document(previousRows, names.findAllOrdered(), thresholds.findAllOrdered());
+        Map<TargetId, TargetRule> previousRules = new HashMap<>();
+        for (TargetRule rule : previousDoc.targets()) {
+            previousRules.put(rule.targetId(), rule);
+        }
+        Map<TargetId, Long> nextRuleRevisions = new HashMap<>();
+        for (TargetRule rule : next.targets()) {
+            TargetRule prior = previousRules.get(rule.targetId());
+            long ruleRev = prior != null && prior.equals(rule) ? previousRevisions.get(rule.targetId().value()) : nextRevision;
+            nextRuleRevisions.put(rule.targetId(), ruleRev);
+        }
         thresholds.deleteAllThresholds();
         names.deleteAllNames();
         rules.deleteAllRules();
         try {
-            for (PolicyRuleRow row : mapper.ruleRows(next)) {
+            for (PolicyRuleRow row : mapper.ruleRows(next, nextRuleRevisions)) {
                 aggregates.insert(row);
             }
             for (PolicyNameRow row : mapper.nameRows(next)) {
@@ -72,6 +113,6 @@ public class JdbcCommandPolicyStore implements CommandPolicyStore {
         } catch (DuplicateKeyException e) {
             throw new RequestRefusedException(RequestErrorCode.REQUEST_REFUSED, e);
         }
-        return new PolicySnapshot(expectedRevision + 1, next);
+        return new PolicySnapshot(nextRevision, next);
     }
 }

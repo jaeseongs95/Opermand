@@ -27,6 +27,7 @@ import io.github.jaeseongs95.portal.domain.command.PolicyName;
 import io.github.jaeseongs95.portal.domain.command.SourceContract;
 import io.github.jaeseongs95.portal.domain.command.TargetRule;
 import io.github.jaeseongs95.portal.domain.command.Thresholds;
+import io.github.jaeseongs95.portal.domain.command.WindowsPolicyName;
 import io.github.jaeseongs95.portal.domain.error.DispatchFailure;
 import io.github.jaeseongs95.portal.domain.error.DispatchReason;
 import io.github.jaeseongs95.portal.domain.error.DispatchRefusedException;
@@ -45,6 +46,8 @@ import io.github.jaeseongs95.portal.domain.operation.NewOperation;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
 import io.github.jaeseongs95.portal.domain.operation.OperationEvent;
 import io.github.jaeseongs95.portal.domain.operation.OperationState;
+import io.github.jaeseongs95.portal.domain.operation.RecordedResult;
+import io.github.jaeseongs95.portal.domain.operation.Settlement;
 import io.github.jaeseongs95.portal.domain.target.TargetOs;
 import io.github.jaeseongs95.portal.domain.target.Toggle;
 import io.github.jaeseongs95.portal.domain.text.CommandText;
@@ -89,9 +92,22 @@ class RuleIntakeTest {
     }
 
     private void rule(List<String> allowed, List<String> denied) {
-        TargetRule rule = new TargetRule(FixedTargets.ID, targets.current().revision(), FixedTargets.WRITE_PROFILE, TargetOs.LINUX, names(allowed), names(denied), Toggle.OFF,
+        policies.replace(new CommandPolicyDocument(List.of(linuxTargetRule(allowed, denied))), policies.current().revision());
+    }
+
+    private TargetRule linuxTargetRule(List<String> allowed, List<String> denied) {
+        return new TargetRule(FixedTargets.ID, targets.current().connection(), FixedTargets.WRITE_PROFILE, TargetOs.LINUX, names(allowed), names(denied), Toggle.OFF,
             Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, SourceContract.NONE, Fallback.NONE, Thresholds.none());
-        policies.replace(new CommandPolicyDocument(List.of(rule)), policies.current().revision());
+    }
+
+    private TargetRule windowsTargetRule(List<String> allowed) {
+        List<PolicyName> windowsNames = new ArrayList<>();
+        for (String text : allowed) {
+            windowsNames.add(new WindowsPolicyName(text));
+        }
+        return new TargetRule(FixedTargets.WINDOWS_ID, targets.windows().connection(), FixedTargets.WINDOWS_WRITE_PROFILE, TargetOs.WINDOWS,
+            new CommandNames(windowsNames), CommandNames.none(), Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, SourceContract.NONE,
+            Fallback.NONE, Thresholds.none());
     }
 
     private static CommandNames names(List<String> texts) {
@@ -424,5 +440,136 @@ class RuleIntakeTest {
             kit.awaitTerminal(operation.id());
         }
         intake.deny(waiting.id());
+    }
+
+    @Test
+    @DisplayName("S-D0121-01 S-D0121-02 D-0121 editing another target's policy or adding another allowed command keeps queued automatic operations running, while revoking the command refuses with POLICY_CHANGED")
+    void unrelatedPolicyEditsKeepQueuedAutomaticOperationsRunningWhileRevocationRefuses() throws Exception {
+        rule(List.of("touch"), List.of());
+        CountDownLatch firstHold = new CountDownLatch(1);
+        executor.when("hold-one", executor.blocksUntil(firstHold));
+        List<Operation> blockers = new ArrayList<>();
+        try {
+            for (int number = 0; number < limits.globalConcurrency().value(); number++) {
+                blockers.add(intake.submit(kit.command("touch hold-one " + number)));
+            }
+            for (Operation running : blockers) {
+                kit.await(running.id(), op -> op.state() == OperationState.RUNNING);
+            }
+            Operation survivesOtherTarget = intake.submit(kit.command("touch survives-other-target"));
+            assertThat(survivesOtherTarget.state()).isEqualTo(OperationState.QUEUED);
+
+            // Editing win-1's rule and adding an allowed name on web-1 both advance the global policy revision without revoking 'touch'.
+            policies.replace(new CommandPolicyDocument(List.of(linuxTargetRule(List.of("touch"), List.of()), windowsTargetRule(List.of("powershell.exe")))),
+                policies.current().revision());
+            policies.replace(new CommandPolicyDocument(List.of(linuxTargetRule(List.of("touch", "ls"), List.of()), windowsTargetRule(List.of("powershell.exe")))),
+                policies.current().revision());
+
+            firstHold.countDown();
+            for (Operation running : blockers) {
+                kit.awaitTerminal(running.id());
+            }
+            Operation completed = kit.awaitTerminal(survivesOtherTarget.id());
+            assertThat(completed.state()).isEqualTo(OperationState.COMPLETED);
+            assertThat(executor.sentLines()).contains("touch survives-other-target");
+        } finally {
+            firstHold.countDown();
+        }
+
+        blockers.clear();
+        CountDownLatch secondHold = new CountDownLatch(1);
+        executor.when("hold-two", executor.blocksUntil(secondHold));
+        try {
+            for (int number = 0; number < limits.globalConcurrency().value(); number++) {
+                blockers.add(intake.submit(kit.command("touch hold-two " + number)));
+            }
+            for (Operation running : blockers) {
+                kit.await(running.id(), op -> op.state() == OperationState.RUNNING);
+            }
+            Operation revoked = intake.submit(kit.command("touch revoked-while-queued"));
+            assertThat(revoked.state()).isEqualTo(OperationState.QUEUED);
+            rule(List.of("ls"), List.of());
+
+            secondHold.countDown();
+            for (Operation running : blockers) {
+                kit.awaitTerminal(running.id());
+            }
+            Operation refused = kit.awaitTerminal(revoked.id());
+            assertThat(refused.state()).isEqualTo(OperationState.FAILED);
+            assertThat(refused.settlement()).isInstanceOfSatisfying(Settlement.Settled.class, settled -> assertThat(settled.result())
+                .isEqualTo(new RecordedResult.Refused(DispatchFailure.refused(DispatchReason.POLICY_CHANGED, DispatchStage.POLICY_GUARD))));
+            assertThat(executor.sentLines()).doesNotContain("touch revoked-while-queued");
+        } finally {
+            secondHold.countDown();
+        }
+    }
+
+    @Test
+    @DisplayName("S-D0121-03 RC-A-433 D-0121 a newly denied command is refused with POLICY_DENIED on owner approve and before dispatch across owner and read-only paths")
+    void newlyDeniedCommandsAreRefusedOnApproveAndBeforeDispatch() throws Exception {
+        Operation pendingOwner = intake.submit(kit.command("sudo id"));
+        assertThat(pendingOwner.state()).isEqualTo(OperationState.PENDING);
+        rule(List.of("touch"), List.of("sudo"));
+
+        assertThatThrownBy(() -> intake.approve(pendingOwner.id())).isInstanceOfSatisfying(DispatchRefusedException.class,
+            e -> assertThat(e.failure()).isEqualTo(DispatchFailure.refused(DispatchReason.POLICY_DENIED, DispatchStage.POLICY_GUARD)));
+        assertThat(kit.find(pendingOwner.id()).state()).isEqualTo(OperationState.PENDING);
+        intake.deny(pendingOwner.id());
+
+        rule(List.of("touch"), List.of());
+        CountDownLatch hold = new CountDownLatch(1);
+        executor.when("hold-deny", executor.blocksUntil(hold));
+        List<Operation> blockers = new ArrayList<>();
+        try {
+            for (int number = 0; number < limits.globalConcurrency().value(); number++) {
+                blockers.add(intake.submit(kit.command("touch hold-deny " + number)));
+            }
+            for (Operation running : blockers) {
+                kit.await(running.id(), op -> op.state() == OperationState.RUNNING);
+            }
+            Operation queuedOwner = intake.submit(kit.command("uname -a"));
+            intake.approve(queuedOwner.id());
+            Operation queuedReadOnly = intake.submit(kit.command(kit.newKey(), "cat /tmp/secret", FixedTargets.READ_PROFILE, new Deadline.None()));
+            assertThat(queuedReadOnly.state()).isEqualTo(OperationState.QUEUED);
+
+            rule(List.of("touch"), List.of("uname", "cat"));
+            hold.countDown();
+            for (Operation running : blockers) {
+                kit.awaitTerminal(running.id());
+            }
+            for (Operation refused : List.of(kit.awaitTerminal(queuedOwner.id()), kit.awaitTerminal(queuedReadOnly.id()))) {
+                assertThat(refused.state()).isEqualTo(OperationState.FAILED);
+                assertThat(refused.settlement()).isInstanceOfSatisfying(Settlement.Settled.class, settled -> assertThat(settled.result())
+                    .isEqualTo(new RecordedResult.Refused(DispatchFailure.refused(DispatchReason.POLICY_DENIED, DispatchStage.POLICY_GUARD))));
+            }
+            assertThat(executor.sentLines()).doesNotContain("uname -a", "cat /tmp/secret");
+        } finally {
+            hold.countDown();
+        }
+    }
+
+    @Test
+    @DisplayName("S-D0121-04 S-D0121-05 D-0121 renaming a target keeps its allow and deny lists active, while changing the SSH host invalidates the old rule")
+    void nonConnectionTargetChangePreservesRuleWhileHostChangeInvalidatesRule() throws Exception {
+        rule(List.of("touch"), List.of("rm"));
+        var originalRevision = targets.current().revision();
+
+        targets.change("Web one renamed");
+        assertThat(targets.current().revision()).isNotEqualTo(originalRevision);
+
+        Operation allowedAfterRename = intake.submit(kit.command("touch after-rename"));
+        assertThat(allowedAfterRename.approvalMode()).isEqualTo(ApprovalMode.AUTOMATIC);
+        assertThat(kit.awaitTerminal(allowedAfterRename.id()).state()).isEqualTo(OperationState.COMPLETED);
+
+        Operation deniedAfterRename = intake.submit(kit.command("rm /tmp/after-rename"));
+        assertThat(deniedAfterRename.state()).isEqualTo(OperationState.DENIED);
+
+        targets.changeHost("other-host.example");
+        Operation afterHostChange = intake.submit(kit.command("touch after-host-change"));
+        assertThat(afterHostChange.state()).isEqualTo(OperationState.PENDING);
+        assertThat(afterHostChange.decision()).isInstanceOfSatisfying(DecisionRecord.Decided.class,
+            decided -> assertThat(decided.reason()).isEqualTo(DecisionReason.NO_MATCHING_RULE));
+        intake.deny(afterHostChange.id());
+        assertThat(executor.sentLines()).containsExactly("touch after-rename");
     }
 }

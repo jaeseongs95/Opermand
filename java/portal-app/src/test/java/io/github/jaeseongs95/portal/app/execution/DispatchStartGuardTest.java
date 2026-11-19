@@ -65,6 +65,7 @@ import io.github.jaeseongs95.portal.app.journal.OperationJournal;
 import io.github.jaeseongs95.portal.app.journal.OperationQueueView;
 import io.github.jaeseongs95.portal.app.journal.TargetFilter;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
+import io.github.jaeseongs95.portal.app.operation.ApprovalJudge;
 import io.github.jaeseongs95.portal.app.operation.AuditGate;
 import io.github.jaeseongs95.portal.app.operation.ExpiryTimers;
 import io.github.jaeseongs95.portal.app.operation.MaintenanceView;
@@ -483,11 +484,17 @@ class DispatchStartGuardTest {
             }
 
             @Override
+            public io.github.jaeseongs95.portal.domain.command.TargetPolicy targetPolicy(TargetId targetId) {
+                return io.github.jaeseongs95.portal.domain.command.TargetPolicy.none();
+            }
+
+            @Override
             public PolicySnapshot replace(CommandPolicyDocument next, long expectedRevision) {
                 throw new UnsupportedOperationException("not used");
             }
         };
-        DispatchChecks checks = new DispatchChecks(journal, targetSource(), maintenance, new ApprovalPolicy(new Capacity(100)), policies, auditGate, events, CLOCK);
+        ApprovalJudge judge = new ApprovalJudge(policies, platforms(), new io.github.jaeseongs95.portal.domain.command.RuleApprovalPolicy());
+        DispatchChecks checks = new DispatchChecks(journal, targetSource(), maintenance, new ApprovalPolicy(new Capacity(100)), judge, auditGate, events, CLOCK);
         ExecutionTimelineStore timelines = new ExecutionTimelineStore() {
             @Override
             public void record(OperationId operationId, ExecutionTimeline timeline) {
@@ -516,6 +523,26 @@ class DispatchStartGuardTest {
             case "pathPolicy" -> new PathPolicyBinding.NoRootPolicy();
             case "permissionSupport" -> os == TargetOs.LINUX ? new PermissionSupport.Supported() : new PermissionSupport.Unsupported(UnsupportedReason.WINDOWS_SFTP_CHMOD);
             case "elevationPlan" -> os == TargetOs.LINUX ? new ElevationPlan.NotSupported() : new ElevationPlan.NotSupported();
+            case "classify" -> io.github.jaeseongs95.portal.domain.classify.CommandClassification.of(io.github.jaeseongs95.portal.domain.classify.CommandClass.SAFE);
+            case "commandLineGrammar" -> new io.github.jaeseongs95.portal.domain.command.CommandLineGrammar() {
+                @Override
+                public io.github.jaeseongs95.portal.domain.command.CommandLineAnalysis analyze(CommandText command) {
+                    String[] words = command.value().trim().split("\\s+");
+                    return new io.github.jaeseongs95.portal.domain.command.CommandLineAnalysis(List.of(words[0]),
+                        io.github.jaeseongs95.portal.domain.command.Completeness.COMPLETE, io.github.jaeseongs95.portal.domain.command.SudoUse.NO_SUDO);
+                }
+
+                @Override
+                public io.github.jaeseongs95.portal.domain.command.NormalizedName normalize(String proposedName) {
+                    throw new UnsupportedOperationException("not used");
+                }
+
+                @Override
+                public TargetOs platform() {
+                    return os;
+                }
+            };
+            case "deniesName" -> Boolean.FALSE;
             default -> throw new UnsupportedOperationException(method);
         });
     }

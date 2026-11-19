@@ -12,14 +12,16 @@ import java.util.Objects;
  * @param reader the profile read-only commands use
  * @param writer the profile every other operation uses
  * @param revision the revision of all three
+ * @param connection the canonical connection identity shared by {@code reader} and {@code writer}
  */
-public record ResolvedTarget(Target target, ConnectionProfile reader, ConnectionProfile writer, TargetRevision revision) {
+public record ResolvedTarget(Target target, ConnectionProfile reader, ConnectionProfile writer, TargetRevision revision, TargetConnection connection) {
 
     public ResolvedTarget {
         Objects.requireNonNull(target, "target");
         Objects.requireNonNull(reader, "reader");
         Objects.requireNonNull(writer, "writer");
         Objects.requireNonNull(revision, "revision");
+        Objects.requireNonNull(connection, "connection");
         if (reader.access() != AccessMode.READ_ONLY || writer.access() != AccessMode.READ_WRITE || !reader.sharesConnectionWith(writer)) {
             throw new IllegalArgumentException("Expected matching writable and read-only SSH targets");
         }
@@ -36,8 +38,8 @@ public record ResolvedTarget(Target target, ConnectionProfile reader, Connection
         }
     }
 
-    /** The resolved target with the revision the digester computes from the three parts. */
+    /** The resolved target with the revision and connection identity the digester computes from the three parts. */
     public static ResolvedTarget of(Target target, ConnectionProfile reader, ConnectionProfile writer, Digester digester) {
-        return new ResolvedTarget(target, reader, writer, TargetRevision.of(target, reader, writer, digester));
+        return new ResolvedTarget(target, reader, writer, TargetRevision.of(target, reader, writer, digester), TargetConnection.of(writer, digester));
     }
 }

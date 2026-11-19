@@ -1,7 +1,9 @@
 package io.github.jaeseongs95.portal.app.operation;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Predicate;
@@ -35,10 +37,16 @@ import io.github.jaeseongs95.portal.domain.command.NormalizedName;
 import io.github.jaeseongs95.portal.domain.command.PolicyName;
 import io.github.jaeseongs95.portal.domain.command.PolicySnapshot;
 import io.github.jaeseongs95.portal.domain.command.RuleApprovalPolicy;
+import io.github.jaeseongs95.portal.domain.command.RuleLookup;
 import io.github.jaeseongs95.portal.domain.command.SourceContract;
 import io.github.jaeseongs95.portal.domain.command.SudoUse;
+import io.github.jaeseongs95.portal.domain.command.TargetPolicy;
 import io.github.jaeseongs95.portal.domain.command.TargetRule;
 import io.github.jaeseongs95.portal.domain.command.Thresholds;
+import io.github.jaeseongs95.portal.domain.error.DispatchFailure;
+import io.github.jaeseongs95.portal.domain.error.DispatchReason;
+import io.github.jaeseongs95.portal.domain.error.DispatchRefusedException;
+import io.github.jaeseongs95.portal.domain.error.DispatchStage;
 import io.github.jaeseongs95.portal.domain.file.FileBinding;
 import io.github.jaeseongs95.portal.domain.file.FileName;
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
@@ -102,8 +110,11 @@ class ApprovalJudgeTest {
         new RuleApprovalPolicy());
 
     private void rule(boolean testServer, boolean uploads, boolean downloads, boolean sudo, List<String> allowed, List<String> denied) {
-        rules.rule = new TargetRule(ID, target.revision(), WRITE, TargetOs.LINUX, names(allowed), names(denied), Toggle.OFF, Toggle.OFF, uploads ? Toggle.ON : Toggle.OFF,
+        rules.rule = new TargetRule(ID, target.connection(), WRITE, TargetOs.LINUX, names(allowed), names(denied), Toggle.OFF, Toggle.OFF, uploads ? Toggle.ON : Toggle.OFF,
             downloads ? Toggle.ON : Toggle.OFF, sudo ? Toggle.ON : Toggle.OFF, testServer ? Toggle.ON : Toggle.OFF, SourceContract.NONE, Fallback.NONE, Thresholds.none());
+        if (rules.revision < 1L) {
+            rules.revision = 1L;
+        }
     }
 
     private static CommandNames names(List<String> texts) {
@@ -188,11 +199,44 @@ class ApprovalJudgeTest {
     }
 
     @Test
-    @DisplayName("S-D0119-01 the revision of the policy at the time of the judgement is the one the decision keeps")
+    @DisplayName("S-D0121-01 the decision keeps the target rule's own ruleRevision, or 0 when no rule applies")
     void theDecisionKeepsThePolicyRevision() {
+        assertThat(judge.judge(command(WRITE, "touch x"), target).decision().policyRevision()).isZero();
         rule(false, false, false, false, List.of("touch"), List.of());
         rules.revision = 9;
         assertThat(judge.judge(command(WRITE, "touch x"), target).decision().policyRevision()).isEqualTo(9L);
+    }
+
+    @Test
+    @DisplayName("S-D0121-02 S-D0121-03 checkBeforeDispatch and checkBeforeOwnerApprove enforce POLICY_DENIED (unless testServer=ON) and POLICY_CHANGED while preserving READ_ONLY")
+    void preDispatchAndOwnerApproveReevaluateCurrentRule() {
+        Instant now = Instant.parse("2026-11-19T00:00:00Z");
+        // Automatic upload revoked before dispatch -> POLICY_CHANGED
+        rule(false, true, false, false, List.of(), List.of());
+        NewOperation uploadSpec = spec(WRITE, upload(OverwriteMode.FAIL_IF_EXISTS, Elevation.NONE));
+        var uploadOp = io.github.jaeseongs95.portal.domain.operation.Operation.admit(uploadSpec, new io.github.jaeseongs95.portal.domain.id.OperationId("1".repeat(48)),
+            now, judge.judge(uploadSpec, target));
+        rule(false, false, false, false, List.of(), List.of());
+        assertThatThrownBy(() -> judge.checkBeforeDispatch(uploadOp, target)).isInstanceOfSatisfying(DispatchRefusedException.class,
+            e -> assertThat(e.failure()).isEqualTo(DispatchFailure.refused(DispatchReason.POLICY_CHANGED, DispatchStage.POLICY_GUARD)));
+
+        // READ_ONLY survives rule deletion, but is stopped by deniedCommands unless testServer=ON
+        rules.rule = null;
+        NewOperation readSpec = command(READ, "cat /tmp/a");
+        var readOp = io.github.jaeseongs95.portal.domain.operation.Operation.admit(readSpec, new io.github.jaeseongs95.portal.domain.id.OperationId("2".repeat(48)),
+            now, judge.judge(readSpec, target));
+        judge.checkBeforeDispatch(readOp, target);
+
+        rule(false, false, false, false, List.of(), List.of("cat"));
+        assertThatThrownBy(() -> judge.checkBeforeDispatch(readOp, target)).isInstanceOfSatisfying(DispatchRefusedException.class,
+            e -> assertThat(e.failure()).isEqualTo(DispatchFailure.refused(DispatchReason.POLICY_DENIED, DispatchStage.POLICY_GUARD)));
+        assertThatThrownBy(() -> judge.checkBeforeOwnerApprove(readOp, target)).isInstanceOfSatisfying(DispatchRefusedException.class,
+            e -> assertThat(e.failure()).isEqualTo(DispatchFailure.refused(DispatchReason.POLICY_DENIED, DispatchStage.POLICY_GUARD)));
+
+        // testServer = ON takes precedence over deniedCommands
+        rule(true, false, false, false, List.of(), List.of("cat"));
+        judge.checkBeforeOwnerApprove(readOp, target);
+        judge.checkBeforeDispatch(readOp, target);
     }
 
     private static UploadInput upload(OverwriteMode overwrite, Elevation elevation) {
@@ -224,6 +268,14 @@ class ApprovalJudgeTest {
         @Override
         public PolicySnapshot current() {
             return new PolicySnapshot(revision, rule == null ? CommandPolicyDocument.empty() : new CommandPolicyDocument(List.of(rule)));
+        }
+
+        @Override
+        public TargetPolicy targetPolicy(TargetId targetId) {
+            if (rule == null || !rule.targetId().equals(targetId)) {
+                return TargetPolicy.none();
+            }
+            return new TargetPolicy(revision, new RuleLookup.Rule(rule));
         }
 
         @Override

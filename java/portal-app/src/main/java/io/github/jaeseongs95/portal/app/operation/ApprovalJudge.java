@@ -8,19 +8,29 @@ import io.github.jaeseongs95.portal.app.target.TargetPlatformRegistry;
 import io.github.jaeseongs95.portal.domain.classify.CommandClass;
 import io.github.jaeseongs95.portal.domain.command.ApprovalSubject;
 import io.github.jaeseongs95.portal.domain.command.CommandLineAnalysis;
-import io.github.jaeseongs95.portal.domain.command.PolicySnapshot;
 import io.github.jaeseongs95.portal.domain.command.RuleApprovalPolicy;
 import io.github.jaeseongs95.portal.domain.command.RuleLookup;
+import io.github.jaeseongs95.portal.domain.command.TargetPolicy;
+import io.github.jaeseongs95.portal.domain.error.DispatchFailure;
+import io.github.jaeseongs95.portal.domain.error.DispatchReason;
+import io.github.jaeseongs95.portal.domain.error.DispatchRefusedException;
+import io.github.jaeseongs95.portal.domain.error.DispatchStage;
 import io.github.jaeseongs95.portal.domain.operation.Admission;
 import io.github.jaeseongs95.portal.domain.operation.AgentCliInput;
+import io.github.jaeseongs95.portal.domain.operation.ApprovalMode;
 import io.github.jaeseongs95.portal.domain.operation.CommandInput;
+import io.github.jaeseongs95.portal.domain.operation.DecisionKind;
 import io.github.jaeseongs95.portal.domain.operation.DecisionReason;
+import io.github.jaeseongs95.portal.domain.operation.DecisionRecord;
 import io.github.jaeseongs95.portal.domain.operation.DownloadInput;
 import io.github.jaeseongs95.portal.domain.operation.Elevation;
 import io.github.jaeseongs95.portal.domain.operation.NewOperation;
+import io.github.jaeseongs95.portal.domain.operation.Operation;
+import io.github.jaeseongs95.portal.domain.operation.OperationInput;
 import io.github.jaeseongs95.portal.domain.operation.OverwriteMode;
 import io.github.jaeseongs95.portal.domain.operation.SourceInput;
 import io.github.jaeseongs95.portal.domain.operation.UploadInput;
+import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
 import io.github.jaeseongs95.portal.domain.target.ResolvedTarget;
 import io.github.jaeseongs95.portal.domain.text.CommandText;
 
@@ -49,11 +59,54 @@ public class ApprovalJudge {
 
     /** The admission of {@code spec}, whose target is {@code target} at the revision the request holds. */
     public Admission judge(NewOperation spec, ResolvedTarget target) {
-        PolicySnapshot policy = policies.current();
-        RuleLookup lookup = policy.document().ruleFor(spec.targetId(), spec.targetRevision(), target.target().writeProfile());
+        TargetPolicy policy = policies.targetPolicy(spec.targetId());
+        RuleLookup lookup = policy.ruleFor(spec.targetId(), target.connection(), target.target().writeProfile(), target.target().os());
+        DecisionReason reason = decide(spec.input(), spec.profile(), target, lookup);
+        long ruleRevision = lookup instanceof RuleLookup.Rule ? policy.ruleRevision() : 0L;
+        return Admission.of(reason, spec.kind(), ruleRevision);
+    }
+
+    /**
+     * Checks the current target policy before the owner approves a pending operation (defect D-0121, RC-A-433): if the target's current rule now denies the operation
+     * (and {@code testServer} is off), refuses with {@code POLICY_DENIED} at {@code POLICY_GUARD}.
+     */
+    public void checkBeforeOwnerApprove(Operation operation, ResolvedTarget target) {
+        DecisionReason currentReason = reevaluate(operation, target);
+        if (currentReason == DecisionReason.POLICY_DENIED) {
+            throw new DispatchRefusedException(DispatchFailure.refused(DispatchReason.POLICY_DENIED, DispatchStage.POLICY_GUARD));
+        }
+    }
+
+    /**
+     * Checks the current target policy immediately before dispatch (defect D-0121):
+     * <ul>
+     *   <li>Across every path ({@code OWNER}, {@code READ_ONLY}, {@code AUTOMATIC}), a command or source newly forbidden by {@code deniedCommands} (with
+     *       {@code testServer} off) is refused with {@code POLICY_DENIED} at {@code POLICY_GUARD}.</li>
+     *   <li>For an {@code AUTOMATIC} non-read-only operation, if the current rule no longer authorizes automatic execution, refuses with {@code POLICY_CHANGED} at
+     *       {@code POLICY_GUARD}. Unrelated edits (another target's rule or adding another allowed command) continue to pass.</li>
+     * </ul>
+     */
+    public void checkBeforeDispatch(Operation operation, ResolvedTarget target) {
+        DecisionReason currentReason = reevaluate(operation, target);
+        if (currentReason == DecisionReason.POLICY_DENIED) {
+            throw new DispatchRefusedException(DispatchFailure.refused(DispatchReason.POLICY_DENIED, DispatchStage.POLICY_GUARD));
+        }
+        if (operation.approvalMode() == ApprovalMode.AUTOMATIC && operation.decision() instanceof DecisionRecord.Decided decided
+            && decided.reason() != DecisionReason.READ_ONLY && currentReason.kind() != DecisionKind.EXECUTE) {
+            throw new DispatchRefusedException(DispatchFailure.refused(DispatchReason.POLICY_CHANGED, DispatchStage.POLICY_GUARD));
+        }
+    }
+
+    private DecisionReason reevaluate(Operation operation, ResolvedTarget target) {
+        TargetPolicy policy = policies.targetPolicy(operation.targetId());
+        RuleLookup lookup = policy.ruleFor(operation.targetId(), target.connection(), target.target().writeProfile(), target.target().os());
+        return decide(operation.input(), operation.profile(), target, lookup);
+    }
+
+    private DecisionReason decide(OperationInput input, ProfileAlias profile, ResolvedTarget target, RuleLookup lookup) {
         TargetPlatform platform = platforms.platformOf(target.target().os());
-        boolean readProfile = spec.profile().equals(target.target().readProfile());
-        DecisionReason reason = switch (spec.input()) {
+        boolean readProfile = profile.equals(target.target().readProfile());
+        return switch (input) {
             case CommandInput command -> rules.decideCommand(lookup, shell(platform, command.command()), deniedOnTarget(platform, lookup, command.command()),
                 readProfile && isReadOnly(platform, command.command()));
             case SourceInput source -> {
@@ -64,7 +117,6 @@ public class ApprovalJudge {
             case DownloadInput download -> rules.decideDownload(lookup, download.elevation() == Elevation.SUDO);
             case AgentCliInput agentCli -> DecisionReason.AGENT_CLI_REVIEW;
         };
-        return Admission.of(reason, spec.kind(), policy.revision());
     }
 
     /** Whether the owner's deny list forbids the command, as the target's platform reads names (2.x {@code deniedForTarget}: Windows compares the last path segment in lower case). */

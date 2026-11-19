@@ -2,8 +2,8 @@ package io.github.jaeseongs95.portal.domain.command;
 
 import io.github.jaeseongs95.portal.domain.id.TargetId;
 import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
+import io.github.jaeseongs95.portal.domain.target.TargetConnection;
 import io.github.jaeseongs95.portal.domain.target.TargetOs;
-import io.github.jaeseongs95.portal.domain.target.TargetRevision;
 import io.github.jaeseongs95.portal.domain.target.Toggle;
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -14,7 +14,7 @@ import java.util.Map;
 final class RuleFixture {
 
     static final TargetId TARGET = new TargetId("synthetic");
-    static final TargetRevision REVISION = TargetRevision.of("a".repeat(64));
+    static final TargetConnection CONNECTION = TargetConnection.of("a".repeat(64));
     static final ProfileAlias PROFILE = new ProfileAlias("writer");
 
     private TargetOs os = TargetOs.LINUX;
@@ -104,7 +104,7 @@ final class RuleFixture {
     }
 
     TargetRule build() {
-        return new TargetRule(TARGET, REVISION, PROFILE, os, names(commands), names(denied), externalDisclosure, modelExecution, automaticUploads, automaticDownloads, automaticSudo,
+        return new TargetRule(TARGET, CONNECTION, PROFILE, os, names(commands), names(denied), externalDisclosure, modelExecution, automaticUploads, automaticDownloads, automaticSudo,
             testServer, sourceContract, fallback, new Thresholds(thresholds));
     }
 

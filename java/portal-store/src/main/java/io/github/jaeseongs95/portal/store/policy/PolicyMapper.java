@@ -23,8 +23,8 @@ import io.github.jaeseongs95.portal.domain.command.Thresholds;
 import io.github.jaeseongs95.portal.domain.command.WindowsPolicyName;
 import io.github.jaeseongs95.portal.domain.id.TargetId;
 import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
+import io.github.jaeseongs95.portal.domain.target.TargetConnection;
 import io.github.jaeseongs95.portal.domain.target.TargetOs;
-import io.github.jaeseongs95.portal.domain.target.TargetRevision;
 
 /**
  * Converts between the domain {@link CommandPolicyDocument} and the rows of the three child tables. The domain keeps no Spring Data annotation (rule A-DOMAIN), so
@@ -33,13 +33,13 @@ import io.github.jaeseongs95.portal.domain.target.TargetRevision;
 @Component
 class PolicyMapper {
 
-    /** One row per target rule. */
-    List<PolicyRuleRow> ruleRows(CommandPolicyDocument document) {
+    /** One row per target rule, using each target's computed monotonic {@code ruleRevision}. */
+    List<PolicyRuleRow> ruleRows(CommandPolicyDocument document, Map<TargetId, Long> ruleRevisions) {
         List<PolicyRuleRow> rows = new ArrayList<>();
         for (TargetRule rule : document.targets()) {
-            rows.add(new PolicyRuleRow(rule.targetId().value(), rule.targetRevision().hex(), rule.profile().value(), rule.os(), rule.externalDisclosure(),
-                rule.modelExecution(), rule.automaticUploads(), rule.automaticDownloads(), rule.automaticSudo(), rule.testServer(), rule.sourceExecutionContract(),
-                rule.fallback()));
+            rows.add(new PolicyRuleRow(rule.targetId().value(), rule.targetConnection().hex(), ruleRevisions.get(rule.targetId()), rule.profile().value(), rule.os(),
+                rule.externalDisclosure(), rule.modelExecution(), rule.automaticUploads(), rule.automaticDownloads(), rule.automaticSudo(), rule.testServer(),
+                rule.sourceExecutionContract(), rule.fallback()));
         }
         return rows;
     }
@@ -65,17 +65,21 @@ class PolicyMapper {
         return rows;
     }
 
+    /** Rebuilds a single target rule from its own rule row and child rows. */
+    TargetRule rule(PolicyRuleRow rule, List<PolicyNameRow> ownNames, List<PolicyThresholdRow> ownThresholds) {
+        return new TargetRule(new TargetId(rule.targetId()), TargetConnection.of(rule.targetConnection()), new ProfileAlias(rule.profile()), rule.os(),
+            namesOf(rule.os(), ownNames, PolicyListKind.ALLOWED), namesOf(rule.os(), ownNames, PolicyListKind.DENIED), rule.externalDisclosure(),
+            rule.modelExecution(), rule.automaticUploads(), rule.automaticDownloads(), rule.automaticSudo(), rule.testServer(), rule.sourceContract(),
+            rule.fallback(), thresholdsOf(ownThresholds));
+    }
+
     /** Rebuilds the document from the rows; the rules come in the order of the given rule rows. */
     CommandPolicyDocument document(List<PolicyRuleRow> rules, List<PolicyNameRow> names, List<PolicyThresholdRow> thresholds) {
         Map<String, List<PolicyNameRow>> namesByTarget = names.stream().collect(Collectors.groupingBy(PolicyNameRow::targetId));
         Map<String, List<PolicyThresholdRow>> thresholdsByTarget = thresholds.stream().collect(Collectors.groupingBy(PolicyThresholdRow::targetId));
         List<TargetRule> targets = new ArrayList<>();
         for (PolicyRuleRow rule : rules) {
-            List<PolicyNameRow> own = namesByTarget.getOrDefault(rule.targetId(), List.of());
-            targets.add(new TargetRule(new TargetId(rule.targetId()), TargetRevision.of(rule.targetRevision()), new ProfileAlias(rule.profile()), rule.os(),
-                namesOf(rule.os(), own, PolicyListKind.ALLOWED), namesOf(rule.os(), own, PolicyListKind.DENIED), rule.externalDisclosure(),
-                rule.modelExecution(), rule.automaticUploads(), rule.automaticDownloads(), rule.automaticSudo(), rule.testServer(), rule.sourceContract(),
-                rule.fallback(), thresholdsOf(thresholdsByTarget.getOrDefault(rule.targetId(), List.of()))));
+            targets.add(rule(rule, namesByTarget.getOrDefault(rule.targetId(), List.of()), thresholdsByTarget.getOrDefault(rule.targetId(), List.of())));
         }
         return new CommandPolicyDocument(targets);
     }

@@ -13,7 +13,8 @@ INSERT INTO command_policy (id, revision) VALUES (1, 0);
 
 CREATE TABLE command_policy_rule (
     target_id             VARCHAR(32) NOT NULL,
-    target_revision       CHAR(64)    NOT NULL,
+    target_connection     CHAR(64)    NOT NULL,
+    rule_revision         BIGINT      NOT NULL,
     profile               VARCHAR(80) NOT NULL,
     os                    VARCHAR(7)  NOT NULL,
     external_disclosure   VARCHAR(3)  NOT NULL,
@@ -25,6 +26,7 @@ CREATE TABLE command_policy_rule (
     source_contract       VARCHAR(16) NOT NULL,
     fallback              VARCHAR(6)  NOT NULL,
     CONSTRAINT pk_command_policy_rule PRIMARY KEY (target_id),
+    CONSTRAINT ck_policy_rule_revision CHECK (rule_revision >= 1),
     CONSTRAINT ck_policy_rule_os CHECK (CASE WHEN os = 'LINUX' THEN 1 WHEN os = 'WINDOWS' THEN 1 ELSE 0 END = 1),
     CONSTRAINT ck_policy_rule_disclosure CHECK (CASE WHEN external_disclosure = 'ON' THEN 1 WHEN external_disclosure = 'OFF' THEN 1 ELSE 0 END = 1),
     CONSTRAINT ck_policy_rule_model CHECK (CASE WHEN model_execution = 'ON' THEN 1 WHEN model_execution = 'OFF' THEN 1 ELSE 0 END = 1),

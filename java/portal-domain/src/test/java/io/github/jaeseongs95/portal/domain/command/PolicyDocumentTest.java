@@ -5,8 +5,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import io.github.jaeseongs95.portal.domain.id.TargetId;
 import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
+import io.github.jaeseongs95.portal.domain.target.TargetConnection;
 import io.github.jaeseongs95.portal.domain.target.TargetOs;
-import io.github.jaeseongs95.portal.domain.target.TargetRevision;
 import io.github.jaeseongs95.portal.domain.target.Toggle;
 import io.github.jaeseongs95.portal.domain.text.CommandText;
 import java.util.ArrayList;
@@ -125,15 +125,23 @@ class PolicyDocumentTest {
     }
 
     @Test
-    @DisplayName("S2-PO-01 a rule applies to its own target, revision and profile; a rule of another revision is no rule")
+    @DisplayName("S-D0121-04 S-D0121-05 a rule applies to its own target, connection identity, write profile and OS; any mismatch returns NoRule")
     void ruleLookup() {
         TargetRule rule = RuleFixture.rule().build();
         CommandPolicyDocument document = new CommandPolicyDocument(List.of(rule));
-        assertThat(document.ruleFor(RuleFixture.TARGET, RuleFixture.REVISION, RuleFixture.PROFILE)).isEqualTo(new RuleLookup.Rule(rule));
-        assertThat(document.ruleFor(RuleFixture.TARGET, TargetRevision.of("b".repeat(64)), RuleFixture.PROFILE)).isInstanceOf(RuleLookup.NoRule.class);
-        assertThat(document.ruleFor(RuleFixture.TARGET, RuleFixture.REVISION, new ProfileAlias("other"))).isInstanceOf(RuleLookup.NoRule.class);
-        assertThat(document.ruleFor(new TargetId("elsewhere"), RuleFixture.REVISION, RuleFixture.PROFILE)).isInstanceOf(RuleLookup.NoRule.class);
-        assertThat(CommandPolicyDocument.empty().ruleFor(RuleFixture.TARGET, RuleFixture.REVISION, RuleFixture.PROFILE)).isInstanceOf(RuleLookup.NoRule.class);
+        assertThat(document.ruleFor(RuleFixture.TARGET, RuleFixture.CONNECTION, RuleFixture.PROFILE, TargetOs.LINUX)).isEqualTo(new RuleLookup.Rule(rule));
+        assertThat(document.ruleFor(RuleFixture.TARGET, TargetConnection.of("b".repeat(64)), RuleFixture.PROFILE, TargetOs.LINUX)).isInstanceOf(RuleLookup.NoRule.class);
+        assertThat(document.ruleFor(RuleFixture.TARGET, RuleFixture.CONNECTION, new ProfileAlias("other"), TargetOs.LINUX)).isInstanceOf(RuleLookup.NoRule.class);
+        assertThat(document.ruleFor(RuleFixture.TARGET, RuleFixture.CONNECTION, RuleFixture.PROFILE, TargetOs.WINDOWS)).isInstanceOf(RuleLookup.NoRule.class);
+        assertThat(document.ruleFor(new TargetId("elsewhere"), RuleFixture.CONNECTION, RuleFixture.PROFILE, TargetOs.LINUX)).isInstanceOf(RuleLookup.NoRule.class);
+        assertThat(CommandPolicyDocument.empty().ruleFor(RuleFixture.TARGET, RuleFixture.CONNECTION, RuleFixture.PROFILE, TargetOs.LINUX)).isInstanceOf(RuleLookup.NoRule.class);
+
+        assertThat(TargetPolicy.none()).isEqualTo(new TargetPolicy(0L, new RuleLookup.NoRule()));
+        assertThatThrownBy(() -> new TargetPolicy(1L, new RuleLookup.NoRule())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new TargetPolicy(0L, new RuleLookup.Rule(rule))).isInstanceOf(IllegalArgumentException.class);
+        TargetPolicy stored = new TargetPolicy(3L, new RuleLookup.Rule(rule));
+        assertThat(stored.ruleFor(RuleFixture.TARGET, RuleFixture.CONNECTION, RuleFixture.PROFILE, TargetOs.LINUX)).isEqualTo(new RuleLookup.Rule(rule));
+        assertThat(stored.ruleFor(RuleFixture.TARGET, TargetConnection.of("b".repeat(64)), RuleFixture.PROFILE, TargetOs.LINUX)).isInstanceOf(RuleLookup.NoRule.class);
     }
 
     @Test
@@ -181,7 +189,7 @@ class PolicyDocumentTest {
     @Test
     @DisplayName("S2-PO-01 a rule needs every part: a missing value is a programming error, and a switch left out is off")
     void everyPartIsRequired() {
-        assertThatThrownBy(() -> new TargetRule(RuleFixture.TARGET, RuleFixture.REVISION, RuleFixture.PROFILE, TargetOs.LINUX, CommandNames.none(), CommandNames.none(), Toggle.OFF,
+        assertThatThrownBy(() -> new TargetRule(RuleFixture.TARGET, RuleFixture.CONNECTION, RuleFixture.PROFILE, TargetOs.LINUX, CommandNames.none(), CommandNames.none(), Toggle.OFF,
             Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, SourceContract.NONE, Fallback.NONE, null)).isInstanceOf(NullPointerException.class);
         TargetRule bare = RuleFixture.rule().build();
         assertThat(bare.externalDisclosure()).isEqualTo(Toggle.OFF);
@@ -192,12 +200,12 @@ class PolicyDocumentTest {
     }
 
     private TargetRule ruleFor(String target) {
-        return new TargetRule(new TargetId(target), RuleFixture.REVISION, RuleFixture.PROFILE, TargetOs.LINUX, CommandNames.none(), CommandNames.none(), Toggle.OFF, Toggle.OFF,
+        return new TargetRule(new TargetId(target), RuleFixture.CONNECTION, RuleFixture.PROFILE, TargetOs.LINUX, CommandNames.none(), CommandNames.none(), Toggle.OFF, Toggle.OFF,
             Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, SourceContract.NONE, Fallback.NONE, Thresholds.none());
     }
 
     private TargetRule rule(TargetOs os, CommandNames commands) {
-        return new TargetRule(RuleFixture.TARGET, RuleFixture.REVISION, RuleFixture.PROFILE, os, commands, CommandNames.none(), Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF,
+        return new TargetRule(RuleFixture.TARGET, RuleFixture.CONNECTION, RuleFixture.PROFILE, os, commands, CommandNames.none(), Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF,
             Toggle.OFF, Toggle.OFF, SourceContract.NONE, Fallback.NONE, Thresholds.none());
     }
 }

@@ -40,7 +40,7 @@ final class FixedTargets implements TargetSource {
     FixedTargets(Digester digester) {
         this.digester = digester;
         this.windows = buildWindows();
-        this.current = build("Web one", Toggle.ON);
+        this.current = build("host.example", "Web one", Toggle.ON);
     }
 
     @Override
@@ -67,12 +67,17 @@ final class FixedTargets implements TargetSource {
 
     /** The administrator changed the target: another display name gives another revision. */
     void change(String displayName) {
-        current = build(displayName, Toggle.ON);
+        current = build("host.example", displayName, Toggle.ON);
+    }
+
+    /** The administrator pointed the target's profiles at another host: both the connection and the revision change. */
+    void changeHost(String host) {
+        current = build(host, "Web one", Toggle.ON);
     }
 
     /** Back to the first revision, so the next test starts from the same target. */
     void reset() {
-        current = build("Web one", Toggle.ON);
+        current = build("host.example", "Web one", Toggle.ON);
         enabled = true;
     }
 
@@ -80,24 +85,24 @@ final class FixedTargets implements TargetSource {
         enabled = false;
     }
 
-    private ResolvedTarget build(String displayName, Toggle toggle) {
+    private ResolvedTarget build(String host, String displayName, Toggle toggle) {
         Target target = new Target(ID, new TargetDisplayName(displayName), READ_PROFILE, WRITE_PROFILE, new ProfileAlias("cred1"), toggle, TargetOs.LINUX,
             WindowsRuntime.none(), new CapacityOverride.Inherited(), new CapacityOverride.Inherited(), new DesktopSettings.NoDesktop());
-        ConnectionProfile reader = profile(AccessMode.READ_ONLY);
-        ConnectionProfile writer = profile(AccessMode.READ_WRITE);
+        ConnectionProfile reader = profile(host, AccessMode.READ_ONLY);
+        ConnectionProfile writer = profile(host, AccessMode.READ_WRITE);
         return ResolvedTarget.of(target, reader, writer, digester);
     }
 
     private ResolvedTarget buildWindows() {
         Target target = new Target(WINDOWS_ID, new TargetDisplayName("Windows one"), WINDOWS_READ_PROFILE, WINDOWS_WRITE_PROFILE, new ProfileAlias("cred1"), Toggle.ON,
             TargetOs.WINDOWS, WindowsRuntime.none(), new CapacityOverride.Inherited(), new CapacityOverride.Inherited(), new DesktopSettings.NoDesktop());
-        ConnectionProfile reader = profile(AccessMode.READ_ONLY);
-        ConnectionProfile writer = profile(AccessMode.READ_WRITE);
+        ConnectionProfile reader = profile("host.example", AccessMode.READ_ONLY);
+        ConnectionProfile writer = profile("host.example", AccessMode.READ_WRITE);
         return ResolvedTarget.of(target, reader, writer, digester);
     }
 
-    private static ConnectionProfile profile(AccessMode access) {
-        return new ConnectionProfile("host.example", 22, "deploy", Setting.given("SHA256:test-host-key"), Setting.unset(), AuthMethod.AGENT, Setting.unset(), Setting.unset(),
+    private static ConnectionProfile profile(String host, AccessMode access) {
+        return new ConnectionProfile(host, 22, "deploy", Setting.given("SHA256:test-host-key"), Setting.unset(), AuthMethod.AGENT, Setting.unset(), Setting.unset(),
             access, TtyMode.NO_TTY);
     }
 }

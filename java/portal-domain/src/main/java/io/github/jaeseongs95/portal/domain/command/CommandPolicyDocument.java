@@ -2,7 +2,8 @@ package io.github.jaeseongs95.portal.domain.command;
 
 import io.github.jaeseongs95.portal.domain.id.TargetId;
 import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
-import io.github.jaeseongs95.portal.domain.target.TargetRevision;
+import io.github.jaeseongs95.portal.domain.target.TargetConnection;
+import io.github.jaeseongs95.portal.domain.target.TargetOs;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -34,10 +35,10 @@ public record CommandPolicyDocument(List<TargetRule> targets) {
         return new CommandPolicyDocument(List.of());
     }
 
-    /** The rule for exactly this target, revision and profile; a rule that is written for another revision or profile is no rule for this one. */
-    public RuleLookup ruleFor(TargetId target, TargetRevision revision, ProfileAlias writeProfile) {
+    /** The rule for this target, connection identity, write profile and operating system; a rule for another connection, profile or OS is no rule for this one. */
+    public RuleLookup ruleFor(TargetId target, TargetConnection connection, ProfileAlias writeProfile, TargetOs os) {
         for (TargetRule rule : targets) {
-            if (rule.appliesTo(target, revision, writeProfile)) {
+            if (rule.appliesTo(target, connection, writeProfile, os)) {
                 return new RuleLookup.Rule(rule);
             }
         }

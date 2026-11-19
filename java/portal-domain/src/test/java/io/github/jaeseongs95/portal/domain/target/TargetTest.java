@@ -150,6 +150,41 @@ class TargetTest {
     }
 
     @Test
+    @DisplayName("S-D0121-04 S-D0121-05 TargetConnection stays equal across non-connection target edits and changes when any of the seven connection fields changes")
+    void targetConnectionTracksOnlyTheSevenConnectionFields() {
+        Sha256Digester digester = new Sha256Digester();
+        Target base = TargetFixtures.linux("alpha");
+        ConnectionProfile reader = TargetFixtures.reader();
+        ConnectionProfile writer = TargetFixtures.writer();
+        ResolvedTarget original = ResolvedTarget.of(base, reader, writer, digester);
+
+        // Non-connection edits change TargetRevision while keeping TargetConnection identical.
+        Target renamed = new Target(base.id(), new TargetDisplayName("Renamed alpha"), new ProfileAlias("other-ro"), base.writeProfile(), new ProfileAlias("cred2"),
+            base.enabled(), base.os(), base.windows(), new CapacityOverride.Explicit(new Capacity(9)), new CapacityOverride.Explicit(new Capacity(4)),
+            new DesktopSettings.ManagedXvnc(Toggle.ON, DesktopGeometry.standard()));
+        ConnectionProfile differentNonConnectionReader = new ConnectionProfile(reader.host(), reader.port(), reader.user(), reader.pinnedHostKey(), reader.via(),
+            reader.auth(), reader.keyRef(), Setting.given("/srv/work"), AccessMode.READ_ONLY, TtyMode.TTY);
+        ConnectionProfile differentNonConnectionWriter = new ConnectionProfile(writer.host(), writer.port(), writer.user(), writer.pinnedHostKey(), writer.via(),
+            writer.auth(), writer.keyRef(), Setting.given("/srv/work"), AccessMode.READ_WRITE, TtyMode.TTY);
+        ResolvedTarget edited = ResolvedTarget.of(renamed, differentNonConnectionReader, differentNonConnectionWriter, digester);
+        assertThat(edited.revision()).isNotEqualTo(original.revision());
+        assertThat(edited.connection()).isEqualTo(original.connection());
+
+        // Each of the seven connection core fields changes TargetConnection.
+        List<ConnectionProfile> variants = List.of(
+            new ConnectionProfile("other.example.test", writer.port(), writer.user(), writer.pinnedHostKey(), writer.via(), writer.auth(), writer.keyRef(), writer.workdir(), writer.access(), writer.tty()),
+            new ConnectionProfile(writer.host(), 2222, writer.user(), writer.pinnedHostKey(), writer.via(), writer.auth(), writer.keyRef(), writer.workdir(), writer.access(), writer.tty()),
+            new ConnectionProfile(writer.host(), writer.port(), "other-user", writer.pinnedHostKey(), writer.via(), writer.auth(), writer.keyRef(), writer.workdir(), writer.access(), writer.tty()),
+            new ConnectionProfile(writer.host(), writer.port(), writer.user(), Setting.given("ssh-ed25519 OTHER"), writer.via(), writer.auth(), writer.keyRef(), writer.workdir(), writer.access(), writer.tty()),
+            new ConnectionProfile(writer.host(), writer.port(), writer.user(), writer.pinnedHostKey(), Setting.given(new ProfileAlias("bastion")), writer.auth(), writer.keyRef(), writer.workdir(), writer.access(), writer.tty()),
+            new ConnectionProfile(writer.host(), writer.port(), writer.user(), writer.pinnedHostKey(), writer.via(), AuthMethod.AGENT, writer.keyRef(), writer.workdir(), writer.access(), writer.tty()),
+            new ConnectionProfile(writer.host(), writer.port(), writer.user(), writer.pinnedHostKey(), writer.via(), writer.auth(), Setting.given("key-ref-2"), writer.workdir(), writer.access(), writer.tty()));
+        for (ConnectionProfile variant : variants) {
+            assertThat(TargetConnection.of(variant, digester)).as(variant.toString()).isNotEqualTo(original.connection());
+        }
+    }
+
+    @Test
     @DisplayName("S2-CO-04 the wire values of the target enums and of the switch are those of 2.x")
     void wireValues() throws Exception {
         JsonMapper mapper = new JsonMapper();
