@@ -28,11 +28,16 @@ import java.util.Deque;
 import java.util.EnumSet;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Assumptions;
+
+import io.github.jaeseongs95.portal.app.storage.AclPrivateStorage;
+import io.github.jaeseongs95.portal.app.storage.PosixPrivateStorage;
 
 /**
  * What the file tests of the profile and host key packages need to stand in for the product's wiring: the {@link PrivateFiles} with both rules, a way to open a path to
@@ -76,26 +81,71 @@ public final class TestFiles {
         }
     }
 
+    private static final Map<String, String> SID_ACCOUNT_CACHE = new ConcurrentHashMap<>();
+
     /** The creator with both rules, in the order of the product. */
     public static PrivateFiles privateFiles() {
-        return new PrivateFiles(List.of(new PosixPrivateFileRule(), new AclPrivateFileRule()));
+        return new PrivateFiles(List.of(new PosixPrivateStorage(), new AclPrivateStorage()));
     }
 
     /**
-     * A principal that the product must not let in, looked up by the names of the well-known groups that every Windows has. Fails the test when the machine knows none
-     * of them, so no check passes by not running.
+     * Resolves a Windows well-known SID to a {@link UserPrincipal} regardless of Windows display language (SSH_PORTAL-D-0140): translates the SID to the machine's localized
+     * {@code NTAccount} name once per JVM and falls back to English names if translation is unavailable.
+     */
+    private static Optional<UserPrincipal> lookupBySid(UserPrincipalLookupService lookup, String sid, List<String> fallbackNames) throws IOException {
+        List<String> candidates = new ArrayList<>();
+        String translated = SID_ACCOUNT_CACHE.computeIfAbsent(sid, TestFiles::translateWellKnownSid);
+        if (!translated.isEmpty()) {
+            candidates.add(translated);
+        }
+        candidates.addAll(fallbackNames);
+        for (String name : candidates) {
+            try {
+                return Optional.of(lookup.lookupPrincipalByName(name));
+            } catch (UserPrincipalNotFoundException ignored) {
+                // try next candidate
+            }
+        }
+        return Optional.empty();
+    }
+
+    private static String translateWellKnownSid(String sid) {
+        try {
+            Process process = new ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-Command",
+                "[Console]::OutputEncoding=[Text.Encoding]::UTF8; (New-Object System.Security.Principal.SecurityIdentifier('" + sid
+                    + "')).Translate([System.Security.Principal.NTAccount]).Value")
+                .redirectErrorStream(true).start();
+            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+            return process.waitFor() == 0 && !output.isEmpty() ? output : "";
+        } catch (IOException | InterruptedException e) {
+            if (e instanceof InterruptedException) {
+                Thread.currentThread().interrupt();
+            }
+            return "";
+        }
+    }
+
+    private static UserPrincipal ownerRights(Path anyPath) throws IOException {
+        UserPrincipalLookupService lookup = anyPath.getFileSystem().getUserPrincipalLookupService();
+        return lookupBySid(lookup, "S-1-3-4", List.of("OWNER RIGHTS"))
+            .orElseThrow(() -> new IllegalStateException("The machine cannot resolve well-known SID S-1-3-4 (OWNER RIGHTS)"));
+    }
+
+    /**
+     * A principal that the product must not let in, looked up by well-known Windows SIDs (S-1-1-0 Everyone, S-1-5-32-545 Users, S-1-5-11 Authenticated Users).
      */
     public static UserPrincipal outsider(Path anyPath) throws IOException {
         UserPrincipalLookupService lookup = anyPath.getFileSystem().getUserPrincipalLookupService();
-        IllegalStateException none = new IllegalStateException("The machine knows none of the well-known groups Everyone, Users, Authenticated Users");
-        for (String name : List.of("Everyone", "BUILTIN\\Users", "Users", "Authenticated Users")) {
-            try {
-                return lookup.lookupPrincipalByName(name);
-            } catch (UserPrincipalNotFoundException e) {
-                none.addSuppressed(e); // the next well-known name; when none is known the failure carries every miss
+        for (List<String> spec : List.of(
+            List.of("S-1-1-0", "Everyone"),
+            List.of("S-1-5-32-545", "BUILTIN\\Users", "Users"),
+            List.of("S-1-5-11", "NT AUTHORITY\\Authenticated Users", "Authenticated Users"))) {
+            Optional<UserPrincipal> found = lookupBySid(lookup, spec.getFirst(), spec.subList(1, spec.size()));
+            if (found.isPresent()) {
+                return found.get();
             }
         }
-        throw none;
+        throw new IllegalStateException("The machine knows none of the well-known groups S-1-1-0, S-1-5-32-545, S-1-5-11");
     }
 
     /**
@@ -161,7 +211,7 @@ public final class TestFiles {
      * before its cleanup from leaving a folder that nobody can delete. Acl stores only.
      */
     public static void forbidChangingTheListOfWhatIsMadeIn(Path folder) throws IOException {
-        UserPrincipal ownerRights = folder.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName("OWNER RIGHTS");
+        UserPrincipal ownerRights = ownerRights(folder);
         AclFileAttributeView view = Files.getFileAttributeView(folder, AclFileAttributeView.class);
         List<AclEntry> acl = List.of(
             AclEntry.newBuilder().setType(AclEntryType.DENY).setPrincipal(ownerRights).setPermissions(AclEntryPermission.WRITE_ACL, AclEntryPermission.WRITE_OWNER)
@@ -177,7 +227,7 @@ public final class TestFiles {
      * {@link #undoTheDenial} gives the full control back (DELETE_CHILD included), after which {@link #deleteTree} deletes everything. Acl stores only.
      */
     public static void forbidDeletingWhatIsMadeIn(Path folder) throws IOException {
-        UserPrincipal ownerRights = folder.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName("OWNER RIGHTS");
+        UserPrincipal ownerRights = ownerRights(folder);
         AclFileAttributeView view = Files.getFileAttributeView(folder, AclFileAttributeView.class);
         Set<AclEntryPermission> withoutDelete = EnumSet.complementOf(EnumSet.of(AclEntryPermission.DELETE, AclEntryPermission.DELETE_CHILD));
         List<AclEntry> acl = List.of(
@@ -247,13 +297,9 @@ public final class TestFiles {
         assertThat(view).as("the acl view of %s", path).isNotNull();
         Set<UserPrincipal> allowed = new HashSet<>();
         allowed.add(view.getOwner());
-        for (String name : List.of("NT AUTHORITY\\SYSTEM", "SYSTEM", "BUILTIN\\Administrators", "Administrators")) {
-            try {
-                allowed.add(path.getFileSystem().getUserPrincipalLookupService().lookupPrincipalByName(name));
-            } catch (UserPrincipalNotFoundException e) {
-                continue; // the account is known under another name on this machine; the other names are tried
-            }
-        }
+        UserPrincipalLookupService lookup = path.getFileSystem().getUserPrincipalLookupService();
+        lookupBySid(lookup, "S-1-5-18", List.of("NT AUTHORITY\\SYSTEM", "SYSTEM")).ifPresent(allowed::add);
+        lookupBySid(lookup, "S-1-5-32-544", List.of("BUILTIN\\Administrators", "Administrators")).ifPresent(allowed::add);
         for (AclEntry entry : view.getAcl()) {
             if (entry.type() == AclEntryType.ALLOW && entry.permissions().stream().anyMatch(DATA_ACCESS::contains)) {
                 assertThat(allowed).as("the entry %s of %s", entry, path).contains(entry.principal());

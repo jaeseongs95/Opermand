@@ -24,6 +24,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import io.github.jaeseongs95.portal.app.storage.PrivateStorage;
+import io.github.jaeseongs95.portal.app.storage.PrivateStorages;
+import io.github.jaeseongs95.portal.app.storage.UnsafeStorageException;
 import io.github.jaeseongs95.portal.store.TestStorage;
 
 /** The choice of the rule by what the file store offers, and what is the same for every rule: a path must be a regular file or a folder, nothing else is asked. */

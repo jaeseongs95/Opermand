@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 import io.github.jaeseongs95.portal.app.audit.AuditEvent;
 import io.github.jaeseongs95.portal.app.audit.AuditFailedException;
 import io.github.jaeseongs95.portal.app.audit.AuditLog;
-import io.github.jaeseongs95.portal.store.storage.PrivateStorages;
+import io.github.jaeseongs95.portal.app.storage.PrivateStorages;
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.json.JsonMapper;
 

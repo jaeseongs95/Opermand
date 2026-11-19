@@ -11,7 +11,7 @@ import io.github.jaeseongs95.portal.domain.id.Digester;
 import io.github.jaeseongs95.portal.domain.id.Sha256Digester;
 import io.github.jaeseongs95.portal.store.StorageRoots;
 import io.github.jaeseongs95.portal.store.TestStorage;
-import io.github.jaeseongs95.portal.store.storage.PrivateStorages;
+import io.github.jaeseongs95.portal.app.storage.PrivateStorages;
 
 /**
  * The beans an artifact test slice needs besides the adapters under test: a private temporary storage root (removed with the context), the id generator and the

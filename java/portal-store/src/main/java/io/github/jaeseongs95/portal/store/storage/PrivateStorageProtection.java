@@ -7,9 +7,11 @@ import java.nio.file.Path;
 
 import org.springframework.stereotype.Component;
 
+import io.github.jaeseongs95.portal.app.storage.PrivateStorages;
 import io.github.jaeseongs95.portal.app.storage.ProtectionCheck;
 import io.github.jaeseongs95.portal.app.storage.StorageArea;
 import io.github.jaeseongs95.portal.app.storage.StorageProtection;
+import io.github.jaeseongs95.portal.app.storage.UnsafeStorageException;
 import io.github.jaeseongs95.portal.store.StorageRoots;
 
 /**

@@ -18,6 +18,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import io.github.jaeseongs95.portal.app.storage.AclPrivateStorage;
+import io.github.jaeseongs95.portal.app.storage.PosixPrivateStorage;
+
 /**
  * What the product creates for itself (the file of known hosts and its folder) is private to its owner, and what exists is left as it is (decision D-0117; 2.x PF-04 and PF-05
  * refused a profile file that others could use, and 3.0 does not). The tests go through the file system of the machine they run on, whichever kind it is: the rule is chosen
@@ -117,7 +120,7 @@ class PrivateFileRuleTest {
     void newPathsWithWideRightsAreRemoved() throws IOException {
         TestFiles.requireOrSkip("posix", Files.getFileStore(directory).supportsFileAttributeView("posix"),
             "the file store of the test folder has no posix view (it is an NTFS volume); the Linux CI requires it (-Pportal.test.require=posix) and fails instead of skipping");
-        PrivateFiles ignoringModes = new PrivateFiles(List.of(new PosixPrivateFileRule(path -> PosixFilePermissions.fromString("rwxr-xr-x"))));
+        PrivateFiles ignoringModes = new PrivateFiles(List.of(new PosixPrivateStorage(path -> PosixFilePermissions.fromString("rwxr-xr-x"))));
         Path file = directory.resolve("outer").resolve("known_hosts");
 
         assertThatThrownBy(() -> ignoringModes.createPrivateFile(file)).isInstanceOf(IOException.class).hasMessageContaining("ignored the mode");
@@ -126,7 +129,7 @@ class PrivateFileRuleTest {
 
         Path folder = Files.createDirectory(directory.resolve("existing"));
         Path wideFile = directory.resolve("existing").resolve("known_hosts");
-        PosixPrivateFileRule onlyTheFileIsWide = new PosixPrivateFileRule(path -> path.equals(wideFile) ? PosixFilePermissions.fromString("rw-rw-rw-")
+        PosixPrivateStorage onlyTheFileIsWide = new PosixPrivateStorage(path -> path.equals(wideFile) ? PosixFilePermissions.fromString("rw-rw-rw-")
             : PosixFilePermissions.fromString("rwx------"));
         assertThatThrownBy(() -> new PrivateFiles(List.of(onlyTheFileIsWide)).createPrivateFile(wideFile)).isInstanceOf(IOException.class).hasMessageContaining("ignored the mode");
         assertThat(wideFile).doesNotExist();
@@ -148,7 +151,7 @@ class PrivateFileRuleTest {
             assertThat(parent.resolve("outer")).doesNotExist();
 
             Path inExisting = parent.resolve("known_hosts");
-            assertThatThrownBy(() -> new PrivateFiles(List.of(new AclPrivateFileRule())).createPrivateFile(inExisting)).isInstanceOf(IOException.class)
+            assertThatThrownBy(() -> new PrivateFiles(List.of(new AclPrivateStorage())).createPrivateFile(inExisting)).isInstanceOf(IOException.class)
                 .hasMessageContaining("could not be made private");
             assertThat(inExisting).doesNotExist();
         } finally {
@@ -207,7 +210,7 @@ class PrivateFileRuleTest {
         Path folder = Files.createDirectory(directory.resolve("parent"));
         Path file = folder.resolve("known_hosts");
         // The read-back is the test's value (wide rights); it also takes the write right of the folder away, so that the removal that follows fails (an account that is not root).
-        PosixPrivateFileRule ignoringModes = new PosixPrivateFileRule(path -> {
+        PosixPrivateStorage ignoringModes = new PosixPrivateStorage(path -> {
             Files.setPosixFilePermissions(folder, PosixFilePermissions.fromString("r-x------"));
             return PosixFilePermissions.fromString("rw-rw-rw-");
         });
@@ -227,7 +230,7 @@ class PrivateFileRuleTest {
         TestFiles.requireOrSkip("posix", Files.getFileStore(directory).supportsFileAttributeView("posix"),
             "the file store of the test folder has no posix view (it is an NTFS volume); the Linux CI requires it (-Pportal.test.require=posix) and fails instead of skipping");
         List<Path> asked = new ArrayList<>();
-        PosixPrivateFileRule recording = new PosixPrivateFileRule(path -> {
+        PosixPrivateStorage recording = new PosixPrivateStorage(path -> {
             asked.add(path);
             return PosixFilePermissions.fromString("rwx------");
         });

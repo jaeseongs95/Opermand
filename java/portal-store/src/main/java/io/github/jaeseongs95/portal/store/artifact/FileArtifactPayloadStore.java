@@ -28,8 +28,8 @@ import io.github.jaeseongs95.portal.domain.error.ArtifactErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
 import io.github.jaeseongs95.portal.store.StorageRoots;
-import io.github.jaeseongs95.portal.store.storage.PrivateStorages;
-import io.github.jaeseongs95.portal.store.storage.UnsafeStorageException;
+import io.github.jaeseongs95.portal.app.storage.PrivateStorages;
+import io.github.jaeseongs95.portal.app.storage.UnsafeStorageException;
 
 /**
  * {@link ArtifactPayloadStore} over one folder, {@code StorageRoots#artifacts()}: the bytes of an artifact are the file {@code <id>.part} (2.x

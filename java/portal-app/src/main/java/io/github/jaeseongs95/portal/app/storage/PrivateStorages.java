@@ -1,13 +1,17 @@
-package io.github.jaeseongs95.portal.store.storage;
+package io.github.jaeseongs95.portal.app.storage;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
+import java.nio.file.AccessDeniedException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileStore;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 import org.springframework.stereotype.Component;
@@ -17,9 +21,7 @@ import org.springframework.stereotype.Component;
  * kind of file store is a new bean and no change here. The rules are tried in their {@code @Order} (permission bits first). A file store that no rule supports is
  * refused with {@link UnsafeStorageException}: a path is never created with wide rights because the store cannot narrow them.
  *
- * <p>This class also holds what is the same for every rule and for every store that uses it, and it is the whole of what is checked when a path is used: it must be a
- * regular file, or a folder. A link is followed, and who may use the path or who owns it is not asked (decision D-0117: the owner trusts the machine; what is protected is
- * what the product creates).
+ * <p>Shared single implementation used by both {@code portal-store} and {@code portal-ssh} (SSH_PORTAL-D-0128).
  */
 @Component
 public class PrivateStorages {
@@ -38,6 +40,28 @@ public class PrivateStorages {
     /** Opens the file; a file that this call creates is private to its owner. */
     public FileChannel open(Path file, Set<? extends OpenOption> options) throws IOException {
         return ruleFor(file).open(file, options);
+    }
+
+    /**
+     * Creates the missing parent folders and an empty file, private to its owner; existing folders and files are left as they are (including when a folder stands at
+     * {@code file}, which the caller judges).
+     */
+    public void createPrivateFile(Path file) throws IOException {
+        Objects.requireNonNull(file, "file");
+        Path absolute = file.toAbsolutePath();
+        PrivateStorage rule = ruleFor(absolute);
+        Path folder = absolute.getParent();
+        if (folder != null) {
+            rule.createFolder(folder);
+        }
+        try {
+            rule.open(absolute, Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)).close();
+        } catch (FileAlreadyExistsException | AccessDeniedException notCreated) {
+            if (Files.exists(absolute, LinkOption.NOFOLLOW_LINKS)) {
+                return;
+            }
+            throw notCreated;
+        }
     }
 
     /** The path must be a folder (or a link to one). Its rights and its owner are not looked at. */

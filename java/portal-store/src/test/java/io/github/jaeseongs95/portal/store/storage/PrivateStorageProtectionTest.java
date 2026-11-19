@@ -11,8 +11,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import io.github.jaeseongs95.portal.app.storage.PrivateStorages;
 import io.github.jaeseongs95.portal.app.storage.ProtectionCheck;
 import io.github.jaeseongs95.portal.app.storage.StorageArea;
+import io.github.jaeseongs95.portal.app.storage.UnsafeStorageException;
 import io.github.jaeseongs95.portal.store.StorageRoots;
 import io.github.jaeseongs95.portal.store.TestStorage;
 

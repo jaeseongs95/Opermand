@@ -26,8 +26,8 @@ import io.github.jaeseongs95.portal.app.output.OutputId;
 import io.github.jaeseongs95.portal.domain.error.ExecutionErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.store.StorageRoots;
-import io.github.jaeseongs95.portal.store.storage.PrivateStorages;
-import io.github.jaeseongs95.portal.store.storage.UnsafeStorageException;
+import io.github.jaeseongs95.portal.app.storage.PrivateStorages;
+import io.github.jaeseongs95.portal.app.storage.UnsafeStorageException;
 
 /**
  * The files of the output folder (design 8.5): where the three payload files of an output are, and how they are created and opened. The folder and the files that this class

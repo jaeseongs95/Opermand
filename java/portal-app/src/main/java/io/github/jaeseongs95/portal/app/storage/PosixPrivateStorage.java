@@ -1,4 +1,4 @@
-package io.github.jaeseongs95.portal.store.storage;
+package io.github.jaeseongs95.portal.app.storage;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
@@ -25,17 +25,8 @@ import org.springframework.stereotype.Component;
 
 /**
  * {@link PrivateStorage} for a file store with the {@code posix} view: a folder that this rule creates is {@code rwx------} (its missing parents too, each one is created with
- * the attribute), a file {@code rw-------} (2.x {@code privateDirectory}/{@code privateFile}, {@code artifacts.mjs:11-14}). The process umask can only narrow these modes.
- *
- * <p><b>The result is read back, for what this call created only.</b> The JDK answers that a file store has the {@code posix} view whatever is mounted: a mount that ignores
- * modes (a volume of another file system type, a share without permission checks) accepts the attribute and creates the path with wide rights. So right after it creates a
- * folder or a file, the rule reads the permissions of that path, and when the group or others have any access it removes what this call created and throws
- * {@link UnsafeStorageException} (the common design, version 11). When a path cannot even be removed again (a right to delete is missing) it stays with its wide rights and
- * the message names it; the next run uses an existing folder as it is and does not look at its rights, so a path left behind this way is used without a check. A path that
- * existed before the call is neither read nor changed: who may use it is not asked (decision D-0117), and this is a check of the creation, not of the reading.
- *
- * <p>Based on the Java SE API: {@code java.nio.file.attribute.PosixFilePermissions}
- * (https://docs.oracle.com/en/java/javase/25/docs/api/java.base/java/nio/file/attribute/PosixFilePermissions.html).
+ * the attribute), a file {@code rw-------}. The process umask can only narrow these modes. Right after creating a folder or file, the rule reads back its permissions and
+ * removes what this call created if group/others have any access. Existing paths are neither read nor changed (decision D-0117).
  */
 @Component
 @Order(1)
@@ -49,7 +40,7 @@ public final class PosixPrivateStorage implements PrivateStorage {
 
     /** How the rule reads the permissions of the path it has just created. */
     @FunctionalInterface
-    interface PermissionReader {
+    public interface PermissionReader {
 
         Set<PosixFilePermission> permissionsOf(Path path) throws IOException;
     }
@@ -62,10 +53,9 @@ public final class PosixPrivateStorage implements PrivateStorage {
     }
 
     /**
-     * A rule whose read-back is the given reader. A test uses it to stand in for a file store that ignores modes (what the store reports for a new path is then a value of
-     * the test, see case S-D0117-07).
+     * A rule whose read-back is the given reader. Tests use it to stand in for a file store that ignores modes (case S-D0117-07).
      */
-    PosixPrivateStorage(PermissionReader reader) {
+    public PosixPrivateStorage(PermissionReader reader) {
         this.reader = reader;
     }
 
@@ -84,9 +74,9 @@ public final class PosixPrivateStorage implements PrivateStorage {
         for (Path path : missing) {
             try {
                 Files.createDirectory(path, FOLDER_MODE);
-            } catch (FileAlreadyExistsException | AccessDeniedException notCreated) { // FileAlreadyExistsException, and possibly an access denial for a path that appeared in between
+            } catch (FileAlreadyExistsException | AccessDeniedException notCreated) {
                 if (Files.isDirectory(path)) {
-                    continue; // somebody made it between the check and the call: it is not ours, and it is not judged
+                    continue;
                 }
                 throw notCreated;
             }
@@ -118,7 +108,6 @@ public final class PosixPrivateStorage implements PrivateStorage {
         return channel;
     }
 
-    /** Reads back what this call has just created; when the group or others have access, or the permissions cannot be read, removes {@code removeOnFailure} and refuses. */
     private void requireOwnerOnly(Path created, List<Path> removeOnFailure) {
         String reason;
         Exception cause = null;

@@ -25,6 +25,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import io.github.jaeseongs95.portal.app.audit.AuditAction;
+import io.github.jaeseongs95.portal.app.storage.PrivateStorages;
+import io.github.jaeseongs95.portal.app.storage.UnsafeStorageException;
 import io.github.jaeseongs95.portal.app.audit.AuditEvent;
 import io.github.jaeseongs95.portal.app.audit.AuditFailedException;
 import io.github.jaeseongs95.portal.domain.error.ArtifactErrorCode;

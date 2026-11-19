@@ -35,9 +35,9 @@ import io.github.jaeseongs95.portal.ssh.exec.MinaRemoteExecutor;
 import io.github.jaeseongs95.portal.ssh.hostkey.HostKeyEvents;
 import io.github.jaeseongs95.portal.ssh.hostkey.HostKeyRefusal;
 import io.github.jaeseongs95.portal.ssh.hostkey.ServerKeyPolicy;
-import io.github.jaeseongs95.portal.ssh.profile.AclPrivateFileRule;
+import io.github.jaeseongs95.portal.app.storage.AclPrivateStorage;
+import io.github.jaeseongs95.portal.app.storage.PosixPrivateStorage;
 import io.github.jaeseongs95.portal.ssh.profile.PrivateFiles;
-import io.github.jaeseongs95.portal.ssh.profile.PosixPrivateFileRule;
 import io.github.jaeseongs95.portal.ssh.session.AcquireResult;
 import io.github.jaeseongs95.portal.ssh.session.ChannelLease;
 import io.github.jaeseongs95.portal.ssh.session.MinaClientFactory;
@@ -111,7 +111,7 @@ class OpenSshSessionPoolTest {
 
     /** The pool and the executor wired by hand as the Spring context wires them, over the real server: key login, host key checking on (strict, the known_hosts of the target). */
     private void startAdapter() throws IOException {
-        PrivateFiles guard = new PrivateFiles(List.of(new PosixPrivateFileRule(), new AclPrivateFileRule()));
+        PrivateFiles guard = new PrivateFiles(List.of(new PosixPrivateStorage(), new AclPrivateStorage()));
         Path record = root.resolve("private-state").resolve("known_hosts");
         guard.createPrivateFile(record);
         Files.writeString(record, Files.readString(target.knownHosts())); // into the private file the guard made, as RealHostKeyTest does

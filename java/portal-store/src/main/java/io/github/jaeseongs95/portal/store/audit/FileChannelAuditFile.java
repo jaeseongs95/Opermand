@@ -10,8 +10,8 @@ import java.nio.file.StandardOpenOption;
 import java.util.Set;
 
 import io.github.jaeseongs95.portal.app.audit.AuditFailedException;
-import io.github.jaeseongs95.portal.store.storage.PrivateStorages;
-import io.github.jaeseongs95.portal.store.storage.UnsafeStorageException;
+import io.github.jaeseongs95.portal.app.storage.PrivateStorages;
+import io.github.jaeseongs95.portal.app.storage.UnsafeStorageException;
 
 /**
  * The audit file on a {@link FileChannel} opened with APPEND and WRITE: the file is created when absent (first try with CREATE_NEW, so the file system decides whether this

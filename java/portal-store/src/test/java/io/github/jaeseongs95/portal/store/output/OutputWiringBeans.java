@@ -17,7 +17,7 @@ import io.github.jaeseongs95.portal.domain.id.OperationIdGenerator;
 import io.github.jaeseongs95.portal.domain.id.Sha256Digester;
 import io.github.jaeseongs95.portal.store.StorageRoots;
 import io.github.jaeseongs95.portal.store.TestStorage;
-import io.github.jaeseongs95.portal.store.storage.PrivateStorages;
+import io.github.jaeseongs95.portal.app.storage.PrivateStorages;
 
 /**
  * The beans that the portal-app configuration ({@link Digester}, the id generator) and the server ({@link StorageRoots}) provide in the product, supplied for a test
