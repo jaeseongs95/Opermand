@@ -2,6 +2,8 @@ package io.github.jaeseongs95.portal.store.output;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.CopyOption;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -17,6 +19,7 @@ import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import io.github.jaeseongs95.portal.app.output.OutputId;
@@ -56,12 +59,39 @@ public class OutputFiles {
     private static final Pattern STORED_NAME = Pattern.compile("([a-f0-9]{48})\\.(?:out|part|stream)");
     private static final String QUARANTINE_FOLDER = "quarantine";
 
+    @FunctionalInterface
+    interface FileMover {
+        void move(Path source, Path target, CopyOption... options) throws IOException;
+    }
+
+    @FunctionalInterface
+    interface DirectorySyncer {
+        void sync(Path directory) throws IOException;
+    }
+
     private final Path root;
     private final PrivateStorages storages;
+    private final FileMover mover;
+    private final DirectorySyncer syncer;
 
+    @Autowired
     public OutputFiles(StorageRoots roots, PrivateStorages storages) {
+        this(roots, storages, Files::move, OutputFiles::defaultDirectorySync);
+    }
+
+    OutputFiles(StorageRoots roots, PrivateStorages storages, FileMover mover, DirectorySyncer syncer) {
         this.root = Objects.requireNonNull(roots, "roots").outputs().toAbsolutePath();
         this.storages = Objects.requireNonNull(storages, "storages");
+        this.mover = Objects.requireNonNull(mover, "mover");
+        this.syncer = Objects.requireNonNull(syncer, "syncer");
+    }
+
+    private static void defaultDirectorySync(Path directory) throws IOException {
+        if (supportsPosix(directory)) {
+            try (FileChannel folder = FileChannel.open(directory, StandardOpenOption.READ)) {
+                folder.force(true);
+            }
+        }
     }
 
     /** The output folder, created private to its owner when it does not exist yet; a path that is not a folder is refused. A folder that exists is used as it is. */
@@ -136,10 +166,18 @@ public class OutputFiles {
         }
     }
 
-    /** Renames {@code part} to {@code target} in one step and forces the folder entry to disk where the file store allows it. */
+    /**
+     * Renames {@code part} to {@code target} with explicit {@code REPLACE_EXISTING} semantics across operating systems, falling back to a non-atomic replace when the
+     * file system does not support {@code ATOMIC_MOVE} (defect D-0150), and best-effort forces the folder entry to disk where supported.
+     */
     public void moveIntoPlace(Path part, Path target) {
         try {
-            Files.move(part, target, StandardCopyOption.ATOMIC_MOVE);
+            try {
+                mover.move(part, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                LOG.warn("Atomic move not supported for {} -> {}; falling back to standard replace move", part.getFileName(), target.getFileName(), e);
+                mover.move(part, target, StandardCopyOption.REPLACE_EXISTING);
+            }
         } catch (IOException e) {
             throw failure(e);
         }
@@ -147,18 +185,16 @@ public class OutputFiles {
     }
 
     /**
-     * Forces the folder entries to disk. Java has no portable directory fsync: a folder can be opened and forced only where the file store has the posix view, so
-     * elsewhere the atomic rename alone is what the file system offers.
+     * Best-effort forces the folder entries to disk. Java has no portable directory fsync: a folder can be opened and forced only on POSIX file stores that support
+     * directory fsync. When a file system (such as overlayfs/FUSE/container mounts) rejects directory fsync with {@code IOException} or
+     * {@code UnsupportedOperationException}, log a warning and continue rather than failing output completion only on Linux (defect D-0151).
      */
     public void syncDirectory() {
+        Path dir = directory();
         try {
-            if (supportsPosix(directory())) {
-                try (FileChannel folder = FileChannel.open(directory(), StandardOpenOption.READ)) {
-                    folder.force(true);
-                }
-            }
-        } catch (IOException e) {
-            throw failure(e);
+            syncer.sync(dir);
+        } catch (IOException | UnsupportedOperationException e) {
+            LOG.warn("Directory fsync is unsupported or failed for {}; continuing after rename", dir, e);
         }
     }
 
@@ -231,7 +267,7 @@ public class OutputFiles {
     }
 
     /** Only the fsync of the folder depends on the posix view: Java can open and force a folder there and nowhere else. This is not a protection rule. */
-    private boolean supportsPosix(Path path) throws IOException {
+    private static boolean supportsPosix(Path path) throws IOException {
         return Files.getFileStore(path).supportsFileAttributeView("posix");
     }
 

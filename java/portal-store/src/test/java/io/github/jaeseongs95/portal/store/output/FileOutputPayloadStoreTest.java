@@ -7,11 +7,14 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -238,5 +241,57 @@ class FileOutputPayloadStoreTest {
             assertThatThrownBy(() -> store.streamDigest(id)).isInstanceOfSatisfying(RequestRefusedException.class,
                 e -> assertThat(e.code()).isEqualTo(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED));
         }
+    }
+
+    @Test
+    @DisplayName("D-0150: moveIntoPlace replaces an existing target file and falls back to REPLACE_EXISTING when ATOMIC_MOVE is unsupported")
+    void moveIntoPlaceReplacesExistingTargetAcrossOperatingSystems(@TempDir Path folder) throws IOException {
+        AtomicInteger calls = new AtomicInteger();
+        OutputFiles files = new OutputFiles(new StorageRoots(folder, folder), TestStorage.rules(), (src, dst, options) -> {
+            int attempt = calls.incrementAndGet();
+            if (attempt == 1) {
+                assertThat(options).containsExactlyInAnyOrder(StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                throw new AtomicMoveNotSupportedException(src.toString(), dst.toString(), "overlayfs");
+            }
+            assertThat(options).containsExactly(StandardCopyOption.REPLACE_EXISTING);
+            Files.move(src, dst, options);
+        }, dir -> { });
+        Path part = folder.resolve("a".repeat(48) + ".part");
+        Path target = folder.resolve("a".repeat(48) + ".out");
+        Files.writeString(target, "stale");
+        Files.writeString(part, "fresh");
+
+        files.moveIntoPlace(part, target);
+
+        assertThat(calls).hasValue(2);
+        assertThat(Files.exists(part)).isFalse();
+        assertThat(Files.readString(target)).isEqualTo("fresh");
+    }
+
+    @Test
+    @DisplayName("D-0151: syncDirectory continues after rename when a filesystem rejects directory fsync with IOException or UnsupportedOperationException")
+    void syncDirectoryDegradesGracefullyWhenUnsupported(@TempDir Path folder) throws IOException {
+        for (RuntimeExceptionOrIo failure : List.of(
+            new RuntimeExceptionOrIo(new IOException("EINVAL: directory fsync unsupported"), null),
+            new RuntimeExceptionOrIo(null, new UnsupportedOperationException("no dir fsync")))) {
+            Path sub = Files.createTempDirectory(folder, "sync-");
+            OutputFiles files = new OutputFiles(new StorageRoots(sub, sub), TestStorage.rules(), Files::move, dir -> {
+                if (failure.io != null) {
+                    throw failure.io;
+                }
+                throw failure.unsupported;
+            });
+            Path part = sub.resolve("b".repeat(48) + ".part");
+            Path target = sub.resolve("b".repeat(48) + ".out");
+            Files.writeString(part, "payload");
+
+            files.moveIntoPlace(part, target);
+
+            assertThat(Files.exists(part)).isFalse();
+            assertThat(Files.readString(target)).isEqualTo("payload");
+        }
+    }
+
+    private record RuntimeExceptionOrIo(IOException io, UnsupportedOperationException unsupported) {
     }
 }

@@ -6,11 +6,11 @@ import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
 import java.nio.file.DirectoryStream;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.HashSet;
@@ -166,7 +166,11 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
         }
     }
 
-    /** Moves the file to {@code orphans/} next to the payloads and keeps every byte; nothing in the store deletes that folder's files. */
+    /**
+     * Moves the file to {@code orphans/} next to the payloads and keeps every byte; nothing in the store deletes that folder's files. Never uses {@code ATOMIC_MOVE}
+     * (whose overwrite behavior is implementation-specific across OSes and may silently overwrite an existing quarantine file on POSIX/Windows or fail with
+     * {@code AtomicMoveNotSupportedException}, defect D-0150); instead retries on {@code FileAlreadyExistsException} with the next free suffix.
+     */
     @Override
     public void quarantine(ArtifactId id) {
         Path folder = preparedRoot();
@@ -177,7 +181,15 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
             }
             Path quarantine = folder.resolve(QUARANTINE_FOLDER);
             storages.createFolder(quarantine);
-            Files.move(file, freeName(quarantine, id), StandardCopyOption.ATOMIC_MOVE);
+            for (int attempt = 0; ; attempt++) {
+                Path candidate = attempt == 0 ? quarantine.resolve(id.value() + SUFFIX) : quarantine.resolve(id.value() + "." + attempt + SUFFIX);
+                try {
+                    Files.move(file, candidate);
+                    return;
+                } catch (FileAlreadyExistsException ignored) {
+                    // Another file already holds this quarantine name; try the next suffix without overwriting.
+                }
+            }
         } catch (UnsafeStorageException e) {
             throw unsafe(e);
         } catch (IOException e) {
@@ -269,14 +281,6 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
     private Path fileOf(Path folder, ArtifactId id) {
         // An ArtifactId is 48 lowercase hex characters, so the name cannot leave the folder.
         return folder.resolve(id.value() + SUFFIX);
-    }
-
-    private Path freeName(Path folder, ArtifactId id) {
-        Path candidate = folder.resolve(id.value() + SUFFIX);
-        for (int attempt = 1; Files.exists(candidate, LinkOption.NOFOLLOW_LINKS); attempt++) {
-            candidate = folder.resolve(id.value() + "." + attempt + SUFFIX);
-        }
-        return candidate;
     }
 
     private FileChannel openForWrite(Path file, boolean create) throws IOException {
