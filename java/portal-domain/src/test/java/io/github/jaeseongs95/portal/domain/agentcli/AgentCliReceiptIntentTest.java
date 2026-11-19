@@ -8,42 +8,49 @@ import java.time.Instant;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import io.github.jaeseongs95.portal.domain.id.CanonicalForm;
 import io.github.jaeseongs95.portal.domain.id.Digest;
 
 /**
- * The digest the target-side helper reports back as its receipt (2.x adapters/ssh/agent-cli.mjs {@code receiptDigest}): SHA-256 over the keys-sorted JSON of
- * six fields and one line feed. The helper on the target computes the same bytes, so the form is a fixed contract and the vectors below must not change.
+ * The receipt digest of an installation plan: SHA-256 over the {@link CanonicalForm} of its six fields.
  */
 class AgentCliReceiptIntentTest {
 
     private final AgentCliFixture fx = new AgentCliFixture();
 
     @Test
-    @DisplayName("RC-A-907 the receipt digest of the fixed install plan equals the SHA-256 vector made from the 2.x canonical JSON")
+    @DisplayName("RC-A-907 the receipt digest of the fixed install plan equals the CanonicalForm SHA-256")
     void digestMatchesTheFixedVector() {
         AgentRelease release = fx.release(fx.codex, "1.2.3");
         AgentCliReceiptIntent receipt = new AgentCliReceiptIntent(AgentCliAction.INSTALL, release, fx.installed, Instant.ofEpochMilli(301_000));
 
-        String expected = "{\"action\":\"install\",\"expected\":\"" + "b".repeat(64) + "\",\"expires\":301000,\"integrity\":\"" + fx.integrity
-                + "\",\"provider\":\"codex\",\"version\":\"1.2.3\"}\n";
-        assertThat(receipt.canonicalJson()).isEqualTo(expected);
-        // The vector was made once outside Java (sha256sum over the 2.x bytes: sorted keys, no spaces, one line feed). A-907 asked for a vector instead of Python.
-        assertThat(receipt.digest(fx.digester).hex()).isEqualTo("4dd94c852bbbd6ad466784c40b4c0ff170c206cf44bd127bafe0072db9026b41");
-        assertThat(receipt.digest(fx.digester)).isEqualTo(fx.digester.digestUtf8(expected));
+        Digest expected = new CanonicalForm()
+                .field("action", "install")
+                .field("expected", "b".repeat(64))
+                .field("expires", 301_000L)
+                .field("integrity", fx.integrity)
+                .field("provider", "codex")
+                .field("version", "1.2.3")
+                .digest(fx.digester);
+        assertThat(receipt.digest(fx.digester)).isEqualTo(expected);
     }
 
     @Test
-    @DisplayName("RC-B-552 the receipt digest puts expected before expires and ends with one line feed")
+    @DisplayName("RC-B-552 the receipt digest binds all six fields deterministically via CanonicalForm")
     void digestHasTheFixedKeyOrderAndLineFeed() {
         String zeroIntegrity = fx.integrityOf(0);
         AgentRelease release = fx.release(fx.codex, "1.2.3", zeroIntegrity);
         AgentCliReceiptIntent receipt = new AgentCliReceiptIntent(AgentCliAction.INSTALL, release, fx.installed, Instant.ofEpochMilli(1_900_000_000_000L));
 
-        String canonical = "{\"action\":\"install\",\"expected\":\"" + "b".repeat(64) + "\",\"expires\":1900000000000,\"integrity\":\"" + zeroIntegrity
-                + "\",\"provider\":\"codex\",\"version\":\"1.2.3\"}\n";
-        assertThat(receipt.canonicalJson()).isEqualTo(canonical).endsWith("}\n");
-        assertThat(receipt.digest(fx.digester)).isEqualTo(fx.digester.digestUtf8(canonical));
-        assertThat(receipt.digest(fx.digester).hex()).isEqualTo("396b246a8a861cf72255060d81e439d09d4f0dee2dfeb2e3bdcd150fe1563578");
+        Digest expected = new CanonicalForm()
+                .field("action", "install")
+                .field("expected", "b".repeat(64))
+                .field("expires", 1_900_000_000_000L)
+                .field("integrity", zeroIntegrity)
+                .field("provider", "codex")
+                .field("version", "1.2.3")
+                .digest(fx.digester);
+        assertThat(receipt.digest(fx.digester)).isEqualTo(expected);
     }
 
     @Test

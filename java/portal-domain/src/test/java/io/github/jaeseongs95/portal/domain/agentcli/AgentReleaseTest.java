@@ -45,15 +45,32 @@ class AgentReleaseTest {
     }
 
     @Test
-    @DisplayName("S2-AG-02 the release digest is the SHA-256 of the fixed JSON of the five fields (the 2.x recipe)")
+    @DisplayName("S2-AG-02 the release digest is the CanonicalForm SHA-256 of the five fields and does not couple AgentRelease to any registry host")
     void releaseDigestHasAFixedVector() {
         AgentRelease release = fx.release(fx.codex, "1.2.3");
+        io.github.jaeseongs95.portal.domain.id.Digest expected = new io.github.jaeseongs95.portal.domain.id.CanonicalForm()
+                .field("provider", "codex")
+                .field("packageName", "@openai/codex")
+                .field("version", "1.2.3")
+                .field("tarball", fx.tarball(fx.codex, "1.2.3"))
+                .field("integrity", fx.integrity)
+                .digest(fx.digester);
 
-        // The vector was made once outside Java: sha256sum over the 2.x JSON.stringify bytes of {provider,packageName,version,tarball,integrity}.
-        assertThat(release.releaseDigest().hex()).isEqualTo("d5cdb0b59c055bb3bce0707045aaf1332bc71075c0c6358734ce6ffbbfeb570f");
-        assertThat(release.releaseDigestLabel()).isEqualTo("sha256:d5cdb0b59c055bb3bce0707045aaf1332bc71075c0c6358734ce6ffbbfeb570f");
+        assertThat(release.releaseDigest()).isEqualTo(expected);
+        assertThat(release.releaseDigestLabel()).isEqualTo("sha256:" + expected.hex());
         assertThat(fx.release(fx.codex, "1.2.4").releaseDigest()).isNotEqualTo(release.releaseDigest());
         assertThat(fx.release(fx.claude, "1.2.3").releaseDigest()).isNotEqualTo(release.releaseDigest());
+
+        // Custom provider with a non-npm distribution host proves AgentRelease is not hardcoded to registry.npmjs.org (SSH_PORTAL-D-0061).
+        AgentCliProvider custom = new AgentCliProvider() {
+            @Override public AgentCliProviderId id() { return AgentCliProviderId.CODEX; }
+            @Override public String packageName() { return "@acme/tool"; }
+            @Override public String command() { return "tool"; }
+            @Override public String distributionUrl(String version) { return "https://releases.acme.example/tool-" + version + ".tgz"; }
+        };
+        AgentRelease customRelease = AgentRelease.verify(custom, "@acme/tool", "2.0.0", "https://releases.acme.example/tool-2.0.0.tgz", fx.integrity, fx.digester);
+        assertThat(customRelease.tarball()).isEqualTo("https://releases.acme.example/tool-2.0.0.tgz");
+        assertThat(customRelease.digestMatches(fx.digester)).isTrue();
     }
 
     @ParameterizedTest(name = "[{index}] {0}")

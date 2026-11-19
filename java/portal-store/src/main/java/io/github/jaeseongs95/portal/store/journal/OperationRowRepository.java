@@ -28,8 +28,8 @@ interface OperationRowRepository extends CrudRepository<OperationRow, String> {
 
     long countByTargetIdAndStateIn(String targetId, Collection<OperationState> states);
 
-    /** Unknown operations that are not imported 2.x history (the live unknown budget). */
-    @Query("SELECT COUNT(*) FROM operation o WHERE o.state = 'UNKNOWN' AND o.id NOT IN (SELECT l.operation_id FROM operation_legacy l)")
+    /** Unknown operations (the live unknown budget). */
+    @Query("SELECT COUNT(*) FROM operation o WHERE o.state = 'UNKNOWN'")
     long countLiveUnknown();
 
     /** The first step of every compare-and-set: the row lock and the version check in one statement; 1 row when the stored version is {@code expected}. */

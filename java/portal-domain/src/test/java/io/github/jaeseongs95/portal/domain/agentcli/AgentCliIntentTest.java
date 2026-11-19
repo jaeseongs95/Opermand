@@ -55,16 +55,24 @@ class AgentCliIntentTest {
     }
 
     @Test
-    @DisplayName("S2-AG-05 the intent digest is the SHA-256 of the fixed JSON of the nine fields, key order as in 2.x")
+    @DisplayName("S2-AG-05 the intent digest is the CanonicalForm SHA-256 of the nine fields")
     void digestHasTheFixedJsonForm() {
         AgentRelease release = fx.release(fx.codex, "1.2.3");
         AgentCliIntent intent = fx.intent(fx.codex, fx.request(release, AgentCliAction.INSTALL, fx.key(1), fx.installed), release, fx.expiry);
 
-        String json = "{\"contract\":\"agent-cli-install-v1\",\"targetId\":\"alpha\",\"targetRevision\":\"" + "a".repeat(64)
-                + "\",\"profile\":\"ssh-write\",\"provider\":\"codex\",\"action\":\"install\",\"releaseDigest\":\"sha256:" + release.releaseDigest().hex()
-                + "\",\"expectedInstallationRevision\":\"" + "b".repeat(64) + "\",\"expiresAt\":1001}";
+        Digest expected = new io.github.jaeseongs95.portal.domain.id.CanonicalForm()
+                .field("contract", "agent-cli-install-v1")
+                .field("targetId", "alpha")
+                .field("targetRevision", "a".repeat(64))
+                .field("profile", "ssh-write")
+                .field("provider", "codex")
+                .field("action", "install")
+                .field("releaseDigest", "sha256:" + release.releaseDigest().hex())
+                .field("expectedInstallationRevision", "b".repeat(64))
+                .field("expiresAt", 1001L)
+                .digest(fx.digester);
 
-        assertThat(intent.intentDigest()).isEqualTo(fx.digester.digestUtf8(json));
+        assertThat(intent.intentDigest()).isEqualTo(expected);
         assertThat(intent.targetId()).isEqualTo(fx.targetId);
         assertThat(intent.provider()).isEqualTo(AgentCliProviderId.CODEX);
         assertThat(intent.action()).isEqualTo(AgentCliAction.INSTALL);
@@ -180,8 +188,9 @@ class AgentCliIntentTest {
         assertThatThrownBy(() -> fx.intent(fx.codex, request, otherVersion, fx.expiry)).as("version").isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> fx.intent(fx.codex, request, otherProvider, fx.expiry)).as("provider").isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> fx.intent(fx.codex, request, otherIntegrity, fx.expiry)).as("integrity").isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new AgentRelease(original.provider(), original.packageName(), original.version(), "https://evil.test/code.tgz",
-                original.integrity(), original.releaseDigest())).as("tarball").isInstanceOf(IllegalArgumentException.class);
+        AgentRelease otherTarball = new AgentRelease(original.provider(), original.packageName(), original.version(), "https://evil.test/code.tgz",
+                original.integrity(), original.releaseDigest());
+        assertThatThrownBy(() -> fx.intent(fx.codex, request, otherTarball, fx.expiry)).as("tarball").isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

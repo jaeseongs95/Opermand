@@ -17,4 +17,9 @@ public final class ClaudeCliProvider implements AgentCliProvider {
     public String command() {
         return "claude";
     }
+
+    @Override
+    public String distributionUrl(String version) {
+        return "https://registry.npmjs.org/" + packageName() + "/-/claude-code-" + version + ".tgz";
+    }
 }

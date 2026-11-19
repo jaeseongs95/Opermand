@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Objects;
 
+import io.github.jaeseongs95.portal.domain.id.CanonicalForm;
 import io.github.jaeseongs95.portal.domain.id.Digest;
 import io.github.jaeseongs95.portal.domain.id.Digester;
 import io.github.jaeseongs95.portal.domain.id.RequestKey;
@@ -65,7 +66,8 @@ public record AgentCliIntent(TargetId targetId, TargetRevision targetRevision, P
         if (!request.targets(binding)) {
             throw new IllegalArgumentException("Stale CLI target binding");
         }
-        if (release.provider() != request.provider() || !release.packageName().equals(provider.packageName()) || !release.digestMatches(digester)
+        if (release.provider() != request.provider() || !release.packageName().equals(provider.packageName())
+                || !release.tarball().equals(provider.distributionUrl(release.version())) || !release.digestMatches(digester)
                 || !request.releaseDigest().equals(release.releaseDigestLabel())) {
             throw new IllegalArgumentException("CLI release plan changed");
         }
@@ -73,11 +75,18 @@ public record AgentCliIntent(TargetId targetId, TargetRevision targetRevision, P
         if (!expiry.isAfter(now) || expiry.isAfter(LATEST_EXPIRY)) {
             throw new IllegalArgumentException("CLI release plan expired");
         }
-        String json = "{\"contract\":\"" + CONTRACT + "\",\"targetId\":\"" + request.targetId().value() + "\",\"targetRevision\":\""
-                + request.targetRevision().value().hex() + "\",\"profile\":\"" + request.profile().value() + "\",\"provider\":\"" + request.provider().wire()
-                + "\",\"action\":\"" + request.action().wire() + "\",\"releaseDigest\":\"" + release.releaseDigestLabel()
-                + "\",\"expectedInstallationRevision\":\"" + request.expectedInstallationRevision().hex() + "\",\"expiresAt\":" + expiry.toEpochMilli() + "}";
+        Digest intentDigest = new CanonicalForm()
+                .field("contract", CONTRACT)
+                .field("targetId", request.targetId().value())
+                .field("targetRevision", request.targetRevision().value().hex())
+                .field("profile", request.profile().value())
+                .field("provider", request.provider().wire())
+                .field("action", request.action().wire())
+                .field("releaseDigest", release.releaseDigestLabel())
+                .field("expectedInstallationRevision", request.expectedInstallationRevision().hex())
+                .field("expiresAt", expiry.toEpochMilli())
+                .digest(digester);
         return new AgentCliIntent(request.targetId(), request.targetRevision(), request.profile(), request.provider(), request.action(),
-                release.releaseDigest(), request.expectedInstallationRevision(), expiry, digester.digestUtf8(json), request.requestKey());
+                release.releaseDigest(), request.expectedInstallationRevision(), expiry, intentDigest, request.requestKey());
     }
 }

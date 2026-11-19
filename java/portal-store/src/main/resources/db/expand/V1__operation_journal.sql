@@ -44,9 +44,9 @@ CREATE TABLE operation (
     CONSTRAINT ck_operation_approval CHECK (CASE WHEN approval_mode = 'OWNER' THEN 1 WHEN approval_mode = 'AUTOMATIC' THEN 1 WHEN approval_mode = 'NOT_DECIDED' THEN 1 ELSE 0 END = 1),
     CONSTRAINT ck_operation_certainty CHECK (CASE WHEN outcome_certainty IS NULL THEN 1 WHEN outcome_certainty = 'NOT_DISPATCHED' THEN 1 WHEN outcome_certainty = 'EXITED' THEN 1 WHEN outcome_certainty = 'UNKNOWN' THEN 1 ELSE 0 END = 1),
     CONSTRAINT ck_operation_reconcile CHECK (CASE WHEN reconciliation IS NULL THEN 1 WHEN reconciliation = 'NOT_REQUIRED' THEN 1 WHEN reconciliation = 'REQUIRED' THEN 1 ELSE 0 END = 1),
-    CONSTRAINT ck_operation_recovery CHECK (CASE WHEN recovery_reason = 'NONE' THEN 1 WHEN recovery_reason = 'BRIDGE_RESTART' THEN 1 WHEN recovery_reason = 'LEGACY_IMPORT' THEN 1 ELSE 0 END = 1),
+    CONSTRAINT ck_operation_recovery CHECK (CASE WHEN recovery_reason = 'NONE' THEN 1 WHEN recovery_reason = 'BRIDGE_RESTART' THEN 1 ELSE 0 END = 1),
     CONSTRAINT ck_operation_audit CHECK (CASE WHEN audit_failure = 'NONE' THEN 1 WHEN audit_failure = 'FAILED' THEN 1 ELSE 0 END = 1),
-    CONSTRAINT ck_operation_revision CHECK (CHAR_LENGTH(target_revision) = 64 OR target_revision = 'legacy-unbound'),
+    CONSTRAINT ck_operation_revision CHECK (CHAR_LENGTH(target_revision) = 64),
     CONSTRAINT ck_operation_version CHECK (version >= 1),
     -- The digest of the intent is the whole input of an agent CLI operation (AgentCliInput); the other kinds have their own input table.
     CONSTRAINT ck_operation_input_digest CHECK ((kind = 'AGENT_CLI' AND input_digest IS NOT NULL) OR (kind <> 'AGENT_CLI' AND input_digest IS NULL))
@@ -198,18 +198,6 @@ CREATE TABLE operation_result (
         OR (evidence_kind = 'FILE_READ' AND evidence_exit_code IS NULL AND evidence_confirmed_at IS NULL AND evidence_sha256 IS NULL AND evidence_read IS NOT NULL))
 );
 
--- Original text of an imported 2.x history row (operation_legacy_budget + body.legacy, operation-store.mjs:33-37, 64-67, 103-111). original_text is a long-text column, added at the end of this script.
-CREATE TABLE operation_legacy (
-    operation_id   CHAR(48)      NOT NULL,
-    legacy_source  VARCHAR(512)  NOT NULL,
-    original_bytes BIGINT        NOT NULL,
-    reserved_bytes BIGINT        NOT NULL,
-    legacy_digest  CHAR(64),
-    CONSTRAINT pk_operation_legacy PRIMARY KEY (operation_id),
-    CONSTRAINT fk_operation_legacy_op FOREIGN KEY (operation_id) REFERENCES operation (id),
-    CONSTRAINT ck_operation_legacy_bytes CHECK (original_bytes >= 0 AND original_bytes <= 262144 AND reserved_bytes >= 0)
-);
-
 -- Concurrency limits as primary keys (design 13.2). scope is 'GLOBAL' or 'TARGET:<targetId>'; slot_no counts from 1. A claim inserts the smallest free
 -- slot_no of each scope in the same transaction that moves the operation to STARTING; two claims for the same slot_no collide on the primary key.
 -- A slot is deleted in the transaction that moves the operation out of STARTING / RUNNING / TERMINATING (also when it moves to UNKNOWN).
@@ -248,4 +236,3 @@ ALTER TABLE operation_source ADD COLUMN display_context ${long_text} NOT NULL;
 ALTER TABLE operation_download ADD COLUMN caller_context ${long_text} NOT NULL;
 ALTER TABLE operation_download ADD COLUMN display_context ${long_text} NOT NULL;
 ALTER TABLE operation_result ADD COLUMN result_texts ${long_text} NOT NULL;
-ALTER TABLE operation_legacy ADD COLUMN original_text ${long_text} NOT NULL;

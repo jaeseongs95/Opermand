@@ -4,13 +4,13 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.Objects;
 
+import io.github.jaeseongs95.portal.domain.id.CanonicalForm;
 import io.github.jaeseongs95.portal.domain.id.Digest;
 import io.github.jaeseongs95.portal.domain.id.Digester;
 
 /**
- * What the target-side helper receives and reports back as its receipt: action, provider, version, checksum, the installation snapshot the plan expects and the
- * expiry (2.x adapters/ssh/agent-cli.mjs {@code receiptDigest}). The helper computes the SHA-256 of {@link #canonicalJson()} itself and returns it, and the
- * portal compares the two. The byte form is therefore a contract with the helper and must not change: keys sorted by name, no spaces, one line feed at the end.
+ * What the target-side installation plan records and verifies as its receipt: action, provider, version, checksum, the installation snapshot the plan expects and the
+ * expiry. Hashed with {@link CanonicalForm}.
  */
 public record AgentCliReceiptIntent(AgentCliAction action, AgentRelease release, Digest expectedInstallationRevision, Instant expiresAt) {
 
@@ -25,18 +25,19 @@ public record AgentCliReceiptIntent(AgentCliAction action, AgentRelease release,
         }
     }
 
-    /**
-     * The JSON text that is hashed. The fields are validated types without characters that JSON escapes, so concatenation gives the bytes {@code JSON.stringify}
-     * gave in 2.x. The epoch milliseconds are written as a plain integer.
-     */
-    public String canonicalJson() {
-        return "{\"action\":\"" + action.wire() + "\",\"expected\":\"" + expectedInstallationRevision.hex() + "\",\"expires\":" + expiresAt.toEpochMilli()
-                + ",\"integrity\":\"" + release.integrity() + "\",\"provider\":\"" + release.provider().wire() + "\",\"version\":\"" + release.version()
-                + "\"}\n";
+    public CanonicalForm describeTo(CanonicalForm form) {
+        Objects.requireNonNull(form, "form");
+        return form
+                .field("action", action.wire())
+                .field("expected", expectedInstallationRevision.hex())
+                .field("expires", expiresAt.toEpochMilli())
+                .field("integrity", release.integrity())
+                .field("provider", release.provider().wire())
+                .field("version", release.version());
     }
 
     public Digest digest(Digester digester) {
         Objects.requireNonNull(digester, "digester");
-        return digester.digestUtf8(canonicalJson());
+        return describeTo(new CanonicalForm()).digest(digester);
     }
 }

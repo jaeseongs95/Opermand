@@ -17,4 +17,9 @@ public final class CodexCliProvider implements AgentCliProvider {
     public String command() {
         return "codex";
     }
+
+    @Override
+    public String distributionUrl(String version) {
+        return "https://registry.npmjs.org/" + packageName() + "/-/codex-" + version + ".tgz";
+    }
 }

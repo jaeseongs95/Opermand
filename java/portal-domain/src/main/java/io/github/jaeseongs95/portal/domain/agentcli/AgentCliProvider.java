@@ -14,4 +14,7 @@ public interface AgentCliProvider {
 
     /** The command the package puts on the target, such as {@code codex}. */
     String command();
+
+    /** The trusted HTTPS distribution URL for the given stable release version. Owned by each provider so the common domain is not coupled to any registry. */
+    String distributionUrl(String version);
 }

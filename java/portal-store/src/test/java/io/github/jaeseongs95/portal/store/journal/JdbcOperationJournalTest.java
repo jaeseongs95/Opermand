@@ -70,7 +70,6 @@ class JdbcOperationJournalTest {
     private final JdbcClaimStore claims;
     private final OperationRowRepository operations;
     private final OperationEventRowRepository events;
-    private final OperationLegacyRowRepository legacy;
     private final OperationStorage storage;
     private final OperationIdGenerator ids;
     private final Clock clock;
@@ -80,13 +79,12 @@ class JdbcOperationJournalTest {
     private final JournalFixture fx = new JournalFixture();
 
     JdbcOperationJournalTest(JdbcOperationJournal journal, JdbcClaimStore claims, OperationRowRepository operations, OperationEventRowRepository events,
-                             OperationLegacyRowRepository legacy, OperationStorage storage, OperationIdGenerator ids, Clock clock, Savepoints savepoints,
+                             OperationStorage storage, OperationIdGenerator ids, Clock clock, Savepoints savepoints,
                              Digester digester, JdbcTemplate jdbc) {
         this.journal = journal;
         this.claims = claims;
         this.operations = operations;
         this.events = events;
-        this.legacy = legacy;
         this.storage = storage;
         this.ids = ids;
         this.clock = clock;
@@ -181,7 +179,7 @@ class JdbcOperationJournalTest {
                     return filler;
                 }
             });
-        assertThat(operations.count() - legacy.count()).isGreaterThanOrEqualTo(10_000);
+        assertThat(operations.count()).isGreaterThanOrEqualTo(10_000);
         long full = operations.count();
         assertThat(full).isEqualTo(before + filler);
 
