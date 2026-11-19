@@ -21,7 +21,7 @@ import io.github.jaeseongs95.portal.app.storage.PayloadRead;
 import io.github.jaeseongs95.portal.app.target.TargetPlatform;
 import io.github.jaeseongs95.portal.domain.agentcli.AgentCliProviderId;
 import io.github.jaeseongs95.portal.domain.agentcli.AgentRelease;
-import io.github.jaeseongs95.portal.domain.agentcli.ClaudeCliProvider;
+import io.github.jaeseongs95.portal.app.agentcli.ClaudeCliProvider;
 import io.github.jaeseongs95.portal.domain.id.Sha256Digester;
 import io.github.jaeseongs95.portal.domain.id.TargetId;
 import io.github.jaeseongs95.portal.domain.target.AccessMode;

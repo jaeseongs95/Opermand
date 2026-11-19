@@ -61,14 +61,13 @@ class DispatchFailureTest {
         pairs.put(DispatchStage.EXECUTION_CLAIM, EnumSet.of(CLAIM_FAILED));
         pairs.put(DispatchStage.DECISION_PERSISTENCE, EnumSet.of(PERSISTENCE_FAILED));
         pairs.put(DispatchStage.DECISION_AUDIT, EnumSet.of(AUDIT_FAILED));
-        pairs.put(DispatchStage.EVALUATION_PERSISTENCE, EnumSet.of(PERSISTENCE_FAILED));
         pairs.put(DispatchStage.START_AUDIT, EnumSet.of(AUDIT_FAILED));
         pairs.put(DispatchStage.START_PERSISTENCE, EnumSet.of(PERSISTENCE_FAILED));
         return pairs;
     }
 
     @Test
-    @DisplayName("S2-FA-01 of the 15 x 19 combinations exactly the 24 pairs 2.x produces are accepted, in both forms; every other is refused")
+    @DisplayName("S2-FA-01 TC-D0122-01 of the 15 x 18 combinations exactly the 23 pairs are accepted, in both forms; every other is refused")
     void onlyTheKnownPairsAreAccepted() {
         int accepted = 0;
         for (DispatchStage stage : DispatchStage.values()) {
@@ -84,7 +83,7 @@ class DispatchFailureTest {
                 }
             }
         }
-        assertThat(accepted).isEqualTo(24);
+        assertThat(accepted).isEqualTo(23);
         assertThat(new DispatchFailure.Unclassified().reason()).isEqualTo(UNKNOWN);
         assertThat(new DispatchFailure.Unclassified().stage()).isEqualTo(DispatchStage.UNKNOWN);
     }
@@ -130,27 +129,27 @@ class DispatchFailureTest {
     }
 
     @Test
-    @DisplayName("RC-A-737 RC-A-738 a failed save of the evaluation and a failed start audit are persistence and audit failures, not a busy executor or a lost transport")
+    @DisplayName("RC-A-737 RC-A-738 a failed save of the decision and a failed start audit are persistence and audit failures, not a busy executor or a lost transport")
     void persistenceAndAuditAreNotBusy() {
-        DispatchFailure evaluation = DispatchFailure.stepFailed(DispatchStage.EVALUATION_PERSISTENCE, PERSISTENCE_FAILED);
+        DispatchFailure decision = DispatchFailure.stepFailed(DispatchStage.DECISION_PERSISTENCE, PERSISTENCE_FAILED);
         DispatchFailure audit = DispatchFailure.stepFailed(DispatchStage.START_AUDIT, AUDIT_FAILED);
-        assertThat(evaluation.reason()).isNotEqualTo(BUSY).isNotEqualTo(QUEUE_FULL);
+        assertThat(decision.reason()).isNotEqualTo(BUSY).isNotEqualTo(QUEUE_FULL);
         assertThat(audit.reason()).isEqualTo(AUDIT_FAILED);
-        assertThat(pending().refuseBeforeDispatch(evaluation, T0.plusSeconds(2)).state()).isEqualTo(OperationState.FAILED);
+        assertThat(pending().refuseBeforeDispatch(decision, T0.plusSeconds(2)).state()).isEqualTo(OperationState.FAILED);
         Operation lost = running().settle(ExecutionOutcome.transportLost(new ExecutionFailure.Unclassified(), List.of()), T0.plusSeconds(5));
         assertThat(lost.state()).as("a lost transport after the effect is not a failure before dispatch").isEqualTo(OperationState.UNKNOWN);
     }
 
     @Test
-    @DisplayName("S2-CO-04 the wire values of reasons and stages are the lowercase 15 and 19 values of 2.x")
+    @DisplayName("S2-CO-04 TC-D0122-01 the wire values of reasons and stages are the lowercase 15 and 18 values without EVALUATION_PERSISTENCE")
     void wireValues() throws Exception {
         assertThat(Arrays.stream(DispatchReason.values()).map(DispatchReason::wire)).containsExactly("unknown", "maintenance", "request_state", "authority", "invalid_command",
             "private_plan", "target_changed", "policy_changed", "policy_denied", "plan_expired", "busy", "queue_full", "claim_failed", "audit_failed", "persistence_failed");
         assertThat(Arrays.stream(DispatchStage.values()).map(DispatchStage::wire)).containsExactly("unknown", "maintenance", "request_state", "authority", "command_validation",
             "command_guard", "file_guard", "source_plan", "target_guard", "cli_guard", "policy_guard", "busy_check", "execution_queue", "execution_claim", "decision_persistence",
-            "decision_audit", "evaluation_persistence", "start_audit", "start_persistence");
+            "decision_audit", "start_audit", "start_persistence");
         JsonMapper mapper = new JsonMapper();
         assertThat(mapper.writeValueAsString(DispatchReason.POLICY_CHANGED)).isEqualTo("\"policy_changed\"");
-        assertThat(mapper.writeValueAsString(DispatchStage.EVALUATION_PERSISTENCE)).isEqualTo("\"evaluation_persistence\"");
+        assertThat(mapper.writeValueAsString(DispatchStage.DECISION_PERSISTENCE)).isEqualTo("\"decision_persistence\"");
     }
 }

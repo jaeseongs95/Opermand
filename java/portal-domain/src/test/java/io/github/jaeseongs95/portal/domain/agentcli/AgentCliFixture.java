@@ -19,8 +19,8 @@ import io.github.jaeseongs95.portal.domain.target.TargetRevision;
 final class AgentCliFixture {
 
     final Digester digester = new Sha256Digester();
-    final AgentCliProvider codex = new CodexCliProvider();
-    final AgentCliProvider claude = new ClaudeCliProvider();
+    final AgentCliProvider codex = testProvider(AgentCliProviderId.CODEX, "acme/tool-alpha", "alpha-cli");
+    final AgentCliProvider claude = testProvider(AgentCliProviderId.CLAUDE, "acme/tool-beta", "beta-cli");
     final String integrity = integrityOf(7);
     final TargetId targetId = new TargetId("alpha");
     final TargetRevision revision = new TargetRevision(new Digest("a".repeat(64)));
@@ -30,6 +30,30 @@ final class AgentCliFixture {
     final Instant now = Instant.ofEpochMilli(1000);
     final Instant expiry = Instant.ofEpochMilli(1001);
 
+    private static AgentCliProvider testProvider(AgentCliProviderId id, String packageName, String command) {
+        return new AgentCliProvider() {
+            @Override
+            public AgentCliProviderId id() {
+                return id;
+            }
+
+            @Override
+            public String packageName() {
+                return packageName;
+            }
+
+            @Override
+            public String command() {
+                return command;
+            }
+
+            @Override
+            public String distributionUrl(String version) {
+                return "https://releases.example.test/" + packageName + "/" + command + "-" + version + ".tgz";
+            }
+        };
+    }
+
     /** {@code sha512-} and the base64 of 64 bytes that all have the given value. */
     String integrityOf(int fill) {
         byte[] bytes = new byte[64];
@@ -38,8 +62,7 @@ final class AgentCliFixture {
     }
 
     String tarball(AgentCliProvider provider, String version) {
-        String name = provider.packageName();
-        return "https://registry.npmjs.org/" + name + "/-/" + name.substring(name.indexOf('/') + 1) + "-" + version + ".tgz";
+        return provider.distributionUrl(version);
     }
 
     AgentCliProvider provider(AgentCliProviderId id) {

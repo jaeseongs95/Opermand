@@ -2,19 +2,26 @@ package io.github.jaeseongs95.portal.domain.agentcli;
 
 /**
  * One agent command-line tool the portal can install: its id, the package that carries it and the command it provides. What differs between the tools lives in
- * an implementation of this interface, never in a branch of the shared code; a new tool is a new implementation that the application adds to the injected list
- * (stage 2 design 6.7, 2.x agent-cli.mjs:5-8).
+ * an implementation of this interface outside the domain, never in a branch of the shared code; a new tool is a new implementation that the application adds to
+ * the injected list.
  */
 public interface AgentCliProvider {
 
     AgentCliProviderId id();
 
-    /** The package name in the public registry, such as {@code @openai/codex}. */
+    /** The distribution package identifier owned by this provider. */
     String packageName();
 
-    /** The command the package puts on the target, such as {@code codex}. */
+    /** The command the package puts on the target. */
     String command();
 
     /** The trusted HTTPS distribution URL for the given stable release version. Owned by each provider so the common domain is not coupled to any registry. */
     String distributionUrl(String version);
+
+    /**
+     * Validates a provider-specific integrity checksum format (for example, canonical SRI {@code sha512-...} for npm packages).
+     * Throws {@link IllegalArgumentException} if the checksum does not satisfy this provider's distribution contract.
+     */
+    default void verifyIntegrity(String integrity) {
+    }
 }

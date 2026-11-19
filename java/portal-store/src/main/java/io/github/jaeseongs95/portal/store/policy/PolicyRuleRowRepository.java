@@ -19,7 +19,7 @@ interface PolicyRuleRowRepository extends CrudRepository<PolicyRuleRow, String> 
     @Query("SELECT * FROM command_policy_rule WHERE target_id = :targetId")
     Optional<PolicyRuleRow> findByTargetId(@Param("targetId") String targetId);
 
-    /** Deletes every rule; the names and thresholds are deleted first because they reference the rules. */
+    /** Deletes every rule; the child command-name rows are deleted first because they reference the rules. */
     @Modifying
     @Query("DELETE FROM command_policy_rule")
     int deleteAllRules();

@@ -443,7 +443,7 @@ class OperationTransitionTest {
         assertThat(Admission.of(DecisionReason.AGENT_CLI_REVIEW, OperationKind.AGENT_CLI, 0)).isInstanceOf(Admission.Review.class);
         assertThatThrownBy(() -> Operation.admit(command("admission-key-0002", "ls"), id('6'), T0, Admission.of(DecisionReason.AUTOMATIC_UPLOAD, OperationKind.UPLOAD, 0)))
             .isInstanceOf(IllegalArgumentException.class);
-        assertThat(Arrays.stream(DecisionReason.values()).filter(DecisionReason::isAutomatic)).containsExactlyInAnyOrder(DecisionReason.COMMAND_SET, DecisionReason.MODEL_PASSED,
+        assertThat(Arrays.stream(DecisionReason.values()).filter(DecisionReason::isAutomatic)).containsExactlyInAnyOrder(DecisionReason.COMMAND_SET,
             DecisionReason.TEST_SERVER_BYPASS, DecisionReason.READ_ONLY, DecisionReason.AUTOMATIC_UPLOAD, DecisionReason.AUTOMATIC_DOWNLOAD);
         assertThat(Arrays.stream(DecisionReason.values()).filter(reason -> reason.kind() == DecisionKind.DENY)).containsExactly(DecisionReason.POLICY_DENIED);
     }

@@ -37,7 +37,7 @@ import io.github.jaeseongs95.portal.domain.agentcli.AgentCliProviderId;
 import io.github.jaeseongs95.portal.domain.agentcli.AgentCliRequest;
 import io.github.jaeseongs95.portal.domain.agentcli.AgentCliTargetBinding;
 import io.github.jaeseongs95.portal.domain.agentcli.AgentRelease;
-import io.github.jaeseongs95.portal.domain.agentcli.CodexCliProvider;
+import io.github.jaeseongs95.portal.app.agentcli.CodexCliProvider;
 import io.github.jaeseongs95.portal.domain.id.Digest;
 import io.github.jaeseongs95.portal.domain.id.Digester;
 import io.github.jaeseongs95.portal.domain.id.OperationId;

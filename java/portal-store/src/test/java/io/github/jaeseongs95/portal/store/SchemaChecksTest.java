@@ -193,13 +193,24 @@ class SchemaChecksTest {
     }
 
     @Test
-    @DisplayName("S-D0119-10: every decision reason of the domain is accepted by the column of the stored decision")
+    @DisplayName("S-D0119-10 TC-D0122-01: every decision reason of the domain is accepted, and removed 2.x model-evaluation values are rejected")
     void everyDecisionReasonIsAccepted() {
         for (io.github.jaeseongs95.portal.domain.operation.DecisionReason reason : io.github.jaeseongs95.portal.domain.operation.DecisionReason.values()) {
             jdbc.update("DELETE FROM operation_decision");
             jdbc.update("INSERT INTO operation_decision (operation_id, decision, reason_code, review_reason, policy_revision) VALUES ('" + OP + "', '" + reason.kind().name()
                 + "', '" + reason.name() + "', 'NONE', 0)");
         }
+        for (String removedReason : new String[] {"MODEL_PASSED", "MODEL_REVIEW", "EVALUATION_FAILED", "BUDGET_EXHAUSTED", "DISCLOSURE_NOT_ENABLED"}) {
+            assertThatThrownBy(() -> inSavepoint("UPDATE operation_decision SET reason_code = '" + removedReason + "'")).as(removedReason)
+                .isInstanceOf(DataIntegrityViolationException.class);
+        }
+        for (String removedReview : new String[] {"EXECUTION_DISABLED", "THRESHOLD_MISSING", "MODEL_MISMATCH", "HIGH_RISK", "BELOW_THRESHOLD"}) {
+            assertThatThrownBy(() -> inSavepoint("UPDATE operation_decision SET review_reason = '" + removedReview + "'")).as(removedReview)
+                .isInstanceOf(DataIntegrityViolationException.class);
+        }
+        assertThatThrownBy(() -> inSavepoint("INSERT INTO operation_result (operation_id, result_kind, result_flag, exit_kind, failure_kind, dispatch_kind, dispatch_reason,"
+            + " dispatch_stage, evidence_kind, result_texts) VALUES ('" + OP + "', 'REFUSED', 'FAILED', 'NO_EXIT', 'NONE', 'REFUSED', 'PERSISTENCE_FAILED',"
+            + " 'EVALUATION_PERSISTENCE', 'NO_EVIDENCE', '[]')")).isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test

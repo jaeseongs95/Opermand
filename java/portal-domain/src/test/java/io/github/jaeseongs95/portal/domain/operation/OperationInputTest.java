@@ -82,15 +82,15 @@ class OperationInputTest {
     }
 
     @Test
-    @DisplayName("S2-CO-04 the wire values of the kind, the approval mode, the decision kind and the twenty-five decision reasons (D-0119 added five) are lowercase names")
+    @DisplayName("S2-CO-04 TC-D0122-01 the wire values of the kind, approval mode, decision kind, 12 rule-based decision reasons, and review reason are lowercase names")
     void wireValues() throws Exception {
         assertThat(Arrays.stream(OperationKind.values()).map(OperationKind::wire)).containsExactly("command", "source", "upload", "download", "agent_cli");
         assertThat(Arrays.stream(ApprovalMode.values()).map(ApprovalMode::wire)).containsExactly("owner", "automatic", "not_decided");
         assertThat(Arrays.stream(DecisionKind.values()).map(DecisionKind::wire)).containsExactly("execute", "review", "deny");
         assertThat(Arrays.stream(DecisionReason.values()).map(DecisionReason::wire)).containsExactly("policy_denied", "test_server_bypass", "source_execution_not_enabled",
-            "source_privilege_policy_review", "source_command_policy_review", "sudo_not_enabled", "command_set", "disclosure_not_enabled", "context_required", "sensitive_input",
-            "source_evidence_too_large", "budget_exhausted", "policy_changed", "evaluation_unavailable", "model_passed", "model_review", "observation_only", "evaluation_failed",
-            "execution_busy", "execution_start_failed", "read_only", "automatic_upload", "automatic_download", "no_matching_rule", "agent_cli_review");
+            "source_privilege_policy_review", "source_command_policy_review", "sudo_not_enabled", "command_set", "read_only", "automatic_upload", "automatic_download",
+            "no_matching_rule", "agent_cli_review");
+        assertThat(Arrays.stream(ReviewReason.values()).map(ReviewReason::wire)).containsExactly("none");
         JsonMapper mapper = new JsonMapper();
         assertThat(mapper.writeValueAsString(OperationKind.DOWNLOAD)).isEqualTo("\"download\"");
         assertThat(mapper.writeValueAsString(ApprovalMode.AUTOMATIC)).isEqualTo("\"automatic\"");

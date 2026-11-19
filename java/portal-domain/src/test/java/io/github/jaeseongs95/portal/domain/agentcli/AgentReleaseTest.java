@@ -45,12 +45,12 @@ class AgentReleaseTest {
     }
 
     @Test
-    @DisplayName("S2-AG-02 the release digest is the CanonicalForm SHA-256 of the five fields and does not couple AgentRelease to any registry host")
+    @DisplayName("TC-D0061-01 the release digest is the CanonicalForm SHA-256 of the five fields and does not couple AgentRelease to any vendor or registry")
     void releaseDigestHasAFixedVector() {
         AgentRelease release = fx.release(fx.codex, "1.2.3");
         io.github.jaeseongs95.portal.domain.id.Digest expected = new io.github.jaeseongs95.portal.domain.id.CanonicalForm()
                 .field("provider", "codex")
-                .field("packageName", "@openai/codex")
+                .field("packageName", fx.codex.packageName())
                 .field("version", "1.2.3")
                 .field("tarball", fx.tarball(fx.codex, "1.2.3"))
                 .field("integrity", fx.integrity)
@@ -61,16 +61,25 @@ class AgentReleaseTest {
         assertThat(fx.release(fx.codex, "1.2.4").releaseDigest()).isNotEqualTo(release.releaseDigest());
         assertThat(fx.release(fx.claude, "1.2.3").releaseDigest()).isNotEqualTo(release.releaseDigest());
 
-        // Custom provider with a non-npm distribution host proves AgentRelease is not hardcoded to registry.npmjs.org (SSH_PORTAL-D-0061).
+        // Custom provider with a non-npm package id, non-npm host, and sha256 integrity proves portal-domain is registry-neutral (SSH_PORTAL-D-0061).
+        String sha256Integrity = "sha256:" + "a".repeat(64);
         AgentCliProvider custom = new AgentCliProvider() {
             @Override public AgentCliProviderId id() { return AgentCliProviderId.CODEX; }
-            @Override public String packageName() { return "@acme/tool"; }
+            @Override public String packageName() { return "org.acme:tool-cli"; }
             @Override public String command() { return "tool"; }
-            @Override public String distributionUrl(String version) { return "https://releases.acme.example/tool-" + version + ".tgz"; }
+            @Override public String distributionUrl(String version) { return "https://releases.acme.example/tool-" + version + ".tar.gz"; }
+            @Override public void verifyIntegrity(String integrity) {
+                if (!integrity.startsWith("sha256:") || integrity.length() != 71) {
+                    throw new IllegalArgumentException("Expected sha256 hex integrity");
+                }
+            }
         };
-        AgentRelease customRelease = AgentRelease.verify(custom, "@acme/tool", "2.0.0", "https://releases.acme.example/tool-2.0.0.tgz", fx.integrity, fx.digester);
-        assertThat(customRelease.tarball()).isEqualTo("https://releases.acme.example/tool-2.0.0.tgz");
+        AgentRelease customRelease = AgentRelease.verify(custom, "org.acme:tool-cli", "2.0.0", "https://releases.acme.example/tool-2.0.0.tar.gz", sha256Integrity, fx.digester);
+        assertThat(customRelease.tarball()).isEqualTo("https://releases.acme.example/tool-2.0.0.tar.gz");
+        assertThat(customRelease.integrity()).isEqualTo(sha256Integrity);
         assertThat(customRelease.digestMatches(fx.digester)).isTrue();
+        assertThatThrownBy(() -> AgentRelease.verify(custom, "org.acme:tool-cli", "2.0.0", "https://releases.acme.example/tool-2.0.0.tar.gz", fx.integrity, fx.digester))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @ParameterizedTest(name = "[{index}] {0}")
@@ -89,17 +98,17 @@ class AgentReleaseTest {
 
     @ParameterizedTest(name = "[{index}] {0}")
     @ValueSource(strings = {
-        "http://registry.npmjs.org/@openai/codex/-/codex-1.2.3.tgz",
-        "https://evil.test/@openai/codex/-/codex-1.2.3.tgz",
-        "https://registry.npmjs.org.evil.test/@openai/codex/-/codex-1.2.3.tgz",
-        "https://u:p@registry.npmjs.org/@openai/codex/-/codex-1.2.3.tgz",
-        "https://registry.npmjs.org:444/@openai/codex/-/codex-1.2.3.tgz",
-        "https://registry.npmjs.org/@openai/codex/-/codex-1.2.3.tgz?token=private",
-        "https://registry.npmjs.org/@openai/codex/-/codex-1.2.3.tgz#part",
-        "https://registry.npmjs.org/@openai/codex/-/other.tgz"})
+        "http://releases.example.test/acme/tool-alpha/alpha-cli-1.2.3.tgz",
+        "https://evil.test/acme/tool-alpha/alpha-cli-1.2.3.tgz",
+        "https://releases.example.test.evil.test/acme/tool-alpha/alpha-cli-1.2.3.tgz",
+        "https://u:p@releases.example.test/acme/tool-alpha/alpha-cli-1.2.3.tgz",
+        "https://releases.example.test:444/acme/tool-alpha/alpha-cli-1.2.3.tgz",
+        "https://releases.example.test/acme/tool-alpha/alpha-cli-1.2.3.tgz?token=private",
+        "https://releases.example.test/acme/tool-alpha/alpha-cli-1.2.3.tgz#part",
+        "https://releases.example.test/acme/tool-alpha/other.tgz"})
     @DisplayName("RC-A-091 an alternative distribution address is refused")
     void refusesAlternativeDistribution(String tarball) {
-        assertThatThrownBy(() -> AgentRelease.verify(fx.codex, "@openai/codex", "1.2.3", tarball, fx.integrity, fx.digester))
+        assertThatThrownBy(() -> AgentRelease.verify(fx.codex, fx.codex.packageName(), "1.2.3", tarball, fx.integrity, fx.digester))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -108,17 +117,17 @@ class AgentReleaseTest {
     void refusesMalformedMetadata() {
         String tarball = fx.tarball(fx.codex, "1.2.3");
 
-        assertThatThrownBy(() -> AgentRelease.verify(fx.codex, "@other/codex", "1.2.3", tarball, fx.integrity, fx.digester))
+        assertThatThrownBy(() -> AgentRelease.verify(fx.codex, "other/pkg", "1.2.3", tarball, fx.integrity, fx.digester))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> AgentRelease.verify(fx.codex, null, "1.2.3", tarball, fx.integrity, fx.digester)).isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> AgentRelease.verify(fx.codex, "@openai/codex", null, tarball, fx.integrity, fx.digester)).isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> AgentRelease.verify(fx.codex, "@openai/codex", "1.2.3", null, fx.integrity, fx.digester)).isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> AgentRelease.verify(fx.codex, "@openai/codex", "1.2.3", tarball, null, fx.digester)).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> AgentRelease.verify(fx.codex, fx.codex.packageName(), null, tarball, fx.integrity, fx.digester)).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> AgentRelease.verify(fx.codex, fx.codex.packageName(), "1.2.3", null, fx.integrity, fx.digester)).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> AgentRelease.verify(fx.codex, fx.codex.packageName(), "1.2.3", tarball, null, fx.digester)).isInstanceOf(NullPointerException.class);
     }
 
     @ParameterizedTest(name = "[{index}] {0}")
     @MethodSource("badIntegrities")
-    @DisplayName("RC-A-092 a checksum that is not exactly sha512 of 64 bytes in canonical base64 is refused")
+    @DisplayName("RC-A-092 a malformed generic integrity token is refused by AgentRelease")
     void refusesBadChecksums(String integrity) {
         assertThatThrownBy(() -> fx.release(fx.codex, "1.2.3", integrity)).isInstanceOf(IllegalArgumentException.class);
     }
@@ -127,10 +136,10 @@ class AgentReleaseTest {
         String valid = "sha512-" + Base64.getEncoder().encodeToString(sevens(64));
         return Stream.of(
             "sha1-abcd",
-            "sha512-" + Base64.getEncoder().encodeToString(sevens(63)),
-            "sha512-" + Base64.getEncoder().encodeToString(sevens(65)),
+            "no-prefix",
             valid + " ",
-            valid.substring(0, valid.length() - 3) + "B==",
+            valid + "\n",
+            "SHA512-abcdef0123456789",
             "");
     }
 
