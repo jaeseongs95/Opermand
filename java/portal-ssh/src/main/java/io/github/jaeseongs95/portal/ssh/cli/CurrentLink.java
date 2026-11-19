@@ -93,11 +93,18 @@ final class CurrentLink {
         removeIfThere(root + "/" + LINK);
     }
 
-    /** One atomic step where the server offers {@code posix-rename@openssh.com}; otherwise the target is removed and the new file renamed in. */
+    /**
+     * One atomic step where the server offers {@code posix-rename@openssh.com} and accepts replacing {@code to}; otherwise the target is removed and the new entry
+     * renamed in (the installer still reads {@code current} back before confirming the switch).
+     */
     private void replace(String from, String to) throws IOException {
         if (client.getServerExtensions().containsKey(PosixRenameExtensionParser.NAME)) {
-            client.getExtension(OpenSSHPosixRenameExtension.class).posixRename(from, to);
-            return;
+            try {
+                client.getExtension(OpenSSHPosixRenameExtension.class).posixRename(from, to);
+                return;
+            } catch (SftpException refused) {
+                // Some SFTP servers (for example on NTFS when replacing an existing directory symbolic link) refuse in-place posix-rename; fall back to remove + rename.
+            }
         }
         removeIfThere(to);
         client.rename(from, to);
@@ -107,8 +114,15 @@ final class CurrentLink {
         try {
             client.remove(path);
         } catch (SftpException e) {
-            if (!isMissing(e)) {
-                throw e;
+            if (isMissing(e)) {
+                return;
+            }
+            try {
+                client.rmdir(path);
+            } catch (SftpException rmdirFailed) {
+                if (!isMissing(rmdirFailed)) {
+                    throw e;
+                }
             }
         }
     }
