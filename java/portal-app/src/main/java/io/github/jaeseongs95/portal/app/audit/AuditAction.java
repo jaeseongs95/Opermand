@@ -18,13 +18,7 @@ public enum AuditAction {
     NOT_STORED("not-stored"),
     CANCELLED("cancelled"),
     UNKNOWN("unknown"),
-    EXPIRED("expired"),
-    COMMAND_DECISION("command-decision"),
-    COMMAND_POLICY_CHANGE_REQUESTED("command-policy-change-requested"),
-    COMMAND_POLICY_REVIEWED("command-policy-reviewed"),
-    CAPACITY_UPDATED("capacity-updated"),
-    MAINTENANCE_RESERVED("maintenance-reserved"),
-    MAINTENANCE_RELEASED("maintenance-released");
+    EXPIRED("expired");
 
     private final String wire;
 

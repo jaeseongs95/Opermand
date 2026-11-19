@@ -3,7 +3,6 @@ package io.github.jaeseongs95.portal.store.policy;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.relational.core.mapping.Table;
 
-import io.github.jaeseongs95.portal.domain.command.Fallback;
 import io.github.jaeseongs95.portal.domain.command.SourceContract;
 import io.github.jaeseongs95.portal.domain.target.TargetOs;
 import io.github.jaeseongs95.portal.domain.target.Toggle;
@@ -13,7 +12,6 @@ import io.github.jaeseongs95.portal.domain.target.Toggle;
  * the migration V4 list; the long-form wire values of the 2.x JSON are not stored.
  */
 @Table("command_policy_rule")
-public record PolicyRuleRow(@Id String targetId, String targetConnection, long ruleRevision, String profile, TargetOs os, Toggle externalDisclosure,
-                            Toggle modelExecution, Toggle automaticUploads, Toggle automaticDownloads, Toggle automaticSudo, Toggle testServer,
-                            SourceContract sourceContract, Fallback fallback) {
+public record PolicyRuleRow(@Id String targetId, String targetConnection, long ruleRevision, String profile, TargetOs os, Toggle automaticUploads,
+                            Toggle automaticDownloads, Toggle automaticSudo, Toggle testServer, SourceContract sourceContract) {
 }

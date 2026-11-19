@@ -31,7 +31,6 @@ import io.github.jaeseongs95.portal.domain.command.CommandLineGrammar;
 import io.github.jaeseongs95.portal.domain.command.CommandNames;
 import io.github.jaeseongs95.portal.domain.command.CommandPolicyDocument;
 import io.github.jaeseongs95.portal.domain.command.Completeness;
-import io.github.jaeseongs95.portal.domain.command.Fallback;
 import io.github.jaeseongs95.portal.domain.command.LinuxPolicyName;
 import io.github.jaeseongs95.portal.domain.command.NormalizedName;
 import io.github.jaeseongs95.portal.domain.command.PolicyName;
@@ -42,7 +41,6 @@ import io.github.jaeseongs95.portal.domain.command.SourceContract;
 import io.github.jaeseongs95.portal.domain.command.SudoUse;
 import io.github.jaeseongs95.portal.domain.command.TargetPolicy;
 import io.github.jaeseongs95.portal.domain.command.TargetRule;
-import io.github.jaeseongs95.portal.domain.command.Thresholds;
 import io.github.jaeseongs95.portal.domain.error.DispatchFailure;
 import io.github.jaeseongs95.portal.domain.error.DispatchReason;
 import io.github.jaeseongs95.portal.domain.error.DispatchRefusedException;
@@ -110,8 +108,8 @@ class ApprovalJudgeTest {
         new RuleApprovalPolicy());
 
     private void rule(boolean testServer, boolean uploads, boolean downloads, boolean sudo, List<String> allowed, List<String> denied) {
-        rules.rule = new TargetRule(ID, target.connection(), WRITE, TargetOs.LINUX, names(allowed), names(denied), Toggle.OFF, Toggle.OFF, uploads ? Toggle.ON : Toggle.OFF,
-            downloads ? Toggle.ON : Toggle.OFF, sudo ? Toggle.ON : Toggle.OFF, testServer ? Toggle.ON : Toggle.OFF, SourceContract.NONE, Fallback.NONE, Thresholds.none());
+        rules.rule = new TargetRule(ID, target.connection(), WRITE, TargetOs.LINUX, names(allowed), names(denied), uploads ? Toggle.ON : Toggle.OFF,
+            downloads ? Toggle.ON : Toggle.OFF, sudo ? Toggle.ON : Toggle.OFF, testServer ? Toggle.ON : Toggle.OFF, SourceContract.NONE);
         if (rules.revision < 1L) {
             rules.revision = 1L;
         }

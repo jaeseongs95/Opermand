@@ -14,16 +14,14 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * What the owner allowed for one target: which command names run without asking, which are never run, whether the command may be shown to a model evaluator,
- * whether a model answer may approve and the thresholds for that, and the switches for sudo, file transfer, source code and the test server
- * (command-policy.mjs:43-71). A rule belongs to one target, its connection identity ({@link TargetConnection}), write profile and operating system (defect D-0121);
- * a rule written for another machine, account, authentication method, write profile or operating system does not apply.
+ * What the owner allowed for one target: which command names run without asking, which are never run, and the switches for sudo, file transfer, source code and the
+ * test server (command-policy.mjs:43-71). A rule belongs to one target, its connection identity ({@link TargetConnection}), write profile and operating system (defect
+ * D-0121); a rule written for another machine, account, authentication method, write profile or operating system does not apply.
  *
  * <p>A switch that 2.x left out of a stored rule is {@link Toggle#OFF}; the rule never has an "unknown" switch.
  */
 public record TargetRule(TargetId targetId, TargetConnection targetConnection, ProfileAlias profile, TargetOs os, CommandNames commands, CommandNames deniedCommands,
-                         Toggle externalDisclosure, Toggle modelExecution, Toggle automaticUploads, Toggle automaticDownloads, Toggle automaticSudo, Toggle testServer,
-                         SourceContract sourceExecutionContract, Fallback fallback, Thresholds thresholds) {
+                         Toggle automaticUploads, Toggle automaticDownloads, Toggle automaticSudo, Toggle testServer, SourceContract sourceExecutionContract) {
 
     private static final String SUDO = "sudo";
     /** What splits a command line into the words a denied name is looked for in (command-policy.mjs:98): everything that cannot be part of a program name. */
@@ -36,15 +34,11 @@ public record TargetRule(TargetId targetId, TargetConnection targetConnection, P
         Objects.requireNonNull(os, "os");
         Objects.requireNonNull(commands, "commands");
         Objects.requireNonNull(deniedCommands, "deniedCommands");
-        Objects.requireNonNull(externalDisclosure, "externalDisclosure");
-        Objects.requireNonNull(modelExecution, "modelExecution");
         Objects.requireNonNull(automaticUploads, "automaticUploads");
         Objects.requireNonNull(automaticDownloads, "automaticDownloads");
         Objects.requireNonNull(automaticSudo, "automaticSudo");
         Objects.requireNonNull(testServer, "testServer");
         Objects.requireNonNull(sourceExecutionContract, "sourceExecutionContract");
-        Objects.requireNonNull(fallback, "fallback");
-        Objects.requireNonNull(thresholds, "thresholds");
         requireNamesOfPlatform(commands, os);
         requireNamesOfPlatform(deniedCommands, os);
     }

@@ -11,11 +11,10 @@ import io.github.jaeseongs95.portal.domain.target.Toggle;
 import io.github.jaeseongs95.portal.domain.text.CommandText;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-/** S2-PO-01: the invariants of the policy document, the rule and the thresholds (command-policy.mjs:43-71); the policy snapshot and the rule lookup. */
+/** S2-PO-01: the invariants of the policy document, the rule, the policy snapshot and the rule lookup. */
 class PolicyDocumentTest {
 
     @Test
@@ -78,50 +77,6 @@ class PolicyDocumentTest {
         assertThatThrownBy(() -> rule(TargetOs.WINDOWS, new CommandNames(List.of(new LinuxPolicyName("ls"))))).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> rule(TargetOs.LINUX, new CommandNames(List.of(new WindowsPolicyName("tool.exe"))))).isInstanceOf(IllegalArgumentException.class);
         assertThat(rule(TargetOs.WINDOWS, new CommandNames(List.of(new WindowsPolicyName("tool.exe")))).os()).isEqualTo(TargetOs.WINDOWS);
-    }
-
-    @Test
-    @DisplayName("S2-PO-01 a threshold probability is above 0.5 and at most 1; 0.5 and 1.01 and NaN are refused")
-    void thresholdProbabilityRange() {
-        assertThat(new ThresholdTerms("jev-1.14.0", QuestionVersion.V5, 0.5000001, "ref").minLowRisk()).isEqualTo(0.5000001);
-        assertThat(new ThresholdTerms("jev-1.14.0", QuestionVersion.V5, 1.0, "ref").minLowRisk()).isEqualTo(1.0);
-        for (double bad : List.of(0.5, 0.0, -1.0, 1.01, Double.NaN, Double.POSITIVE_INFINITY)) {
-            assertThatThrownBy(() -> new ThresholdTerms("jev-1.14.0", QuestionVersion.V5, bad, "ref")).as(String.valueOf(bad)).isInstanceOf(IllegalArgumentException.class);
-        }
-        assertThatThrownBy(() -> new ConfidenceThreshold(RuleFixture.terms("jev-1.14.0", QuestionVersion.V3, 0.9), 0.5)).isInstanceOf(IllegalArgumentException.class);
-    }
-
-    @Test
-    @DisplayName("S2-PO-01 a threshold names a model of 1 to 100 characters and a validation reference of 1 to 200 characters of the allowed set")
-    void thresholdModelAndReference() {
-        for (String model : List.of("", "has space", "m".repeat(101), "a/b")) {
-            assertThatThrownBy(() -> new ThresholdTerms(model, QuestionVersion.V5, 0.9, "ref")).as(model).isInstanceOf(IllegalArgumentException.class);
-        }
-        for (String reference : List.of("", "has space", "r".repeat(201))) {
-            assertThatThrownBy(() -> new ThresholdTerms("jev-1.14.0", QuestionVersion.V5, 0.9, reference)).as(reference).isInstanceOf(IllegalArgumentException.class);
-        }
-        assertThat(new ThresholdTerms("m".repeat(100), QuestionVersion.V5, 0.9, "docs/validation:run-1_2").validationRef()).isEqualTo("docs/validation:run-1_2");
-    }
-
-    @Test
-    @DisplayName("S2-PO-01 the probability form has no confidence field and the evaluator keys are jev, luna and sonnet only")
-    void thresholdFormsAndKeys() {
-        assertThat(ProbabilityThreshold.class.getRecordComponents()).extracting(component -> component.getName()).containsExactly("terms");
-        assertThat(ConfidenceThreshold.class.getRecordComponents()).extracting(component -> component.getName()).containsExactly("terms", "minConfidence");
-        assertThat(ProbabilityThreshold.BASIS).isEqualTo("safety-probability-v1");
-        assertThat(EvaluatorProvider.values()).extracting(EvaluatorProvider::wire).containsExactly("jev", "luna", "sonnet");
-        Thresholds thresholds = new Thresholds(Map.of(EvaluatorProvider.LUNA, new ProbabilityThreshold(RuleFixture.terms("luna-1", QuestionVersion.V5, 0.8))));
-        assertThat(thresholds.lookup(EvaluatorProvider.JEV)).isInstanceOf(ThresholdLookup.NotConfigured.class);
-        assertThat(thresholds.lookup(EvaluatorProvider.LUNA)).isInstanceOf(ThresholdLookup.Configured.class);
-    }
-
-    @Test
-    @DisplayName("S2-PO-01 the question versions are v2 to v5 and only v5 is current")
-    void questionVersions() {
-        assertThat(QuestionVersion.values()).extracting(QuestionVersion::wire)
-            .containsExactly("ssh-command-risk-v2", "ssh-command-risk-v3", "ssh-command-risk-v4", "ssh-command-risk-v5");
-        assertThat(QuestionVersion.CURRENT).isEqualTo(QuestionVersion.V5);
-        assertThat(QuestionVersion.V4.isCurrent()).isFalse();
     }
 
     @Test
@@ -190,22 +145,19 @@ class PolicyDocumentTest {
     @DisplayName("S2-PO-01 a rule needs every part: a missing value is a programming error, and a switch left out is off")
     void everyPartIsRequired() {
         assertThatThrownBy(() -> new TargetRule(RuleFixture.TARGET, RuleFixture.CONNECTION, RuleFixture.PROFILE, TargetOs.LINUX, CommandNames.none(), CommandNames.none(), Toggle.OFF,
-            Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, SourceContract.NONE, Fallback.NONE, null)).isInstanceOf(NullPointerException.class);
+            Toggle.OFF, Toggle.OFF, Toggle.OFF, null)).isInstanceOf(NullPointerException.class);
         TargetRule bare = RuleFixture.rule().build();
-        assertThat(bare.externalDisclosure()).isEqualTo(Toggle.OFF);
         assertThat(bare.testServer()).isEqualTo(Toggle.OFF);
         assertThat(bare.sourceExecutionContract()).isEqualTo(SourceContract.NONE);
-        assertThat(bare.fallback()).isEqualTo(Fallback.NONE);
-        assertThat(Fallback.LUNA.evaluationOrder()).containsExactly(EvaluatorProvider.JEV, EvaluatorProvider.LUNA);
     }
 
     private TargetRule ruleFor(String target) {
-        return new TargetRule(new TargetId(target), RuleFixture.CONNECTION, RuleFixture.PROFILE, TargetOs.LINUX, CommandNames.none(), CommandNames.none(), Toggle.OFF, Toggle.OFF,
-            Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, SourceContract.NONE, Fallback.NONE, Thresholds.none());
+        return new TargetRule(new TargetId(target), RuleFixture.CONNECTION, RuleFixture.PROFILE, TargetOs.LINUX, CommandNames.none(), CommandNames.none(), Toggle.OFF,
+            Toggle.OFF, Toggle.OFF, Toggle.OFF, SourceContract.NONE);
     }
 
     private TargetRule rule(TargetOs os, CommandNames commands) {
-        return new TargetRule(RuleFixture.TARGET, RuleFixture.CONNECTION, RuleFixture.PROFILE, os, commands, CommandNames.none(), Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF,
-            Toggle.OFF, Toggle.OFF, SourceContract.NONE, Fallback.NONE, Thresholds.none());
+        return new TargetRule(RuleFixture.TARGET, RuleFixture.CONNECTION, RuleFixture.PROFILE, os, commands, CommandNames.none(), Toggle.OFF, Toggle.OFF,
+            Toggle.OFF, Toggle.OFF, SourceContract.NONE);
     }
 }

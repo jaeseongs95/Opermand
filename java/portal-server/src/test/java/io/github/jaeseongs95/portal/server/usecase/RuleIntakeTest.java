@@ -21,12 +21,10 @@ import io.github.jaeseongs95.portal.app.operation.OperationIntake;
 import io.github.jaeseongs95.portal.app.policy.CommandPolicyStore;
 import io.github.jaeseongs95.portal.domain.command.CommandNames;
 import io.github.jaeseongs95.portal.domain.command.CommandPolicyDocument;
-import io.github.jaeseongs95.portal.domain.command.Fallback;
 import io.github.jaeseongs95.portal.domain.command.LinuxPolicyName;
 import io.github.jaeseongs95.portal.domain.command.PolicyName;
 import io.github.jaeseongs95.portal.domain.command.SourceContract;
 import io.github.jaeseongs95.portal.domain.command.TargetRule;
-import io.github.jaeseongs95.portal.domain.command.Thresholds;
 import io.github.jaeseongs95.portal.domain.command.WindowsPolicyName;
 import io.github.jaeseongs95.portal.domain.error.DispatchFailure;
 import io.github.jaeseongs95.portal.domain.error.DispatchReason;
@@ -96,8 +94,8 @@ class RuleIntakeTest {
     }
 
     private TargetRule linuxTargetRule(List<String> allowed, List<String> denied) {
-        return new TargetRule(FixedTargets.ID, targets.current().connection(), FixedTargets.WRITE_PROFILE, TargetOs.LINUX, names(allowed), names(denied), Toggle.OFF,
-            Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, SourceContract.NONE, Fallback.NONE, Thresholds.none());
+        return new TargetRule(FixedTargets.ID, targets.current().connection(), FixedTargets.WRITE_PROFILE, TargetOs.LINUX, names(allowed), names(denied),
+            Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, SourceContract.NONE);
     }
 
     private TargetRule windowsTargetRule(List<String> allowed) {
@@ -106,8 +104,7 @@ class RuleIntakeTest {
             windowsNames.add(new WindowsPolicyName(text));
         }
         return new TargetRule(FixedTargets.WINDOWS_ID, targets.windows().connection(), FixedTargets.WINDOWS_WRITE_PROFILE, TargetOs.WINDOWS,
-            new CommandNames(windowsNames), CommandNames.none(), Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, SourceContract.NONE,
-            Fallback.NONE, Thresholds.none());
+            new CommandNames(windowsNames), CommandNames.none(), Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, SourceContract.NONE);
     }
 
     private static CommandNames names(List<String> texts) {

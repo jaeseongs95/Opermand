@@ -24,7 +24,7 @@ import io.github.jaeseongs95.portal.domain.id.TargetId;
 
 /**
  * {@link CommandPolicyStore} over the tables of the migration V4 (design 8.2, 2.x {@code command-state.mjs}). The policy is a single revision row plus child rows
- * for the rules, names and thresholds. {@link #replace} is a compare-and-set: one conditional UPDATE of the revision decides the winner (the row lock makes a second
+ * for the rules and names. {@link #replace} is a compare-and-set: one conditional UPDATE of the revision decides the winner (the row lock makes a second
  * writer wait for the first commit and then match no row), and the winner replaces the child rows in the same transaction, so the child rows always belong to
  * the revision that is stored. The rules come back ordered by target id.
  */
@@ -36,16 +36,14 @@ public class JdbcCommandPolicyStore implements CommandPolicyStore {
     private final CommandPolicyRowRepository policies;
     private final PolicyRuleRowRepository rules;
     private final PolicyNameRowRepository names;
-    private final PolicyThresholdRowRepository thresholds;
     private final JdbcAggregateOperations aggregates;
     private final PolicyMapper mapper;
 
     public JdbcCommandPolicyStore(CommandPolicyRowRepository policies, PolicyRuleRowRepository rules, PolicyNameRowRepository names,
-                                  PolicyThresholdRowRepository thresholds, JdbcAggregateOperations aggregates, PolicyMapper mapper) {
+                                  JdbcAggregateOperations aggregates, PolicyMapper mapper) {
         this.policies = policies;
         this.rules = rules;
         this.names = names;
-        this.thresholds = thresholds;
         this.aggregates = aggregates;
         this.mapper = mapper;
     }
@@ -56,10 +54,10 @@ public class JdbcCommandPolicyStore implements CommandPolicyStore {
     public PolicySnapshot current() {
         CommandPolicyRow row = policies.findById(THE_ROW)
             .orElseThrow(() -> new IllegalStateException("The command policy row (id 1) is missing; the migration V4 inserts it"));
-        return new PolicySnapshot(row.revision(), mapper.document(rules.findAllOrdered(), names.findAllOrdered(), thresholds.findAllOrdered()));
+        return new PolicySnapshot(row.revision(), mapper.document(rules.findAllOrdered(), names.findAllOrdered()));
     }
 
-    /** Reads only the target's rule row and its child rows in one {@code REPEATABLE_READ} snapshot (defect D-0121). */
+    /** Reads only the target's rule row and its name rows in one {@code REPEATABLE_READ} snapshot (defect D-0121). */
     @Override
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public TargetPolicy targetPolicy(TargetId targetId) {
@@ -69,7 +67,7 @@ public class JdbcCommandPolicyStore implements CommandPolicyStore {
             return TargetPolicy.none();
         }
         PolicyRuleRow row = found.orElseThrow();
-        TargetRule rule = mapper.rule(row, names.findByTargetIdOrdered(targetId.value()), thresholds.findByTargetIdOrdered(targetId.value()));
+        TargetRule rule = mapper.rule(row, names.findByTargetIdOrdered(targetId.value()));
         return new TargetPolicy(row.ruleRevision(), new RuleLookup.Rule(rule));
     }
 
@@ -86,7 +84,7 @@ public class JdbcCommandPolicyStore implements CommandPolicyStore {
         for (PolicyRuleRow row : previousRows) {
             previousRevisions.put(row.targetId(), row.ruleRevision());
         }
-        CommandPolicyDocument previousDoc = mapper.document(previousRows, names.findAllOrdered(), thresholds.findAllOrdered());
+        CommandPolicyDocument previousDoc = mapper.document(previousRows, names.findAllOrdered());
         Map<TargetId, TargetRule> previousRules = new HashMap<>();
         for (TargetRule rule : previousDoc.targets()) {
             previousRules.put(rule.targetId(), rule);
@@ -97,7 +95,6 @@ public class JdbcCommandPolicyStore implements CommandPolicyStore {
             long ruleRev = prior != null && prior.equals(rule) ? previousRevisions.get(rule.targetId().value()) : nextRevision;
             nextRuleRevisions.put(rule.targetId(), ruleRev);
         }
-        thresholds.deleteAllThresholds();
         names.deleteAllNames();
         rules.deleteAllRules();
         try {
@@ -105,9 +102,6 @@ public class JdbcCommandPolicyStore implements CommandPolicyStore {
                 aggregates.insert(row);
             }
             for (PolicyNameRow row : mapper.nameRows(next)) {
-                aggregates.insert(row);
-            }
-            for (PolicyThresholdRow row : mapper.thresholdRows(next)) {
                 aggregates.insert(row);
             }
         } catch (DuplicateKeyException e) {

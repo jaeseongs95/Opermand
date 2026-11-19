@@ -10,11 +10,9 @@ import org.junit.jupiter.api.Test;
 import io.github.jaeseongs95.portal.domain.classify.CommandClass;
 import io.github.jaeseongs95.portal.domain.classify.CommandClassification;
 import io.github.jaeseongs95.portal.domain.command.CommandNames;
-import io.github.jaeseongs95.portal.domain.command.Fallback;
 import io.github.jaeseongs95.portal.domain.command.LinuxPolicyName;
 import io.github.jaeseongs95.portal.domain.command.SourceContract;
 import io.github.jaeseongs95.portal.domain.command.TargetRule;
-import io.github.jaeseongs95.portal.domain.command.Thresholds;
 import io.github.jaeseongs95.portal.domain.id.TargetId;
 import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
 import io.github.jaeseongs95.portal.domain.target.TargetConnection;
@@ -34,8 +32,7 @@ class TestPlatformTest {
     @DisplayName("S-D0119-02 the use case platform finds a denied name in the line, also behind sudo and a path, and does not deny an unlisted one")
     void itDeniesWhatTheRuleDenies() {
         TargetRule rule = new TargetRule(new TargetId("web-1"), TargetConnection.of("a".repeat(64)), new ProfileAlias("web-rw"), TargetOs.LINUX, CommandNames.none(),
-            new CommandNames(List.of(new LinuxPolicyName("rm"))), Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, SourceContract.NONE, Fallback.NONE,
-            Thresholds.none());
+            new CommandNames(List.of(new LinuxPolicyName("rm"))), Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, SourceContract.NONE);
 
         assertThat(platform.deniesName(rule, new CommandText("sudo /bin/rm /tmp/x"))).isTrue();
         assertThat(platform.deniesName(rule, new CommandText("rm /tmp/x"))).isTrue();

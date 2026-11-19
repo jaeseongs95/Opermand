@@ -6,11 +6,9 @@ import io.github.jaeseongs95.portal.domain.target.TargetConnection;
 import io.github.jaeseongs95.portal.domain.target.TargetOs;
 import io.github.jaeseongs95.portal.domain.target.Toggle;
 import java.util.ArrayList;
-import java.util.EnumMap;
 import java.util.List;
-import java.util.Map;
 
-/** Builds a {@link TargetRule} for the tests: everything off, no names, no threshold, until a test says otherwise. */
+/** Builds a {@link TargetRule} for the tests: everything off, no names, until a test says otherwise. */
 final class RuleFixture {
 
     static final TargetId TARGET = new TargetId("synthetic");
@@ -20,15 +18,11 @@ final class RuleFixture {
     private TargetOs os = TargetOs.LINUX;
     private final List<String> commands = new ArrayList<>();
     private final List<String> denied = new ArrayList<>();
-    private Toggle externalDisclosure = Toggle.OFF;
-    private Toggle modelExecution = Toggle.OFF;
     private Toggle automaticSudo = Toggle.OFF;
     private Toggle testServer = Toggle.OFF;
     private Toggle automaticUploads = Toggle.OFF;
     private Toggle automaticDownloads = Toggle.OFF;
     private SourceContract sourceContract = SourceContract.NONE;
-    private Fallback fallback = Fallback.NONE;
-    private final Map<EvaluatorProvider, Threshold> thresholds = new EnumMap<>(EvaluatorProvider.class);
 
     static RuleFixture rule() {
         return new RuleFixture();
@@ -46,16 +40,6 @@ final class RuleFixture {
 
     RuleFixture denied(String... names) {
         denied.addAll(List.of(names));
-        return this;
-    }
-
-    RuleFixture disclosure() {
-        externalDisclosure = Toggle.ON;
-        return this;
-    }
-
-    RuleFixture modelExecution() {
-        modelExecution = Toggle.ON;
         return this;
     }
 
@@ -84,28 +68,9 @@ final class RuleFixture {
         return this;
     }
 
-    RuleFixture fallback(Fallback value) {
-        fallback = value;
-        return this;
-    }
-
-    /** The probability threshold in force: model jev-1.14.0, question v5, minimum {@code minLowRisk}. */
-    RuleFixture jevThreshold(double minLowRisk) {
-        return threshold(EvaluatorProvider.JEV, new ProbabilityThreshold(terms("jev-1.14.0", QuestionVersion.V5, minLowRisk)));
-    }
-
-    RuleFixture threshold(EvaluatorProvider provider, Threshold threshold) {
-        thresholds.put(provider, threshold);
-        return this;
-    }
-
-    static ThresholdTerms terms(String model, QuestionVersion version, double minLowRisk) {
-        return new ThresholdTerms(model, version, minLowRisk, "validation:synthetic-1");
-    }
-
     TargetRule build() {
-        return new TargetRule(TARGET, CONNECTION, PROFILE, os, names(commands), names(denied), externalDisclosure, modelExecution, automaticUploads, automaticDownloads, automaticSudo,
-            testServer, sourceContract, fallback, new Thresholds(thresholds));
+        return new TargetRule(TARGET, CONNECTION, PROFILE, os, names(commands), names(denied), automaticUploads, automaticDownloads, automaticSudo,
+            testServer, sourceContract);
     }
 
     private CommandNames names(List<String> texts) {

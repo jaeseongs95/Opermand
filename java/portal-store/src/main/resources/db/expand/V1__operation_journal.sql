@@ -117,58 +117,18 @@ CREATE TABLE operation_download (
     CONSTRAINT ck_operation_download_binding CHECK ((file_target_id IS NULL AND file_target_revision IS NULL) OR (file_target_id IS NOT NULL AND file_target_revision IS NOT NULL))
 );
 
--- Automatic approval decision (2.x job.decision, command-automation.mjs:134-159).
+-- Rule-based approval decision recorded at intake (defect D-0119, D-0122).
 CREATE TABLE operation_decision (
-    operation_id             CHAR(48)     NOT NULL,
-    decision                 VARCHAR(7)   NOT NULL,
-    reason_code              VARCHAR(34)  NOT NULL,
-    review_reason            VARCHAR(20)  NOT NULL,
-    policy_revision          BIGINT       NOT NULL,
-    provider                 VARCHAR(6),
-    decision_rule_version    VARCHAR(32),
-    question_version         VARCHAR(4),
-    threshold_model          VARCHAR(100),
-    threshold_min_low_risk   DOUBLE PRECISION,
-    assessed_label           VARCHAR(9),
-    assessed_low_risk        DOUBLE PRECISION,
-    assessed_confidence      DOUBLE PRECISION,
-    assessed_input_tokens    BIGINT,
-    assessed_output_tokens   BIGINT,
-    prompt_revision          VARCHAR(48),
-    prompt_sha256            CHAR(64),
-    assessed_at              TIMESTAMP(6),
-    latency_ms               BIGINT,
-    caller_context_provided  VARCHAR(3),
-    model_called             VARCHAR(3),
+    operation_id     CHAR(48)    NOT NULL,
+    decision         VARCHAR(7)  NOT NULL,
+    reason_code      VARCHAR(34) NOT NULL,
+    review_reason    VARCHAR(20) NOT NULL,
+    policy_revision  BIGINT      NOT NULL,
     CONSTRAINT pk_operation_decision PRIMARY KEY (operation_id),
     CONSTRAINT fk_operation_decision_op FOREIGN KEY (operation_id) REFERENCES operation (id),
     CONSTRAINT ck_operation_decision_kind CHECK (CASE WHEN decision = 'EXECUTE' THEN 1 WHEN decision = 'REVIEW' THEN 1 WHEN decision = 'DENY' THEN 1 ELSE 0 END = 1),
     CONSTRAINT ck_operation_decision_reason CHECK (CASE WHEN reason_code = 'POLICY_DENIED' THEN 1 WHEN reason_code = 'TEST_SERVER_BYPASS' THEN 1 WHEN reason_code = 'SOURCE_EXECUTION_NOT_ENABLED' THEN 1 WHEN reason_code = 'SOURCE_PRIVILEGE_POLICY_REVIEW' THEN 1 WHEN reason_code = 'SOURCE_COMMAND_POLICY_REVIEW' THEN 1 WHEN reason_code = 'SUDO_NOT_ENABLED' THEN 1 WHEN reason_code = 'COMMAND_SET' THEN 1 WHEN reason_code = 'DISCLOSURE_NOT_ENABLED' THEN 1 WHEN reason_code = 'CONTEXT_REQUIRED' THEN 1 WHEN reason_code = 'SENSITIVE_INPUT' THEN 1 WHEN reason_code = 'SOURCE_EVIDENCE_TOO_LARGE' THEN 1 WHEN reason_code = 'BUDGET_EXHAUSTED' THEN 1 WHEN reason_code = 'POLICY_CHANGED' THEN 1 WHEN reason_code = 'EVALUATION_UNAVAILABLE' THEN 1 WHEN reason_code = 'MODEL_PASSED' THEN 1 WHEN reason_code = 'MODEL_REVIEW' THEN 1 WHEN reason_code = 'OBSERVATION_ONLY' THEN 1 WHEN reason_code = 'EVALUATION_FAILED' THEN 1 WHEN reason_code = 'EXECUTION_BUSY' THEN 1 WHEN reason_code = 'EXECUTION_START_FAILED' THEN 1 WHEN reason_code = 'READ_ONLY' THEN 1 WHEN reason_code = 'AUTOMATIC_UPLOAD' THEN 1 WHEN reason_code = 'AUTOMATIC_DOWNLOAD' THEN 1 WHEN reason_code = 'NO_MATCHING_RULE' THEN 1 WHEN reason_code = 'AGENT_CLI_REVIEW' THEN 1 ELSE 0 END = 1),
-    CONSTRAINT ck_operation_decision_review CHECK (CASE WHEN review_reason = 'NONE' THEN 1 WHEN review_reason = 'EXECUTION_DISABLED' THEN 1 WHEN review_reason = 'THRESHOLD_MISSING' THEN 1 WHEN review_reason = 'MODEL_MISMATCH' THEN 1 WHEN review_reason = 'QUESTION_MISMATCH' THEN 1 WHEN review_reason = 'BASIS_MISMATCH' THEN 1 WHEN review_reason = 'HIGH_RISK' THEN 1 WHEN review_reason = 'BELOW_THRESHOLD' THEN 1 ELSE 0 END = 1),
-    CONSTRAINT ck_operation_decision_provider CHECK (CASE WHEN provider IS NULL THEN 1 WHEN provider = 'JEV' THEN 1 WHEN provider = 'LUNA' THEN 1 WHEN provider = 'SONNET' THEN 1 ELSE 0 END = 1),
-    CONSTRAINT ck_operation_decision_label CHECK (CASE WHEN assessed_label IS NULL THEN 1 WHEN assessed_label = 'LOW_RISK' THEN 1 WHEN assessed_label = 'HIGH_RISK' THEN 1 ELSE 0 END = 1),
-    CONSTRAINT ck_operation_decision_called CHECK (CASE WHEN caller_context_provided IS NULL THEN 1 WHEN caller_context_provided = 'YES' THEN 1 WHEN caller_context_provided = 'NO' THEN 1 ELSE 0 END = 1),
-    CONSTRAINT ck_operation_decision_model CHECK (CASE WHEN model_called IS NULL THEN 1 WHEN model_called = 'YES' THEN 1 WHEN model_called = 'NO' THEN 1 ELSE 0 END = 1)
-);
-CREATE TABLE operation_decision_attempt (
-    operation_id    CHAR(48)     NOT NULL,
-    attempt_no      INTEGER      NOT NULL,
-    provider        VARCHAR(6)   NOT NULL,
-    status          VARCHAR(11)  NOT NULL,
-    reason          VARCHAR(20),
-    failure_reason  VARCHAR(24),
-    diagnostic      VARCHAR(40),
-    CONSTRAINT pk_operation_decision_attempt PRIMARY KEY (operation_id, attempt_no),
-    CONSTRAINT fk_operation_decision_attempt FOREIGN KEY (operation_id) REFERENCES operation_decision (operation_id),
-    CONSTRAINT ck_operation_attempt_provider CHECK (CASE WHEN provider = 'JEV' THEN 1 WHEN provider = 'LUNA' THEN 1 WHEN provider = 'SONNET' THEN 1 ELSE 0 END = 1),
-    CONSTRAINT ck_operation_attempt_status CHECK (status = 'UNAVAILABLE')
-);
-CREATE TABLE operation_decision_command (
-    operation_id  CHAR(48)     NOT NULL,
-    position      INTEGER      NOT NULL,
-    command_name  VARCHAR(512) NOT NULL,
-    CONSTRAINT pk_operation_decision_command PRIMARY KEY (operation_id, position),
-    CONSTRAINT fk_operation_decision_command FOREIGN KEY (operation_id) REFERENCES operation_decision (operation_id)
+    CONSTRAINT ck_operation_decision_review CHECK (CASE WHEN review_reason = 'NONE' THEN 1 WHEN review_reason = 'EXECUTION_DISABLED' THEN 1 WHEN review_reason = 'THRESHOLD_MISSING' THEN 1 WHEN review_reason = 'MODEL_MISMATCH' THEN 1 WHEN review_reason = 'QUESTION_MISMATCH' THEN 1 WHEN review_reason = 'BASIS_MISMATCH' THEN 1 WHEN review_reason = 'HIGH_RISK' THEN 1 WHEN review_reason = 'BELOW_THRESHOLD' THEN 1 ELSE 0 END = 1)
 );
 
 -- Settled result (2.x job.result / outcome, operation-store.mjs:261-269, public-contract.mjs:24-46, 119-143). result_texts is a long-text column, added at the end of this script.

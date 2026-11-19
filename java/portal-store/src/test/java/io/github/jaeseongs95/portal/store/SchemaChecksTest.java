@@ -68,10 +68,8 @@ class SchemaChecksTest {
         jdbc.update("INSERT INTO operation_upload (operation_id, artifact_id, remote_path, file_name, size_bytes, sha256, overwrite_mode, elevation, upload_protocol)"
             + " VALUES ('" + OP + "', '" + ARTIFACT + "', '/tmp/a', 'a', 1, '" + HEX + "', 'REPLACE', 'NONE', 'UNSPECIFIED')");
         jdbc.update("INSERT INTO operation_download (operation_id, remote_path, elevation, caller_context, display_context) VALUES ('" + OP + "', '/tmp/a', 'NONE', '', '')");
-        jdbc.update("INSERT INTO operation_decision (operation_id, decision, reason_code, review_reason, policy_revision, provider, assessed_label, caller_context_provided,"
-            + " model_called) VALUES ('" + OP + "', 'EXECUTE', 'COMMAND_SET', 'NONE', 0, 'JEV', 'LOW_RISK', 'YES', 'NO')");
-        jdbc.update("INSERT INTO operation_decision_attempt (operation_id, attempt_no, provider, status) VALUES ('" + OP + "', 1, 'JEV', 'UNAVAILABLE')");
-        jdbc.update("INSERT INTO operation_decision_command (operation_id, position, command_name) VALUES ('" + OP + "', 1, 'ls')");
+        jdbc.update("INSERT INTO operation_decision (operation_id, decision, reason_code, review_reason, policy_revision) VALUES ('" + OP
+            + "', 'EXECUTE', 'COMMAND_SET', 'NONE', 0)");
         jdbc.update("INSERT INTO operation_result (operation_id, result_kind, result_flag, exec_reason, remote_state, exit_kind, exit_code, signal_delivery, cleanup,"
             + " exec_reconciliation, output_state, capture, stdout_truncated, stderr_truncated, failure_kind, failure_stage, failure_code, failure_remote_outcome, dispatch_kind,"
             + " dispatch_reason, dispatch_stage, evidence_kind, evidence_exit_code, result_texts) VALUES ('" + OP + "', 'EXECUTED', 'OK', 'EXIT', 'EXITED', 'EXITED', 0,"
@@ -89,12 +87,10 @@ class SchemaChecksTest {
         jdbc.update("INSERT INTO command_output (id, execution_id, state, expires_at, charge_bytes, stream_state, stream_truncated, version) VALUES ('" + OUTPUT + "', '" + OP
             + "', 'PENDING', " + STAMP + ", 1, 'OPEN', 'COMPLETE', 1)");
         jdbc.update("INSERT INTO command_output_format (output_id, format, offset_bytes, size_bytes, sha256) VALUES ('" + OUTPUT + "', 'JSON', 0, 1, '" + HEX + "')");
-        jdbc.update("INSERT INTO command_policy_rule (target_id, target_connection, rule_revision, profile, os, external_disclosure, model_execution, automatic_uploads,"
-            + " automatic_downloads, automatic_sudo, test_server, source_contract, fallback) VALUES ('alpha', '" + HEX + "', 1, 'default', 'LINUX', 'ON', 'ON', 'OFF', 'OFF',"
-            + " 'OFF', 'OFF', 'NONE', 'NONE')");
+        jdbc.update("INSERT INTO command_policy_rule (target_id, target_connection, rule_revision, profile, os, automatic_uploads,"
+            + " automatic_downloads, automatic_sudo, test_server, source_contract) VALUES ('alpha', '" + HEX + "', 1, 'default', 'LINUX', 'OFF', 'OFF',"
+            + " 'OFF', 'OFF', 'NONE')");
         jdbc.update("INSERT INTO command_policy_name (target_id, list_kind, position, command_name) VALUES ('alpha', 'ALLOWED', 1, 'ls')");
-        jdbc.update("INSERT INTO command_policy_threshold (target_id, provider, model, question_version, basis, min_low_risk, validation_ref) VALUES ('alpha', 'JEV',"
-            + " 'jev-1.14.0', 'V5', 'SAFETY_PROBABILITY_V1', 0.9, 'ref')");
         jdbc.update("INSERT INTO agent_cli_request (operation_id, provider, action, package_name, release_version, release_tarball, release_integrity, release_digest,"
             + " expected_installation_revision, intent_digest, plan_expires_at, remote_state, remote_error) VALUES ('" + OP + "', 'CODEX', 'INSTALL', 'p', '1.0.0', 'https://x', 'sha512-x',"
             + " 'sha256:" + HEX + "', '" + HEX + "', 'sha256:" + HEX + "', " + STAMP + ", 'FAILED', 'INSTALL_FAILED')");
@@ -110,9 +106,7 @@ class SchemaChecksTest {
             new Column("operation", "audit_failure"), new Column("operation_event", "state"), new Column("operation_source", "elevation"),
             new Column("operation_upload", "overwrite_mode"), new Column("operation_upload", "elevation"), new Column("operation_upload", "upload_protocol"),
             new Column("operation_download", "elevation"), new Column("operation_decision", "decision"), new Column("operation_decision", "reason_code"),
-            new Column("operation_decision", "review_reason"), new Column("operation_decision", "provider"), new Column("operation_decision", "assessed_label"),
-            new Column("operation_decision", "caller_context_provided"), new Column("operation_decision", "model_called"),
-            new Column("operation_decision_attempt", "provider"), new Column("operation_decision_attempt", "status"), new Column("operation_result", "result_kind"),
+            new Column("operation_decision", "review_reason"), new Column("operation_result", "result_kind"),
             new Column("operation_result", "result_flag"), new Column("operation_result", "exec_reason"), new Column("operation_result", "remote_state"),
             new Column("operation_result", "exit_kind"), new Column("operation_result", "signal_delivery"), new Column("operation_result", "cleanup"),
             new Column("operation_result", "exec_reconciliation"), new Column("operation_result", "output_state"), new Column("operation_result", "capture"),
@@ -123,11 +117,10 @@ class SchemaChecksTest {
             new Column("artifact", "elevation"), new Column("artifact", "retention"), new Column("artifact", "consume_reason"), new Column("staged_action", "action"),
             new Column("staged_action", "state"), new Column("staged_action", "overwrite_mode"), new Column("staged_action", "elevation"),
             new Column("command_output", "state"), new Column("command_output", "stream_state"), new Column("command_output", "stream_truncated"),
-            new Column("command_output_format", "format"), new Column("command_policy_rule", "os"), new Column("command_policy_rule", "external_disclosure"),
-            new Column("command_policy_rule", "model_execution"), new Column("command_policy_rule", "automatic_uploads"),
+            new Column("command_output_format", "format"), new Column("command_policy_rule", "os"),
+            new Column("command_policy_rule", "automatic_uploads"),
             new Column("command_policy_rule", "automatic_downloads"), new Column("command_policy_rule", "automatic_sudo"), new Column("command_policy_rule", "test_server"),
-            new Column("command_policy_rule", "source_contract"), new Column("command_policy_rule", "fallback"), new Column("command_policy_name", "list_kind"),
-            new Column("command_policy_threshold", "provider"), new Column("command_policy_threshold", "question_version"), new Column("command_policy_threshold", "basis"),
+            new Column("command_policy_rule", "source_contract"), new Column("command_policy_name", "list_kind"),
             new Column("agent_cli_request", "provider"), new Column("agent_cli_request", "action"), new Column("agent_cli_request", "remote_state"),
             new Column("agent_cli_request", "remote_error"));
     }
@@ -181,7 +174,6 @@ class SchemaChecksTest {
         assertThatThrownBy(() -> inSavepoint("UPDATE artifact_chunk SET size_bytes = 262145")).isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> inSavepoint("UPDATE command_policy SET id = 2")).isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> inSavepoint("UPDATE command_policy_rule SET rule_revision = 0")).isInstanceOf(DataIntegrityViolationException.class);
-        assertThatThrownBy(() -> inSavepoint("UPDATE command_policy_threshold SET min_low_risk = 0.5")).isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> inSavepoint("UPDATE operation_result SET exit_kind = 'SIGNALED'")).as("a signal exit needs a signal name").isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> inSavepoint("UPDATE operation SET input_digest = '" + HEX + "'")).as("only an agent CLI operation has an input digest")
             .isInstanceOf(DataIntegrityViolationException.class);
@@ -204,8 +196,6 @@ class SchemaChecksTest {
     @DisplayName("S-D0119-10: every decision reason of the domain is accepted by the column of the stored decision")
     void everyDecisionReasonIsAccepted() {
         for (io.github.jaeseongs95.portal.domain.operation.DecisionReason reason : io.github.jaeseongs95.portal.domain.operation.DecisionReason.values()) {
-            jdbc.update("DELETE FROM operation_decision_command");
-            jdbc.update("DELETE FROM operation_decision_attempt");
             jdbc.update("DELETE FROM operation_decision");
             jdbc.update("INSERT INTO operation_decision (operation_id, decision, reason_code, review_reason, policy_revision) VALUES ('" + OP + "', '" + reason.kind().name()
                 + "', '" + reason.name() + "', 'NONE', 0)");

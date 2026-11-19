@@ -87,14 +87,14 @@ class JsonlAuditLogTest {
         try (JsonlAuditLog log = new JsonlAuditLog(new AuditFileLocation(path), CLOCK, mapper, TestStorage.rules())) {
             assertThat(path).exists();
             log.append(new AuditEvent(AuditAction.SUBMITTED, ID, "first"));
-            log.append(new AuditEvent(AuditAction.COMMAND_DECISION, ID, "second"));
+            log.append(new AuditEvent(AuditAction.APPROVED, ID, "second"));
         }
 
         List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8);
 
         assertThat(lines).hasSize(2);
         assertThat(mapper.readValue(lines.get(0), Parsed.class)).isEqualTo(new Parsed("2026-11-12T00:00:00Z", "submitted", ID.value(), "first"));
-        assertThat(mapper.readValue(lines.get(1), Parsed.class)).isEqualTo(new Parsed("2026-11-12T00:00:00Z", "command-decision", ID.value(), "second"));
+        assertThat(mapper.readValue(lines.get(1), Parsed.class)).isEqualTo(new Parsed("2026-11-12T00:00:00Z", "approved", ID.value(), "second"));
     }
 
     @Test
@@ -104,14 +104,14 @@ class JsonlAuditLogTest {
         Files.writeString(path, "{\"kept\":true}\n", StandardCharsets.UTF_8);
         String note = "line one\nline \"two\" 승인";
         try (JsonlAuditLog log = new JsonlAuditLog(new AuditFileLocation(path), CLOCK, mapper, TestStorage.rules())) {
-            log.append(new AuditEvent(AuditAction.MAINTENANCE_RELEASED, ID, note));
+            log.append(new AuditEvent(AuditAction.COMPLETED, ID, note));
         }
 
         List<String> lines = Files.readAllLines(path, StandardCharsets.UTF_8);
 
         assertThat(lines).hasSize(2);
         assertThat(lines.get(0)).isEqualTo("{\"kept\":true}");
-        assertThat(mapper.readValue(lines.get(1), Parsed.class)).isEqualTo(new Parsed("2026-11-12T00:00:00Z", "maintenance-released", ID.value(), note));
+        assertThat(mapper.readValue(lines.get(1), Parsed.class)).isEqualTo(new Parsed("2026-11-12T00:00:00Z", "completed", ID.value(), note));
     }
 
     /** Takes at most {@code chunk} bytes per write (0 takes none) and keeps what it took. */

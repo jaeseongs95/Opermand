@@ -5,7 +5,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
@@ -22,20 +21,13 @@ import org.springframework.transaction.annotation.Transactional;
 
 import io.github.jaeseongs95.portal.domain.command.CommandNames;
 import io.github.jaeseongs95.portal.domain.command.CommandPolicyDocument;
-import io.github.jaeseongs95.portal.domain.command.ConfidenceThreshold;
-import io.github.jaeseongs95.portal.domain.command.EvaluatorProvider;
-import io.github.jaeseongs95.portal.domain.command.Fallback;
 import io.github.jaeseongs95.portal.domain.command.LinuxPolicyName;
 import io.github.jaeseongs95.portal.domain.command.PolicyName;
 import io.github.jaeseongs95.portal.domain.command.PolicySnapshot;
-import io.github.jaeseongs95.portal.domain.command.ProbabilityThreshold;
-import io.github.jaeseongs95.portal.domain.command.QuestionVersion;
 import io.github.jaeseongs95.portal.domain.command.RuleLookup;
 import io.github.jaeseongs95.portal.domain.command.SourceContract;
 import io.github.jaeseongs95.portal.domain.command.TargetPolicy;
 import io.github.jaeseongs95.portal.domain.command.TargetRule;
-import io.github.jaeseongs95.portal.domain.command.ThresholdTerms;
-import io.github.jaeseongs95.portal.domain.command.Thresholds;
 import io.github.jaeseongs95.portal.domain.command.WindowsPolicyName;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.TargetId;
@@ -69,9 +61,9 @@ class JdbcCommandPolicyStoreTest {
     }
 
     @Test
-    @DisplayName("S2-DB-08: a replaced policy is read back equal (names with their order, both threshold bases, Windows names) at the next revision")
+    @DisplayName("S2-DB-08: a replaced policy is read back equal (names with their order, Windows names) at the next revision")
     void aReplacedPolicyIsReadBackEqual() {
-        CommandPolicyDocument document = new CommandPolicyDocument(List.of(linuxRule("alpha", 'a', List.of("ls", "cat", "df"), List.of("rm"), bothBases()),
+        CommandPolicyDocument document = new CommandPolicyDocument(List.of(linuxRule("alpha", 'a', List.of("ls", "cat", "df"), List.of("rm")),
             windowsRule("beta", 'b', List.of("powershell.exe", "Get-ChildItem.exe"))));
 
         PolicySnapshot returned = store.replace(document, 0);
@@ -84,7 +76,7 @@ class JdbcCommandPolicyStoreTest {
     @Test
     @DisplayName("S2-DB-08: a replace with a stale expected revision is refused and changes nothing")
     void aStaleReplaceIsRefused() {
-        CommandPolicyDocument first = new CommandPolicyDocument(List.of(linuxRule("alpha", 'a', List.of("ls"), List.of(), Thresholds.none())));
+        CommandPolicyDocument first = new CommandPolicyDocument(List.of(linuxRule("alpha", 'a', List.of("ls"), List.of())));
         store.replace(first, 0);
 
         assertThatThrownBy(() -> store.replace(CommandPolicyDocument.empty(), 0)).isInstanceOf(RequestRefusedException.class);
@@ -96,16 +88,15 @@ class JdbcCommandPolicyStoreTest {
     @Test
     @DisplayName("S2-DB-08: a second replace removes the child rows of the rules that are gone")
     void aSecondReplaceRemovesTheOldChildRows() {
-        store.replace(new CommandPolicyDocument(List.of(linuxRule("alpha", 'a', List.of("ls", "cat"), List.of("rm"), bothBases()),
-            linuxRule("gamma", 'c', List.of("df"), List.of(), bothBases()))), 0);
-        CommandPolicyDocument second = new CommandPolicyDocument(List.of(linuxRule("gamma", 'c', List.of("uptime"), List.of(), Thresholds.none())));
+        store.replace(new CommandPolicyDocument(List.of(linuxRule("alpha", 'a', List.of("ls", "cat"), List.of("rm")),
+            linuxRule("gamma", 'c', List.of("df"), List.of()))), 0);
+        CommandPolicyDocument second = new CommandPolicyDocument(List.of(linuxRule("gamma", 'c', List.of("uptime"), List.of())));
 
         store.replace(second, 1);
 
         assertThat(store.current()).isEqualTo(new PolicySnapshot(2, second));
         assertThat(count("command_policy_rule")).isEqualTo(1);
         assertThat(count("command_policy_name")).isEqualTo(1);
-        assertThat(count("command_policy_threshold")).isZero();
     }
 
     @Test
@@ -115,7 +106,7 @@ class JdbcCommandPolicyStoreTest {
         TargetId betaId = new TargetId("beta");
         assertThat(store.targetPolicy(alphaId)).isEqualTo(TargetPolicy.none());
 
-        TargetRule alpha1 = linuxRule("alpha", 'a', List.of("ls"), List.of(), Thresholds.none());
+        TargetRule alpha1 = linuxRule("alpha", 'a', List.of("ls"), List.of());
         TargetRule beta1 = windowsRule("beta", 'b', List.of("powershell.exe"));
         store.replace(new CommandPolicyDocument(List.of(alpha1, beta1)), 0);
         assertThat(store.targetPolicy(alphaId)).isEqualTo(new TargetPolicy(1L, new RuleLookup.Rule(alpha1)));
@@ -128,7 +119,7 @@ class JdbcCommandPolicyStoreTest {
         assertThat(store.targetPolicy(betaId)).isEqualTo(new TargetPolicy(2L, new RuleLookup.Rule(beta2)));
 
         // Change only alpha -> alpha advances to 3, beta stays at 2
-        TargetRule alpha2 = linuxRule("alpha", 'a', List.of("ls", "cat"), List.of(), Thresholds.none());
+        TargetRule alpha2 = linuxRule("alpha", 'a', List.of("ls", "cat"), List.of());
         store.replace(new CommandPolicyDocument(List.of(alpha2, beta2)), 2);
         assertThat(store.targetPolicy(alphaId)).isEqualTo(new TargetPolicy(3L, new RuleLookup.Rule(alpha2)));
         assertThat(store.targetPolicy(betaId)).isEqualTo(new TargetPolicy(2L, new RuleLookup.Rule(beta2)));
@@ -149,8 +140,8 @@ class JdbcCommandPolicyStoreTest {
     @Transactional(propagation = Propagation.NOT_SUPPORTED)
     @DisplayName("S2-DB-08: two replaces with the same expected revision succeed once; the loser is refused and the child tables hold the winner only")
     void theSameExpectedRevisionWinsOnce() throws Exception {
-        CommandPolicyDocument documentA = new CommandPolicyDocument(List.of(linuxRule("alpha", 'a', List.of("ls", "cat"), List.of("rm"), bothBases())));
-        CommandPolicyDocument documentB = new CommandPolicyDocument(List.of(linuxRule("beta", 'b', List.of("df"), List.of(), Thresholds.none())));
+        CommandPolicyDocument documentA = new CommandPolicyDocument(List.of(linuxRule("alpha", 'a', List.of("ls", "cat"), List.of("rm"))));
+        CommandPolicyDocument documentB = new CommandPolicyDocument(List.of(linuxRule("beta", 'b', List.of("df"), List.of())));
         try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
             CyclicBarrier barrier = new CyclicBarrier(2);
             Future<Throwable> resultA = pool.submit(attempt(barrier, documentA));
@@ -166,7 +157,6 @@ class JdbcCommandPolicyStoreTest {
             assertThat(count("command_policy_rule")).isEqualTo(1);
             assertThat(count("command_policy_name")).isEqualTo(winner.targets().get(0).commands().names().size() + winner.targets().get(0).deniedCommands().names().size());
         } finally {
-            jdbc.update("DELETE FROM command_policy_threshold");
             jdbc.update("DELETE FROM command_policy_name");
             jdbc.update("DELETE FROM command_policy_rule");
             jdbc.update("UPDATE command_policy SET revision = 0 WHERE id = 1");
@@ -184,23 +174,15 @@ class JdbcCommandPolicyStoreTest {
         return jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Integer.class);
     }
 
-    private Thresholds bothBases() {
-        ThresholdTerms probability = new ThresholdTerms("model-one", QuestionVersion.V5, 0.9, "validation/one");
-        ThresholdTerms legacy = new ThresholdTerms("model-two", QuestionVersion.V3, 0.8, "validation/two");
-        return new Thresholds(Map.of(EvaluatorProvider.JEV, new ProbabilityThreshold(probability), EvaluatorProvider.LUNA, new ConfidenceThreshold(legacy, 0.75)));
-    }
-
-    private TargetRule linuxRule(String id, char revision, List<String> allowed, List<String> denied, Thresholds thresholds) {
+    private TargetRule linuxRule(String id, char revision, List<String> allowed, List<String> denied) {
         return new TargetRule(new TargetId(id), TargetConnection.of(String.valueOf(revision).repeat(64)), new ProfileAlias(id + "-write"), TargetOs.LINUX,
-            new CommandNames(linuxNames(allowed)), new CommandNames(linuxNames(denied)), Toggle.OFF, Toggle.ON, Toggle.OFF, Toggle.OFF, Toggle.ON, Toggle.OFF,
-            SourceContract.PYTHON_SOURCE_V1, Fallback.LUNA, thresholds);
+            new CommandNames(linuxNames(allowed)), new CommandNames(linuxNames(denied)), Toggle.OFF, Toggle.OFF, Toggle.ON, Toggle.OFF, SourceContract.PYTHON_SOURCE_V1);
     }
 
     private TargetRule windowsRule(String id, char revision, List<String> allowed) {
         List<PolicyName> names = allowed.stream().<PolicyName>map(WindowsPolicyName::new).toList();
         return new TargetRule(new TargetId(id), TargetConnection.of(String.valueOf(revision).repeat(64)), new ProfileAlias(id + "-write"), TargetOs.WINDOWS,
-            new CommandNames(names), CommandNames.none(), Toggle.ON, Toggle.OFF, Toggle.ON, Toggle.ON, Toggle.OFF, Toggle.ON, SourceContract.NONE, Fallback.NONE,
-            Thresholds.none());
+            new CommandNames(names), CommandNames.none(), Toggle.ON, Toggle.ON, Toggle.OFF, Toggle.ON, SourceContract.NONE);
     }
 
     private List<PolicyName> linuxNames(List<String> texts) {
