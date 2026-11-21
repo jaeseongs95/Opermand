@@ -46,31 +46,31 @@ class ProductScriptsTest {
     }
 
     @Test
-    @DisplayName("S-D0109-19: the scripts are directly under db/expand, numbered 1 to 7 without a gap; there is no db/migration, no folder per DBMS, and no contract script yet")
+    @DisplayName("S-D0109-19: the scripts are directly under db/expand, numbered 1 to 8 without a gap; there is no db/migration, no folder per DBMS, and no contract script yet")
     void theScriptsAreOneFolderOfConsecutiveNumbers() throws IOException {
-        assertThat(MigrationScript.load(Phase.EXPAND.location())).extracting(MigrationScript::version).containsExactlyElementsOf(LongStream.rangeClosed(1, 7).boxed().toList());
+        assertThat(MigrationScript.load(Phase.EXPAND.location())).extracting(MigrationScript::version).containsExactlyElementsOf(LongStream.rangeClosed(1, 8).boxed().toList());
 
         List<String> scripts = new ArrayList<>();
         for (Resource script : RESOURCES.getResources("classpath*:db/expand/**/*.sql")) {
             scripts.add(script.getURL().getPath());
         }
-        assertThat(scripts).hasSize(7).allMatch(path -> DIRECT_CHILD.matcher(path).matches());
+        assertThat(scripts).hasSize(8).allMatch(path -> DIRECT_CHILD.matcher(path).matches());
         assertThat(RESOURCES.getResources("classpath*:db/migration/**")).as("no Flyway-era folder, no folder per DBMS").isEmpty();
         assertThat(MigrationScript.load(Phase.CONTRACT.location())).as("the product has no contract script yet").isEmpty();
     }
 
     @Test
-    @DisplayName("S-D0109-20: on an embedded H2 database without a compatibility mode the whole set applies: mode REGULAR, 7 scripts, 23 tables, and no Flyway table")
+    @DisplayName("S-D0109-20: on an embedded H2 database without a compatibility mode the whole set applies: mode REGULAR, 8 scripts, 24 tables, and no Flyway table")
     void theWholeSetAppliesOnPlainH2() {
         assertThat(freshUrl()).doesNotContain("MODE=");
         DataSource database = freshDatabase();
         JdbcTemplate jdbc = new JdbcTemplate(database);
 
-        assertThat(new MigrationRunner(CLOCK, database).run(Phase.EXPAND)).isEqualTo(7);
+        assertThat(new MigrationRunner(CLOCK, database).run(Phase.EXPAND)).isEqualTo(8);
 
         assertThat(jdbc.queryForObject("SELECT SETTING_VALUE FROM INFORMATION_SCHEMA.SETTINGS WHERE SETTING_NAME = 'MODE'", String.class)).isEqualTo("REGULAR");
-        assertThat(history(jdbc, Phase.EXPAND)).containsExactly("1/1/SUCCEEDED", "2/1/SUCCEEDED", "3/1/SUCCEEDED", "4/1/SUCCEEDED", "5/1/SUCCEEDED", "6/1/SUCCEEDED", "7/1/SUCCEEDED");
-        assertThat(count(jdbc, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'PUBLIC' AND TABLE_TYPE = 'BASE TABLE'")).isEqualTo(23);
+        assertThat(history(jdbc, Phase.EXPAND)).containsExactly("1/1/SUCCEEDED", "2/1/SUCCEEDED", "3/1/SUCCEEDED", "4/1/SUCCEEDED", "5/1/SUCCEEDED", "6/1/SUCCEEDED", "7/1/SUCCEEDED", "8/1/SUCCEEDED");
+        assertThat(count(jdbc, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'PUBLIC' AND TABLE_TYPE = 'BASE TABLE'")).isEqualTo(24);
         assertThat(tableExists(jdbc, "PUBLIC", "flyway_schema_history")).isFalse();
     }
 

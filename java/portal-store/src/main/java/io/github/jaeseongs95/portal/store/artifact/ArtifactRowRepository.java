@@ -30,12 +30,22 @@ interface ArtifactRowRepository extends CrudRepository<ArtifactRow, String> {
     int resizeDownload(@Param("id") String id, @Param("size") long size);
 
     /**
-     * Moves a row that is {@code STAGING} or {@code READY} to {@code DELETING} in one statement (the version moves with it, so a concurrent step of the optimistic lock loses).
-     * It changes one row when the row exists in one of those states, and none otherwise (the row is gone, already {@code DELETING}, in use or consumed).
+     * Moves a row that is {@code STAGING} or {@code READY} and that nobody keeps to {@code DELETING} in one statement (the version moves with it, so a concurrent step of the
+     * optimistic lock loses). It changes one row when the row exists in one of those states and is {@code RELEASABLE}, and none otherwise (the row is gone, already
+     * {@code DELETING}, in use, consumed, or pinned by a submitted operation). The retention is part of the condition and not of an earlier read: a reap that listed the row as
+     * expired and was overtaken by a submit that pinned it must not delete the bytes a submitted operation needs (defect D-0095).
      */
     @Modifying
-    @Query("UPDATE artifact SET state = 'DELETING', version = version + 1 WHERE id = :id AND state IN ('STAGING', 'READY')")
+    @Query("UPDATE artifact SET state = 'DELETING', version = version + 1 WHERE id = :id AND state IN ('STAGING', 'READY') AND retention = 'RELEASABLE'")
     int markDeleting(@Param("id") String id);
+
+    /**
+     * Takes the row lock of the artifact budget until the transaction ends (defect D-0058): the reservation that holds it is the only one that reads the sum of the charges and
+     * writes its row, and the next one reads the sum after that row is committed. It changes the one row of the budget, and none when the script of the gate was not applied.
+     */
+    @Modifying
+    @Query("UPDATE budget_gate SET version = version + 1 WHERE scope = 'ARTIFACT'")
+    int takeBudgetGate();
 
     /**
      * What the rows charge now: a consumed row and an empty file charge one byte each (2.x {@code artifacts.mjs:18}). A row in {@code DELETING} or {@code CONSUMING} charges nothing: its bytes

@@ -75,16 +75,16 @@ class ExpandOnStartTest {
 
         runnerOn(url).run(first -> {
             assertThat(first).hasNotFailed();
-            assertThat(first.getBean(ExpandOnStart.class).applied()).isEqualTo(7);
+            assertThat(first.getBean(ExpandOnStart.class).applied()).isEqualTo(8);
             JdbcTemplate jdbc = new JdbcTemplate(first.getBean(DataSource.class));
-            assertThat(history(jdbc, Phase.EXPAND)).hasSize(7);
+            assertThat(history(jdbc, Phase.EXPAND)).hasSize(8);
             assertThat(tableExists(jdbc, Migrations.SCHEMA, "contract_history")).as("a start never applies contract").isFalse();
         });
 
         runnerOn(url).run(second -> {
             assertThat(second).hasNotFailed();
             assertThat(second.getBean(ExpandOnStart.class).applied()).isZero();
-            assertThat(history(new JdbcTemplate(second.getBean(DataSource.class)), Phase.EXPAND)).as("no row was added").hasSize(7);
+            assertThat(history(new JdbcTemplate(second.getBean(DataSource.class)), Phase.EXPAND)).as("no row was added").hasSize(8);
         });
     }
 

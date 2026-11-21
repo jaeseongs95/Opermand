@@ -39,8 +39,8 @@ import io.github.jaeseongs95.portal.domain.id.OperationIdGenerator;
  * writer that lost the race is refused with {@link OperationErrorCode#OUTPUT_VERSION_CONFLICT} (stage 3 design D3-13: another writer changed the record first). A write
  * to an output that is missing or in the wrong state, which includes the loser that reads the row after the winner committed, is refused with
  * {@link ExecutionErrorCode#OUTPUT_CAPTURE_FAILED} (the capture of that output failed). The budget check of {@link #reserve} reads the sum of the charges and writes the new row in one
- * transaction; the dispatcher is a single scheduler thread (design 13.2), so two reservations do not race, and an overrun by a concurrent second writer would be one
- * output.
+ * transaction, after the row lock of the output budget gate ({@code budget_gate}, defect D-0058) was taken, so two reservations that run at the same moment are judged one after
+ * the other and the count and the budget are never passed by two reservations that read the same figures.
  */
 @Repository
 public class JdbcOutputManifestStore implements OutputManifestStore {
@@ -195,6 +195,10 @@ public class JdbcOutputManifestStore implements OutputManifestStore {
     }
 
     private OutputReservation reserveRow(OutputBinding binding, long expectedBytes, Instant at, DiskSpace disk) {
+        // The gate first: the count and the sum below are read after every reservation that came earlier has committed its row (defect D-0058).
+        if (outputs.takeBudgetGate() != 1) {
+            throw new IllegalStateException("The budget gate of the outputs is missing: the migration V8 was not applied");
+        }
         if (expectedBytes > limits.maxOutputBytes()) {
             return new OutputReservation.TooLarge(limits.maxOutputBytes());
         }
