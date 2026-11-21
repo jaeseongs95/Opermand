@@ -62,17 +62,29 @@ class R:
 
 
 def agent(args, env=None, timeout=60, endpoint=SOCK):
+    """Run the CLI with output going to temp files: a daemon spawned by `connect`/`daemon start` may inherit
+    pipes and would block a pipe-based read forever."""
+    import tempfile
     cmd = [AGENT] + (["--endpoint", endpoint] if endpoint else []) + args
     e = dict(os.environ)
     if env:
         e.update(env)
     t0 = time.time()
-    try:
-        p = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=e, timeout=timeout,
-                           stdin=subprocess.DEVNULL)
-        return R(p.returncode, p.stdout, p.stderr, int((time.time() - t0) * 1000))
-    except subprocess.TimeoutExpired:
-        return R(-999, "", "timeout after %ss" % timeout, int((time.time() - t0) * 1000))
+    with tempfile.TemporaryFile() as fo, tempfile.TemporaryFile() as fe:
+        p = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=fo, stderr=fe, env=e)
+        try:
+            code = p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.wait()
+            code = -999
+        fo.seek(0)
+        fe.seek(0)
+        out = fo.read().decode("utf-8", "replace")
+        err = fe.read().decode("utf-8", "replace")
+    if code == -999:
+        err += " timeout after %ss" % timeout
+    return R(code, out, err, int((time.time() - t0) * 1000))
 
 
 def status(endpoint=SOCK):

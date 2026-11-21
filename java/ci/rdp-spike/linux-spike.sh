@@ -89,8 +89,10 @@ CERT="$(find "$HOME/.config/freerdp" -name '*.crt' 2>/dev/null | head -1)"
 say "server cert: ${CERT:-not found}"
 
 export AGENT ART RECV MODE RDP_PW="$PW" SERVER_CERT="${CERT:-}"
-python3 "$HERE/linux-driver.py" 2>&1 | tee "$ART/driver.log"
-say "driver exit: ${PIPESTATUS[0]}"
+timeout 1500 python3 "$HERE/linux-driver.py" > "$ART/driver.log" 2>&1
+say "driver exit: $?"
+tail -n 40 "$ART/driver.log"
+pkill -f ironrdp-agent
 cp -r "$RECV" "$ART/receiver-logs" 2>/dev/null
 [ -f "$HOME/.local/state/ironrdp-agent/daemon.log" ] && cp "$HOME/.local/state/ironrdp-agent/daemon.log" "$ART/daemon.log"
 ls -la "$HOME/.local/state/ironrdp-agent" "$HOME/.config/ironrdp-agent" > "$ART/agent-state-files.txt" 2>&1

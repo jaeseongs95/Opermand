@@ -4,14 +4,14 @@
 $script:Results = [System.Collections.Generic.List[object]]::new()
 $script:Secrets = [System.Collections.Generic.List[string]]::new()
 $script:AgentExe = $null
-$script:ArtifactsDir = $null
+$script:ArtDir = $null
 $script:LogFile = $null
 $script:Utf8 = [System.Text.UTF8Encoding]::new($false)
 
 function Initialize-Spike {
     param([Parameter(Mandatory)][string] $AgentExe, [Parameter(Mandatory)][string] $ArtifactsDir)
     $script:AgentExe = $AgentExe
-    $script:ArtifactsDir = $ArtifactsDir
+    $script:ArtDir = $ArtifactsDir
     New-Item -ItemType Directory -Force -Path $ArtifactsDir | Out-Null
     $script:LogFile = Join-Path $ArtifactsDir 'spike.log'
     New-Item -ItemType File -Force -Path $script:LogFile | Out-Null
@@ -43,7 +43,7 @@ function Write-Log {
 
 function Save-Text {
     param([string] $Name, [string] $Text)
-    $path = Join-Path $script:ArtifactsDir $Name
+    $path = Join-Path $script:ArtDir $Name
     New-Item -ItemType Directory -Force -Path (Split-Path $path -Parent) | Out-Null
     [System.IO.File]::WriteAllText($path, (Protect-Text $Text), $script:Utf8)
 }
@@ -59,7 +59,7 @@ function Add-Result {
     $row = [ordered]@{ item = $Item; check = $Check; verdict = $Verdict; detail = (Protect-Text $Detail) }
     $script:Results.Add([pscustomobject]$row)
     $json = $row | ConvertTo-Json -Compress
-    Add-Content -Path (Join-Path $script:ArtifactsDir 'results.jsonl') -Value $json -Encoding utf8
+    Add-Content -Path (Join-Path $script:ArtDir 'results.jsonl') -Value $json -Encoding utf8
     Write-Host ("::notice title=RESULT item {0}::{1} => {2}: {3}" -f $Item, $Check, $Verdict, (Protect-Text $Detail).Split("`n")[0])
     Write-Log ("RESULT item={0} check='{1}' verdict={2} detail={3}" -f $Item, $Check, $Verdict, $Detail)
 }
