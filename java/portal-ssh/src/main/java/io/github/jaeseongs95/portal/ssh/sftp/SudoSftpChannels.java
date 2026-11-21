@@ -123,6 +123,23 @@ public class SudoSftpChannels {
     }
 
     /**
+     * Opens the elevated channel of a transfer: as {@link #open(ClientSession, RemoteTarget)}, and a stop of the transfer that comes while a channel is being opened
+     * (the one that looks for the program, or the one that runs it) cancels that open at once (defect SSH_PORTAL-D-0107).
+     *
+     * @param session an authenticated session
+     * @param target the target of the session
+     * @param watch the watch of the transfer
+     * @return the open client, or why there is none
+     */
+    public Opening open(ClientSession session, RemoteTarget target, TransferWatch watch) {
+        try {
+            return GuardedSftpClient.whenOpening(opening -> watch.interruptWith(() -> opening.cancel()), () -> open(session, target));
+        } catch (IOException e) {
+            throw new IllegalStateException("The opening of an elevated channel reports its failures as a result, not as an exception", e);
+        }
+    }
+
+    /**
      * Opens the elevated channel on the session.
      *
      * @param session an authenticated session

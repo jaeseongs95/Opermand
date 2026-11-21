@@ -3,10 +3,13 @@ package io.github.jaeseongs95.portal.ssh.sftp;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.jaeseongs95.portal.app.remote.CancelSource;
+import io.github.jaeseongs95.portal.app.remote.TransferFailureCause;
 import io.github.jaeseongs95.portal.ssh.testkit.EmbeddedSshServer;
 import io.github.jaeseongs95.portal.ssh.testkit.SshTestClient;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import org.apache.sshd.client.session.ClientSession;
@@ -18,6 +21,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 /**
  * The SFTP channel whose open the client gave up (defect SSH_PORTAL-D-0108): MINA's client constructor waits for the answer of the server to the open of the channel for
@@ -64,6 +68,33 @@ class SftpChannelLeakTest {
         // The session still works: a new channel opens and speaks SFTP.
         try (SftpClient later = new SftpChannels().open(session)) {
             assertThat(later.stat("/").isDirectory()).isTrue();
+        }
+    }
+
+    @Test
+    @DisplayName("SSH_PORTAL-D-0107 a cancel that comes while the SFTP channel is being opened ends the wait at once: it does not run the 20 seconds of SFTP_CHANNEL_OPEN_TIMEOUT, the watch says CANCELLED, and the late channel is still closed")
+    void aCancelEndsTheWaitForTheOpen() throws Exception {
+        SftpModuleProperties.SFTP_CHANNEL_OPEN_TIMEOUT.set(client.sshClient(), Duration.ofSeconds(20));
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setDaemon(true);
+        scheduler.initialize();
+        try {
+            CancelSource cancel = new CancelSource();
+            TransferWatch watch = new TransferWatch(scheduler, Clock.systemUTC(), Duration.ofSeconds(120), cancel);
+            CompletableFuture<Void> release = server.holdChannelOpens();
+            // The server has the request and holds it: the client is waiting for the answer when the cancel comes (an event, not a sleep).
+            CompletableFuture<Void> cancelled = server.channelOpenRequests().whenAtLeast(1).thenAccept(requests -> cancel.cancel());
+            long started = System.nanoTime();
+
+            assertThatThrownBy(() -> new SftpChannels().open(session, watch)).isInstanceOf(IOException.class);
+
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).as("the wait ended with the cancel, not with the 20 second time limit").isLessThan(Duration.ofSeconds(10));
+            assertThat(cancelled).isCompleted();
+            assertThat(watch.fired()).contains(TransferFailureCause.CANCELLED);
+            release.complete(null);
+            assertThat(server.closedChannels().await(1, WAIT)).as("the channel that the server confirms late is closed").hasSize(1);
+        } finally {
+            scheduler.shutdown();
         }
     }
 }

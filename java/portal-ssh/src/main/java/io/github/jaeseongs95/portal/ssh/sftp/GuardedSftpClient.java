@@ -1,6 +1,7 @@
 package io.github.jaeseongs95.portal.ssh.sftp;
 
 import java.io.IOException;
+import java.util.function.Consumer;
 import org.apache.sshd.client.channel.ChannelSubsystem;
 import org.apache.sshd.client.channel.ClientChannel;
 import org.apache.sshd.client.future.OpenFuture;
@@ -29,6 +30,14 @@ class GuardedSftpClient extends DefaultSftpClient {
     }
 
     private static final ThreadLocal<Opening> CURRENT = new ThreadLocal<>();
+    /** What the caller of this thread wants done with the future of the open of the client's channel (for example: cancel it when the transfer is stopped). */
+    private static final ThreadLocal<Consumer<OpenFuture>> WHEN_OPENING = new ThreadLocal<>();
+
+    /** Work that opens SFTP channels and may throw. */
+    @FunctionalInterface
+    interface Work<T> {
+        T run() throws IOException;
+    }
 
     /** A creation of a client that may throw after its channel was opened. */
     @FunctionalInterface
@@ -38,6 +47,31 @@ class GuardedSftpClient extends DefaultSftpClient {
 
     protected GuardedSftpClient(ClientSession session) throws IOException {
         super(session, SftpVersionSelector.CURRENT, SftpErrorDataHandler.EMPTY);
+    }
+
+    /**
+     * Runs the work with a hook that is handed the future of the open of every client channel the work opens on this thread, as soon as the open request is written and
+     * before the constructor waits for the answer. A transfer uses it to cancel the open when the owner cancels or the time limit passes, so that the wait does not run its
+     * whole {@code SFTP_CHANNEL_OPEN_TIMEOUT} after the stop (defect SSH_PORTAL-D-0107).
+     *
+     * @param hook what to do with the future of an open
+     * @param work opens the clients
+     * @param <T> what the work returns
+     * @return what the work returned
+     * @throws IOException what the work threw
+     */
+    static <T> T whenOpening(Consumer<OpenFuture> hook, Work<T> work) throws IOException {
+        Consumer<OpenFuture> outer = WHEN_OPENING.get();
+        WHEN_OPENING.set(hook);
+        try {
+            return work.run();
+        } finally {
+            if (outer == null) {
+                WHEN_OPENING.remove();
+            } else {
+                WHEN_OPENING.set(outer);
+            }
+        }
     }
 
     /**
@@ -94,6 +128,10 @@ class GuardedSftpClient extends DefaultSftpClient {
         public synchronized OpenFuture open() throws IOException {
             OpenFuture opening = super.open();
             CURRENT.set(new Opening(this, opening));
+            Consumer<OpenFuture> hook = WHEN_OPENING.get();
+            if (hook != null) {
+                hook.accept(opening);
+            }
             return opening;
         }
     }

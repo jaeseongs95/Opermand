@@ -363,7 +363,7 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
 
     private Attempt attempt(SessionLease lease, RemoteTarget target, boolean elevated, TransferWatch watch) {
         if (elevated) {
-            return switch (sudoChannels.open(lease.session(), target)) {
+            return switch (sudoChannels.open(lease.session(), target, watch)) {
                 case SudoSftpChannels.Opening.Opened opened -> new Attempt.Ready(opened.client());
                 case SudoSftpChannels.Opening.NoServer noServer -> new Attempt.Refused(TransferErrorCode.INVALID_REQUEST);
                 case SudoSftpChannels.Opening.NotStarted notStarted -> new Attempt.Refused(TransferErrorCode.PERMISSION_DENIED);
@@ -375,7 +375,7 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
             };
         }
         try {
-            return new Attempt.Ready(channels.open(lease.session()));
+            return new Attempt.Ready(channels.open(lease.session(), watch));
         } catch (IOException e) {
             if (!lease.session().isOpen()) {
                 return lostBeforeWork(lease, watch, e);

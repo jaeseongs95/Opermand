@@ -31,6 +31,20 @@ public class SftpChannels {
     }
 
     /**
+     * Opens the subsystem channel of a transfer: as {@link #open(ClientSession)}, and a stop of the transfer (the owner's cancel or the time limit) that comes while the
+     * open is waited for cancels the open, so the wait ends at once and does not run its {@code SFTP_CHANNEL_OPEN_TIMEOUT} (defect SSH_PORTAL-D-0107). The channel of an open
+     * that was cancelled is closed when the server confirms it ({@link GuardedSftpClient}).
+     *
+     * @param session an authenticated session
+     * @param watch the watch of the transfer
+     * @return the SFTP client
+     * @throws IOException when the server refuses the subsystem, the open was cancelled or ran out of time, or the connection fails
+     */
+    public SftpClient open(ClientSession session, TransferWatch watch) throws IOException {
+        return GuardedSftpClient.whenOpening(opening -> watch.interruptWith(() -> opening.cancel()), () -> open(session));
+    }
+
+    /**
      * Closes a channel or a stream of the file transfer when the close must not change the result: the result is already known (the bytes were read, the channel was closed
      * to stop the transfer, the channel only looked), so a {@code close()} that fails is the channel's own business and is logged, never thrown (defect D-0013, case
      * S-D0013-01: an exception of a close that covered the result of a read). Nothing happens for {@code null}.
