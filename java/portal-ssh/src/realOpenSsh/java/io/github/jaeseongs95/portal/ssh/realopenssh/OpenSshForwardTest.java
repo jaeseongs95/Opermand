@@ -27,7 +27,6 @@ import java.io.IOException;
 import java.net.ConnectException;
 import java.net.InetAddress;
 import java.net.Socket;
-import java.net.SocketTimeoutException;
 import java.nio.file.Path;
 import java.time.Duration;
 import org.junit.jupiter.api.DisplayName;
@@ -81,17 +80,6 @@ class OpenSshForwardTest {
         Socket socket = new Socket(InetAddress.getByAddress(LOOPBACK), port);
         socket.setSoTimeout((int) WAIT.toMillis());
         return socket;
-    }
-
-    /** True when the connection ends (the end of the stream, or a reset) instead of carrying data. */
-    private static boolean readsToTheEnd(Socket client) {
-        try {
-            return client.getInputStream().read() < 0;
-        } catch (SocketTimeoutException e) {
-            return false; // nothing came and nothing ended: not what a refused target does
-        } catch (IOException e) {
-            return true;
-        }
     }
 
     /** The command of the target's shell that sends its standard input back and ends when the input ends. */
@@ -157,12 +145,10 @@ class OpenSshForwardTest {
             if (target.platform() == OpenSshTarget.Platform.LINUX) {
                 assertThat(refused).as("sshd of Linux answers a refused target at the open").isEqualTo(new ForwardOpenResult.Refused(TransferFailureCause.CHANNEL_OPEN_FAILED));
             } else if (refused instanceof ForwardOpenResult.Opened late) {
-                // Observed on the Windows runner (run 44904063661): OpenSSH for Windows confirms the channel before its connection to the target has failed, so the refusal
-                // shows on first use and not at the open. The forward is then a connection that ends at once, and its release must still confirm the close.
-                try (Socket client = connectTo(late.handle().localPort())) {
-                    assertThat(readsToTheEnd(client)).as("the target's refusal ended the connection").isTrue();
-                }
-                assertThat(late.handle().release()).isEqualTo(CleanupState.COMPLETE);
+                // Observed on the Windows runner (runs 44904063661 and 44904514533): OpenSSH for Windows confirms the channel although its connection to the target failed, and
+                // then neither sends data nor closes the channel (a read of 60 s saw nothing). So the refusal is not visible at the open on this server, and the owner cannot
+                // tell the forward from a working one that is silent. What the adapter owes is that the release still closes it and says so.
+                assertThat(late.handle().release()).as("the channel that the Windows server left open is closed and confirmed").isEqualTo(CleanupState.COMPLETE);
             } else {
                 assertThat(refused).isEqualTo(new ForwardOpenResult.Refused(TransferFailureCause.CHANNEL_OPEN_FAILED));
             }
