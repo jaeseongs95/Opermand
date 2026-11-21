@@ -35,6 +35,7 @@ import io.github.jaeseongs95.portal.app.remote.TransferFailureCause;
 import io.github.jaeseongs95.portal.app.remote.TransferLimits;
 import io.github.jaeseongs95.portal.app.remote.UploadRequest;
 import io.github.jaeseongs95.portal.app.remote.UploadResult;
+import io.github.jaeseongs95.portal.ssh.profile.TestFiles;
 import io.github.jaeseongs95.portal.domain.error.DispatchFailure;
 import io.github.jaeseongs95.portal.domain.error.DispatchReason;
 import io.github.jaeseongs95.portal.domain.error.DispatchRefusedException;
@@ -197,7 +198,7 @@ class ElevatedTransferTest {
 
         PermissionResult result = testBed.transfer().applyPermissions(request, testBed.control());
 
-        if (Files.getFileStore(root).supportsFileAttributeView(PosixFileAttributeView.class)) {
+        if (TestFiles.hasAbility("posix", Files.getFileStore(root).supportsFileAttributeView(PosixFileAttributeView.class))) {
             assertThat(result).isEqualTo(new PermissionResult.Applied());
             assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(file))).isEqualTo("rw-r-----");
         } else {
