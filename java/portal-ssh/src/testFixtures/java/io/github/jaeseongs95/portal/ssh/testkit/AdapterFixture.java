@@ -13,6 +13,8 @@ import io.github.jaeseongs95.portal.app.remote.CredentialPart;
 import io.github.jaeseongs95.portal.app.remote.ExecReply;
 import io.github.jaeseongs95.portal.app.remote.ExecutionControl;
 import io.github.jaeseongs95.portal.app.remote.ExecutionLimits;
+import io.github.jaeseongs95.portal.app.remote.ForwardRequest;
+import io.github.jaeseongs95.portal.app.remote.StreamRequest;
 import io.github.jaeseongs95.portal.app.remote.PreparedCommand;
 import io.github.jaeseongs95.portal.app.remote.ProfileLookup;
 import io.github.jaeseongs95.portal.app.remote.ProfileSource;
@@ -34,6 +36,9 @@ import io.github.jaeseongs95.portal.domain.target.TtyMode;
 import io.github.jaeseongs95.portal.ssh.exec.ChannelSignals;
 import io.github.jaeseongs95.portal.ssh.exec.ExecOutcomes;
 import io.github.jaeseongs95.portal.ssh.exec.MinaRemoteExecutor;
+import io.github.jaeseongs95.portal.ssh.exec.MinaRemoteStreamExecutor;
+import io.github.jaeseongs95.portal.ssh.forward.MinaRemoteForwarder;
+import io.github.jaeseongs95.portal.ssh.session.ChannelOpening;
 import io.github.jaeseongs95.portal.ssh.session.MinaClientFactory;
 import io.github.jaeseongs95.portal.ssh.session.ProxyJumpResolver;
 import io.github.jaeseongs95.portal.ssh.session.SessionConnector;
@@ -101,6 +106,8 @@ public final class AdapterFixture implements AutoCloseable {
     private final AdjustableClock clock = new AdjustableClock();
     private final SshSessionPool pool;
     private final MinaRemoteExecutor executor;
+    private final MinaRemoteForwarder forwarder;
+    private final MinaRemoteStreamExecutor streams;
 
     /** The host key events of the fixture: nobody listens (the policy's own tests read them). */
     private static final class QuietHostKeyEvents implements HostKeyEvents {
@@ -133,6 +140,9 @@ public final class AdapterFixture implements AutoCloseable {
         pool = new SshSessionPool(settings, connector, clock, taskExecutor, scheduler, reap);
         pool.afterPropertiesSet();
         executor = new MinaRemoteExecutor(pool, scheduler, taskExecutor, clock, new ChannelSignals(), settings, new ExecOutcomes());
+        ChannelOpening opening = new ChannelOpening(scheduler, clock);
+        forwarder = new MinaRemoteForwarder(pool, opening, scheduler, taskExecutor, clock);
+        streams = new MinaRemoteStreamExecutor(pool, opening, scheduler, clock, new ChannelSignals(), settings);
     }
 
     /** The 2.x defaults of {@link SshSettings} with a file of known hosts that is never read (the verifier of the fixture decides). */
@@ -169,6 +179,28 @@ public final class AdapterFixture implements AutoCloseable {
 
     public MinaRemoteExecutor executor() {
         return executor;
+    }
+
+    public MinaRemoteForwarder forwarder() {
+        return forwarder;
+    }
+
+    public MinaRemoteStreamExecutor streams() {
+        return streams;
+    }
+
+    /** A request to forward a loopback port to {@code host}:{@code port} through the profile {@code alias}. */
+    public static ForwardRequest forwardTo(String alias, String host, int port, ExecutionLimits limits) {
+        return new ForwardRequest(target(alias), host, port, limits);
+    }
+
+    /** A request to start the command line through the profile {@code alias} with its streams open; no standard input to start with. */
+    public static StreamRequest streamOf(String alias, String commandLine, ExecutionLimits limits, ExecReply reply) {
+        return new StreamRequest(target(alias), new PreparedCommand(commandLine, StdinBytes.none(), CommandKind.COMMAND), limits, reply);
+    }
+
+    private static RemoteTarget target(String alias) {
+        return new RemoteTarget(new TargetId("test"), TargetRevision.of("0".repeat(64)), new ProfileAlias(alias), AccessMode.READ_WRITE);
     }
 
     /** A password profile for a server and a user: no pinned key, no jump host, read and write, no terminal. */
