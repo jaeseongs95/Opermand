@@ -13,11 +13,11 @@ import java.util.regex.Pattern;
  */
 public record PosixPythonExecutable(String value) {
 
-    /** The interpreter 2.x ran on every Linux target. */
-    public static final PosixPythonExecutable DEFAULT = new PosixPythonExecutable("/usr/bin/python3");
-
     private static final int MAX_LENGTH = 512;
     private static final Pattern NAME = Pattern.compile("/(?:[^/]+/)*python(?:[0-9]+(?:\\.[0-9]+)*)?");
+
+    /** The interpreter 2.x ran on every Linux target. */
+    public static final PosixPythonExecutable DEFAULT = new PosixPythonExecutable("/usr/bin/python3");
 
     public PosixPythonExecutable {
         Objects.requireNonNull(value, "value");
