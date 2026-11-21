@@ -20,7 +20,7 @@ import org.springframework.test.context.TestConstructor;
 @Retention(RetentionPolicy.RUNTIME)
 @Target(ElementType.TYPE)
 @DataJdbcTest
-@Import({IdentifierQuoting.class, Savepoints.class, StoreMigration.class})
+@Import({IdentifierQuoting.class, Savepoints.class, StoreMigration.class, UtcTimestamps.class, UtcJdbcConversions.class})
 @TestConstructor(autowireMode = TestConstructor.AutowireMode.ALL)
 public @interface StoreTest {
 }

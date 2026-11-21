@@ -1,7 +1,7 @@
 package io.github.jaeseongs95.portal.store.cli;
 
-import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -17,6 +17,7 @@ import io.github.jaeseongs95.portal.app.journal.HistoryCursor;
 import io.github.jaeseongs95.portal.domain.error.HistoryErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
+import io.github.jaeseongs95.portal.store.UtcTimestamps;
 import io.github.jaeseongs95.portal.store.sql.SqlBuilder;
 
 /**
@@ -46,12 +47,14 @@ class AgentCliHistoryReader {
     private final AgentCliRequestRowRepository requests;
     private final AgentCliMapper mapper;
     private final SqlBuilder sql;
+    private final UtcTimestamps timestamps;
 
-    AgentCliHistoryReader(NamedParameterJdbcOperations jdbc, AgentCliRequestRowRepository requests, AgentCliMapper mapper, SqlBuilder sql) {
+    AgentCliHistoryReader(NamedParameterJdbcOperations jdbc, AgentCliRequestRowRepository requests, AgentCliMapper mapper, SqlBuilder sql, UtcTimestamps timestamps) {
         this.jdbc = jdbc;
         this.requests = requests;
         this.mapper = mapper;
         this.sql = sql;
+        this.timestamps = timestamps;
     }
 
     /** One entry of a page: the install record and the creation time of its operation. */
@@ -83,10 +86,12 @@ class AgentCliHistoryReader {
             .addValue("targetId", binding.targetId().value()).addValue("targetRevision", binding.targetRevision().hex())
             .addValue("profile", binding.profile().value()).addValue("limit", PAGE_SIZE + 1);
         if (cursor != null) {
-            parameters.addValue("createdAt", Timestamp.from(cursor.createdAt())).addValue("id", cursor.id().value());
+            parameters.addValue("createdAt", timestamps.write(cursor.createdAt())).addValue("id", cursor.id().value());
         }
+        // The column is read as a date and time (getObject with LocalDateTime), not as a java.sql.Timestamp: the driver makes a Timestamp in the zone of the JVM, which cannot
+        // hold a date and time that zone skips (D-0161).
         List<Key> keys = jdbc.query(statement(cursor != null), parameters,
-            (rows, number) -> new Key(new OperationId(rows.getString("operation_id")), rows.getTimestamp("created_at").toInstant()));
+            (rows, number) -> new Key(new OperationId(rows.getString("operation_id")), timestamps.read(rows.getObject("created_at", LocalDateTime.class))));
         boolean more = keys.size() > PAGE_SIZE;
         List<Key> pageKeys = more ? keys.subList(0, PAGE_SIZE) : keys;
         return new Slice(hits(pageKeys), more ? new HistoryCursor.After(pageKeys.get(pageKeys.size() - 1).createdAt(), pageKeys.get(pageKeys.size() - 1).id())
@@ -119,7 +124,7 @@ class AgentCliHistoryReader {
     }
 
     private void requireKnown(HistoryCursor.After cursor) {
-        MapSqlParameterSource parameters = new MapSqlParameterSource().addValue("id", cursor.id().value()).addValue("createdAt", Timestamp.from(cursor.createdAt()));
+        MapSqlParameterSource parameters = new MapSqlParameterSource().addValue("id", cursor.id().value()).addValue("createdAt", timestamps.write(cursor.createdAt()));
         Integer rows = jdbc.queryForObject(CURSOR_ROW, parameters, Integer.class);
         if (rows == null || rows < 1) {
             throw new RequestRefusedException(HistoryErrorCode.HISTORY_INVALID_CURSOR);
