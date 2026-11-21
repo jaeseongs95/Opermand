@@ -96,6 +96,10 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
             }
         } catch (OverlappingFileLockException e) {
             throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_BUSY, e);
+        } catch (FileAlreadyExistsException e) {
+            // Two first chunks of the same artifact arrive together: both saw no file, one created it, and this one lost the creation. That is a writer at work on the same file, which the
+            // caller may retry, and not a fault of the storage (defect D-0139).
+            throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_BUSY, e);
         } catch (UnsafeStorageException e) {
             throw unsafe(e);
         } catch (IOException e) {

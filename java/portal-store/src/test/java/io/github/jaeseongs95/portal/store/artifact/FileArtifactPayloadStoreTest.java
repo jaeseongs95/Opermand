@@ -16,6 +16,11 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import org.assertj.core.api.ThrowableAssert.ThrowingCallable;
@@ -359,6 +364,46 @@ class FileArtifactPayloadStoreTest {
 
         assertThat(store.length(id)).isEqualTo(2);
         assertThat(store.append(id, 2, new byte[] {3}).storedBytes()).isEqualTo(3);
+    }
+
+    @Test
+    @DisplayName("S-D0139-01 (D-0139): first chunks of the same artifact that arrive together give one winner, and every other one is told BUSY or CHUNK_CONFLICT, never a storage failure")
+    void firstChunksThatArriveTogetherAreNeverAStorageFailure(@TempDir Path dir) throws Exception {
+        FileArtifactPayloadStore store = storeIn(dir);
+        int writers = 8;
+        int rounds = 40;
+        byte[] chunk = fixtures.bytes(1024, 0x39);
+        try (ExecutorService pool = Executors.newFixedThreadPool(writers)) {
+            for (int round = 0; round < rounds; round++) {
+                ArtifactId id = ids.next();
+                CountDownLatch start = new CountDownLatch(1);
+                List<Future<ErrorCode>> outcomes = new ArrayList<>();
+                for (int writer = 0; writer < writers; writer++) {
+                    outcomes.add(pool.submit(() -> {
+                        start.await();
+                        try {
+                            store.append(id, 0, chunk);
+                            return null;
+                        } catch (RequestRefusedException e) {
+                            return e.code();
+                        }
+                    }));
+                }
+                start.countDown();
+                int won = 0;
+                for (Future<ErrorCode> outcome : outcomes) {
+                    ErrorCode refusal = outcome.get(30, TimeUnit.SECONDS);
+                    if (refusal == null) {
+                        won++;
+                    } else {
+                        assertThat(refusal).as("the one who lost the race for the file is not told the disk failed").isIn(ArtifactErrorCode.ARTIFACT_BUSY,
+                            ArtifactErrorCode.ARTIFACT_CHUNK_CONFLICT);
+                    }
+                }
+                assertThat(won).as("exactly one first chunk is stored").isEqualTo(1);
+                assertThat(store.length(id)).isEqualTo(chunk.length);
+            }
+        }
     }
 
     private FileArtifactPayloadStore storeIn(Path dir) {
