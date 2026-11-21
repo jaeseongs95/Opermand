@@ -1,15 +1,15 @@
 {
   "name": "desktop-open",
-  "description": "Open an agent GUI using target, expectedTargetRevision and the server-issued requestKey from targets.gui.openRequest.requestKey. Keep that key after uncertainty to recover the same lease. Retain sessionId/epoch; inspect readiness, observe a frame, send actions, then observe the result. transport_ready is not desktop_ready. A closed/expired key cannot reopen. No user RDP client is required.",
+  "description": "Open an agent GUI using target, expectedTargetRevision and a stable operationKey you choose. Reuse the same operationKey after uncertainty to recover the same lease; never replay with a new key. Retain sessionId/epoch; inspect readiness, observe a frame, send actions, then observe the result. transport_ready is not desktop_ready. A closed/expired lease cannot reopen with the same key. No user RDP client is required.",
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object",
     "properties": {
       "target": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$" },
       "expectedTargetRevision": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-      "requestKey": { "type": "string", "pattern": "^[a-f0-9]{32}_[0-9]{1,16}_[a-f0-9]{32}_[A-Za-z0-9_-]{43}(?![\\s\\S])" }
+      "operationKey": { "type": "string", "pattern": "^[A-Za-z0-9_.:-]{16,128}(?![\\s\\S])" }
     },
-    "required": ["target", "expectedTargetRevision"],
+    "required": ["target", "expectedTargetRevision", "operationKey"],
     "additionalProperties": false
   },
   "outputSchema": {
@@ -18,7 +18,7 @@
     "additionalProperties": false,
     "required": ["contractVersion", "ok", "data", "error"],
     "properties": {
-      "contractVersion": { "const": "2.0" },
+      "contractVersion": { "const": "3.0" },
       "ok": { "type": "boolean" },
       "data": { "anyOf": [{ "$ref": "#/$defs/sessionData" }, { "type": "null" }] },
       "error": { "anyOf": [{ "$ref": "#/$defs/errorData" }, { "type": "null" }] }

@@ -24,7 +24,7 @@
     "additionalProperties": false,
     "required": ["contractVersion", "ok", "data", "error"],
     "properties": {
-      "contractVersion": { "const": "2.0" },
+      "contractVersion": { "const": "3.0" },
       "ok": { "type": "boolean" },
       "data": { "anyOf": [{ "$ref": "#/$defs/beginData" }, { "type": "null" }] },
       "error": { "anyOf": [{ "$ref": "#/$defs/errorData" }, { "type": "null" }] }

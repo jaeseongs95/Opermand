@@ -65,7 +65,7 @@
   "annotations": { "readOnlyHint": true, "destructiveHint": false },
   "_meta": { "ui": { "resourceUri": "ui://ssh-approval/card-{sha256 hex of the card HTML}.html", "visibility": ["model", "app"] } },
   "portalRules": {
-    "outputSchema": "results.mjs:36-41,45 outputSchemas.job = jobSchema = z.object(jobFields).passthrough() (extra keys allowed). Not the Contract 2.0 envelope. Result: { content:[{type:'text',text}], structuredContent: presentJob(job) (+ message / approvalCallback for queued|pending|evaluating states, results.mjs:99-103), _meta: { sshApproval: capabilities.view(job) } } (server.mjs:44-47). Unknown id => thrown Error('Unknown request') => generic refused() text.",
+    "outputSchema": "results.mjs:36-41,45 outputSchemas.job = jobSchema = z.object(jobFields).passthrough() (extra keys allowed). Not the Contract 3.0 envelope. Result: { content:[{type:'text',text}], structuredContent: presentJob(job) (+ message / approvalCallback for queued|pending|evaluating states, results.mjs:99-103), _meta: { sshApproval: capabilities.view(job) } } (server.mjs:44-47). Unknown id => thrown Error('Unknown request') => generic refused() text.",
     "_meta": "_meta.ui.resourceUri is computed at runtime: `ui://ssh-approval/card-${hash(uiHtml)}.html`, hash = SHA-256 hex (server.mjs:15, validation.mjs:5). The literal above is a template, not a fixed value."
   },
   "visibility": "public"

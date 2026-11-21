@@ -2,6 +2,7 @@
 
 - 대상 소스: 브랜치 `feature/v300-prep` 작업 사본(HEAD `a44c4d145ca1a3b2fa68701a5b7f5cd92ff15967`, package.json version `2.4.2`).
 - 결정: 「계약 유지」 (MCP 도구 이름·입력 스키마·응답 봉투 Contract 2.0, 관리자 HTTP API, 완료 hook 형식, 설정 키).
+- 3.0 개정(2026-11-21): 기준본은 Contract 3.0으로 고쳤다. 2.4.2와 다른 곳은 9절 변경표의 행뿐이고, 1~8절은 2.4.2 기준본을 만든 기록이다. 8.1절과 5.1절의 비교 규칙은 9.3절이 덧붙인 규칙과 함께 읽는다.
 - 용도: JUnit 계약 시험이 Java 서버의 실제 출력을 이 기준본과 비교한다. 기준본은 `java/portal-web/src/test/resources/contract/` 아래에 있다.
 - 작성 방식: 소스를 읽어 옮겼다. Node·Gradle·Python은 실행하지 않았다(지시). 설명 문장은 한 글자도 다듬거나 번역하지 않고 소스 문자열 그대로 두었다(아래 4.3의 grep 대조로 확인).
 
@@ -183,7 +184,7 @@ Zod 4.4.3, `@modelcontextprotocol/sdk` 1.32.1 (`package.json:22,25`). 소스에�
 
 ### 5.1 hooks 비교 규칙 (3.0에서 hook command만 Java 런처로 바뀜)
 
-규칙: **비교 대상 = `command`를 제외한 모든 필드.** 3.0 계획(메인 확정)상 이벤트 이름·`type`·`timeout`·`async`·`asyncRewake`·`rewakeMessage`·`rewakeSummary`·`enabled`·`description`·구조(이벤트 -> hooks 배열 순서와 개수)는 그대로이고 호출 명령(`node scripts/portal-files.mjs …`)만 Java 런처로 바뀐다. 판단: 명령줄을 담는 같은 성격의 필드는 함께 제외한다. 즉 `codex.json`의 `commandWindows`, `claude-code.json`에서 `command: "node"`와 짝을 이루는 `args`의 첫 원소(스크립트 경로)가 그렇다. `args`의 나머지(`--host`, `--wait` 플래그)와 antigravity·codex `command` 문자열 안의 플래그(`--host`, `--event`)는 런처가 받는 인자이므로 의미 필드로 보고, 런처가 같은 인자를 받는지는 Java 런처 쪽 시험이 확인한다(이 기준본은 인자 목록만 고정). 플러그인 `plugin.json` 두 개는 변경 없이 전 필드 비교(`hooks` 경로 필드는 hook 파일 위치이므로 유지).
+규칙: **비교 대상 = `command`를 제외한 모든 필드.** 3.0 계획(메인 확정)상 이벤트 이름·`type`·`timeout`·`async`·`asyncRewake`·`rewakeMessage`·`rewakeSummary`·`enabled`·`description`·구조(이벤트 -> hooks 배열 순서와 개수)는 그대로이고 호출 명령(`node scripts/portal-files.mjs …`)만 Java 런처로 바뀐다. 3.0 보정: 플러그인 매니페스트의 `version`도 비교에서 뺀다(9.3절). 판단: 명령줄을 담는 같은 성격의 필드는 함께 제외한다. 즉 `codex.json`의 `commandWindows`, `claude-code.json`에서 `command: "node"`와 짝을 이루는 `args`의 첫 원소(스크립트 경로)가 그렇다. `args`의 나머지(`--host`, `--wait` 플래그)와 antigravity·codex `command` 문자열 안의 플래그(`--host`, `--event`)는 런처가 받는 인자이므로 의미 필드로 보고, 런처가 같은 인자를 받는지는 Java 런처 쪽 시험이 확인한다(이 기준본은 인자 목록만 고정). 플러그인 `plugin.json` 두 개는 변경 없이 전 필드 비교(3.0: `version` 제외, 9.3절. `hooks` 경로 필드는 hook 파일 위치이므로 유지).
 
 hook에서 `portal-files.mjs`가 받는 하위 명령·인자 (hooks JSON에서 읽음). `portal-files.mjs`에 하위 명령은 없다. 호출은 모두 플래그 인자만 쓴다: `--host <claude-code|codex|antigravity>`, `--wait`(claude-code 전용), `--event <이벤트 이름>`(antigravity 전용).
 
@@ -247,3 +248,57 @@ hook에서 `portal-files.mjs`가 받는 하위 명령·인자 (hooks JSON에서 
 - **inputSchema**: 노출본(실서버·SDK 공개본)과 키·값이 같은지 비교한다. 키 순서만 무시한다. 확장 키는 inputSchema 안에 없다.
 - **outputSchema**: 소스에서 유도한 것이고 정확한 wire 형태는 대조할 수 없다(노출본에 없음, ui-*·desktop-* 포함). 따라서 `properties`, `required`, `type`, `enum`, `additionalProperties`의 구조 비교로만 판정한다(`$ref`/`$defs`는 풀어서 비교). 정확한 wire 형태(예: Zod 4가 정수 경계·nullable·union을 내보내는 정확한 모양)는 8단계 E2E에서 확인한다.
 - **portalRules**: 비교 대상이 아니다(서버 동작 요구사항 목록이며, 각 항목은 별도 동작 시험으로 확인한다).
+
+## 9. 3.0 계약 개정 (2.4.2 → 3.0)
+
+근거 설계: `stage4-design.md` B-1(목록), B-2·B-5·B-7·B-9·B-10(세부). 2.4.2 기준본과의 차이는 아래 행뿐이다. 2.x 기록 필드(`source`, 2.x `auth`, `portalRules`의 2.x 줄 번호)는 고치지 않고, 3.0 동작은 3.0 필드나 「3.0」을 밝힌 문장으로 더했다.
+
+### 9.1 변경표
+
+| 항목 | 이전(2.4.2) | 이후(3.0) | 근거 결정 |
+|---|---|---|---|
+| `mcp/server.json` `contractVersion`·`contractVersionSource` | `"2.0"`, 2.x 소스 위치 | `"3.0"`, 설계 위치와 2.4.2 값 | B-1.1, SSH_PORTAL-D-0112 |
+| `mcp/server.json` `instructions` | `Contract 2.0. Start with targets; …` | 첫 문장 `Contract 3.0.`, 끝에 `Corresponding source (AGPL-3.0-or-later): {sourceUrl}` | B-1.1, B-1.4, B-9 |
+| `mcp/server.json` `instructionsSource` | 2.x 소스 위치 | 2.x 소스 위치 + 3.0 변경과 `{sourceUrl}` 치환 규칙 | B-1.4 |
+| `mcp/envelope.schema.json` `$id`·`title`·`contractVersion.const` | `contract:2.0`, `Contract 2.0 …`, `"2.0"` | `contract:3.0`, `Contract 3.0 …`, `"3.0"` | B-1.1 |
+| `mcp/tools/*.json` 공개 15개 `outputSchema.properties.contractVersion.const` | `"2.0"` | `"3.0"` | B-1.1 |
+| `show-*` 3개·`ui-*` 6개 `portalRules.outputSchema`의 봉투 문구 | `Not the Contract 2.0 envelope`(show-ui-probe는 `does NOT use the Contract 2.0 envelope`) | 같은 문장의 `3.0` | B-1.1 |
+| `http/admin-routes.json` `GET /api/operations/by-key` `responseShape` | `contractVersion:'2.0'` | `contractVersion:'3.0'` | B-1.1 |
+| `mcp/tools/files.json` `inputSchema.required` | `["action","uuid"]` | `["action","uuid","operationKey"]` | B-1.2, SSH_PORTAL-D-0112 |
+| `mcp/tools/files.json` `description` | `Copy/move require operationKey, target, expectedTargetRevision and remotePath.` | `Every action requires a stable operationKey; copy/move also require target, expectedTargetRevision and remotePath.` | B-1.2 |
+| `mcp/tools/files.json` `portalRules.inputSchema` | stat\|remove는 `[action,uuid]`만 | stat\|remove는 `[action,uuid,operationKey]`(3.0 문장 덧붙임) | B-1.2 |
+| `mcp/tools/desktop-open.json` `inputSchema` | `requestKey`(서버 발급 형식), `required` `[target, expectedTargetRevision]` | `operationKey`(공통 키 형식), `required` `[target, expectedTargetRevision, operationKey]` | B-1.3, SSH_PORTAL-D-0112 |
+| `mcp/tools/desktop-open.json` `description` | `… the server-issued requestKey from targets.gui.openRequest.requestKey. Keep that key …` | `… a stable operationKey you choose. Reuse the same operationKey after uncertainty to recover the same lease; never replay with a new key. … A closed/expired lease cannot reopen with the same key. …` | B-1.3 |
+| `mcp/tools/desktop-close.json` `description` | `The original open requestKey cannot create another lease.` | `The original open operationKey cannot create another lease.` | B-1.3 |
+| `mcp/tools/targets.json` `$defs.guiDescriptor.properties.openRequest` | 있음(`requestKey`, `expiresAt`) | 없음 | B-1.3 |
+| `mcp/envelope.schema.json` `x-portal-errorCodes.contract30Removals` | 없음 | `DESKTOP_OPEN_REQUEST_CAPACITY`·`_GENERATION`·`_EXPIRED`(2.x 위치·이유). `serverLayerCandidates`의 2.x 기록은 그대로 | B-1.3 |
+| `http/admin-routes.json` 항목 삭제 | `POST /api/artifacts`, `GET`·`POST …/complete`·`PUT …/chunks/n` `/api/artifacts/{uuid}`, `POST /api/session/start`, `POST /api/session/logout` | 없음(51 → 45항목) | B-1.5, 2026-11-15 결정 1 |
+| `http/admin-routes.json` 항목 추가 | 없음 | `POST /login/token`, `GET /oauth2/authorization/oidc`, `GET /login/oauth2/code/oidc`, `POST /logout`, `GET`·`POST /api/devices`, `POST /api/devices/{id}/revoke`, `GET /api/operations/reconciliation`, `POST /api/operations/{id}/reconcile`(45 → 54항목) | B-1.5, B-2, B-10 |
+| `http/admin-routes.json` 모든 항목 `auth30` | 없음 | 3.0 인증 범주(9.2절) | B-1.5, B-2, B-4 |
+| `http/admin-routes.json` `GET /health` `responseShape` | `{healthy:true, version, …}`, 실패 `{error:…}` | 앞에 3.0 모양 `{"status":"UP"}`/503 `{"status":"DOWN"}`을 적고 2.4.2 문장은 뒤에 기록으로 둠 | B-5 |
+| `settings/settings-contract.json` `allowedKeys` | `BRIDGE_AUDIT_PATH`, `BRIDGE_TRANSFER_ROOT`, `BRIDGE_ACCESS_TEAM_DOMAIN`, `BRIDGE_ACCESS_AUD`, `BRIDGE_ACCESS_OWNER_EMAILS`, `BRIDGE_OIDC_JWKS_URL`, `BRIDGE_OIDC_OWNER_EMAILS` 있음 | 위 7개 없음. `BRIDGE_DATA_DIR`, `BRIDGE_OIDC_CLIENT_SECRET`, `BRIDGE_OIDC_OWNER_SUBJECT`, `BRIDGE_SOURCE_URL` 있음 | B-1.6, 2026-11-15 결정 1·5, 2026-11-21 사용자 결정 |
+| `settings/settings-contract.json` `defaults` | `BRIDGE_SOURCE_URL` 없음 | `"BRIDGE_SOURCE_URL": ""` | B-1.6, B-9 |
+| `settings/settings-contract.json` `adminAuthModes` | 없음(2.x 값 token·access·oidc) | `["token","oidc"]` | B-1.6 |
+| hooks 비교 규칙 | 플러그인 매니페스트 전 필드 비교 | 매니페스트 `version` 제외(JSON은 그대로) | B-1.7 |
+
+### 9.2 `auth30` 범주
+
+| 범주 | 뜻 |
+|---|---|
+| `public` | 인증 없음(MCP 포트 `/health`) |
+| `mcp-bearer` | `Authorization: Bearer <BRIDGE_MCP_TOKEN>`만. 관리자 토큰·기기 토큰은 거절 |
+| `owner` | 소유자만: 관리자 토큰 Bearer(무상태), 또는 로그인 세션 + 안전하지 않은 메서드면 `X-CSRF-TOKEN`과 `Origin == BRIDGE_ADMIN_ORIGIN` |
+| `owner-or-device` | `owner`에 더해 기기 토큰 Bearer도 받음(기기 토큰은 이 범주와 `download-capability`에서만 유효) |
+| `owner-token` | 관리자 토큰 Bearer만(유지보수 경로). 세션은 받지 않음 |
+| `login` | 인증 전에 부르는 로그인 경로. 설정한 모드의 경로만 등록 |
+| `static` | 인증 없는 정적 화면(데이터 없음). 화면은 `GET /api/session`으로 로그인 여부를 확인 |
+| `session-probe` | 인증 없이 로그인 여부와 CSRF 토큰을 답함(`GET /api/session`) |
+| `download-capability` | `owner-or-device` + 경로의 일회용 다운로드 토큰 |
+
+### 9.3 3.0 비교 규칙(8.1절·5.1절에 덧붙임)
+
+- `instructions`: 기준본의 `{sourceUrl}`을 그 시험 실행의 실제 `BRIDGE_SOURCE_URL` 값(비면 이 판의 공개 저장소 태그 URL)으로 바꾼 뒤 문자열 전체를 비교한다.
+- hooks: 플러그인 매니페스트(`claude-plugin.json`, `codex-plugin.json`)의 `version`은 제품 판을 따르므로 `serverInfo.version`처럼 비교하지 않는다. 나머지 필드는 전부 비교한다.
+- 관리자 HTTP 오류 본문: 4xx·5xx 본문은 RFC 9457 `application/problem+json`이다. `type = urn:ssh-approval-portal:error:<CODE>`, `title = <CODE>`, 확장 속성 `code`·`retryable`·`executionAttempted`(B-7). `admin-routes.json`의 `{error:'…'}` 문장은 2.4.2 기록이며 3.0 비교 대상이 아니다. 비교 대상은 메서드·경로·`auth30`·성공 응답 모양이다.
+- `admin-routes.json`의 `auth`는 2.4.2 동작 기록이고, 3.0 시험은 `auth30`으로 판정한다.
+- 기준본을 더 바꾸는 단위는 같은 커밋에서 9.1절에 행(항목, 이전, 이후, 근거 결정)을 더하고 `stage4-design.md`의 해당 절을 고친다. 변경표에 없는 차이는 두지 않는다.

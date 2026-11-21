@@ -14,7 +14,7 @@
     "additionalProperties": false
   },
   "portalRules": {
-    "outputSchema": "results.mjs:45 outputSchemas.chunk (non-strict). Not the Contract 2.0 envelope. Handler: capabilities.guard(); capabilities.verifyUpload(id, ticket); files.appendUpload({id, sequence, bytes}) (server.mjs:71-74).",
+    "outputSchema": "results.mjs:45 outputSchemas.chunk (non-strict). Not the Contract 3.0 envelope. Handler: capabilities.guard(); capabilities.verifyUpload(id, ticket); files.appendUpload({id, sequence, bytes}) (server.mjs:71-74).",
     "inputSchema.properties.data": "server.mjs:71 max = Math.ceil(CHUNK_BYTES / 3) * 4 = 349528 (CHUNK_BYTES = 256 * 1024). No minLength here (unlike artifact-chunk). Handler decodes with decodeArtifactChunk (public-contract.mjs:111-116): canonical base64, 1..262144 bytes, else error code ARTIFACT_INVALID_CHUNK thrown => generic refused() text."
   },
   "outputSchema": {

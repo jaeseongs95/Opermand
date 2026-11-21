@@ -25,7 +25,7 @@
     "additionalProperties": false
   },
   "portalRules": {
-    "outputSchema": "results.mjs:44 outputSchemas.begin = z.object({ transferId: identifier, received: z.literal(0) }) (non-strict). Not the Contract 2.0 envelope. Result: structuredContent { transferId, received: 0 } + _meta.sshApproval { uploadTicket } (server.mjs:66-70). Handler: capabilities.guard(); capabilities.verifyBootstrap(transfer, ticket); files.beginUpload({...transfer, fileName, size, sha256}).",
+    "outputSchema": "results.mjs:44 outputSchemas.begin = z.object({ transferId: identifier, received: z.literal(0) }) (non-strict). Not the Contract 3.0 envelope. Result: structuredContent { transferId, received: 0 } + _meta.sshApproval { uploadTicket } (server.mjs:66-70). Handler: capabilities.guard(); capabilities.verifyBootstrap(transfer, ticket); files.beginUpload({...transfer, fileName, size, sha256}).",
     "inputSchema.properties.transfer": "server.mjs:66 the nested transfer object is a plain z.object(...) (not .strict()): unknown keys are stripped, not rejected; additionalProperties is therefore intentionally not set here. How the live JSON Schema renders this nested object (additionalProperties) is unverified because ui-* tools are not exposed to the host."
   },
   "outputSchema": {

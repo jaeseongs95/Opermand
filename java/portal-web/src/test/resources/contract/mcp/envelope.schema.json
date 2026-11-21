@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:ssh-approval-portal:contract:2.0:envelope",
-  "title": "Contract 2.0 response envelope",
+  "$id": "urn:ssh-approval-portal:contract:3.0:envelope",
+  "title": "Contract 3.0 response envelope",
   "description": "Response envelope of the public (model-visible, non-UI) MCP tools. Source: src/adapters/mcp/public-contract.mjs:73-75 (errorData, responseSchema), :145-148 (publicReply), :162-168 (publicError). The per-tool `data` shape is in each contract/mcp/tools/<name>.json outputSchema; here `data` is only constrained to object-or-null.",
   "type": "object",
   "additionalProperties": false,
   "required": ["contractVersion", "ok", "data", "error"],
   "properties": {
-    "contractVersion": { "const": "2.0" },
+    "contractVersion": { "const": "3.0" },
     "ok": { "type": "boolean" },
     "data": { "type": ["object", "null"] },
     "error": { "anyOf": [{ "$ref": "#/$defs/errorData" }, { "type": "null" }] }
@@ -334,6 +334,14 @@
       "entries": [
         ["POLICY_REVISION_CONFLICT", "src/adapters/storage/command-state.mjs:49 (message 'Policy revision conflict')"],
         ["OUTPUT_VERSION_CONFLICT", "java only: the optimistic-lock failure of a command output record (JdbcOutputManifestStore); 2.x had no counterpart"]
+      ]
+    },
+    "contract30Removals": {
+      "description": "Codes of the 2.4.2 vocabulary above that contract 3.0 no longer raises (docs/migration/stage4-design.md B-1.3): desktop-open takes the caller's operationKey instead of a server-issued open request key, so the open request capacity, generation and expiry refusals are gone. The java enums do not own them. Each entry is [code, where 2.x raised it, reason].",
+      "entries": [
+        ["DESKTOP_OPEN_REQUEST_CAPACITY", "src/application/desktop.mjs:21", "no server-issued open request key in 3.0"],
+        ["DESKTOP_OPEN_REQUEST_GENERATION", "src/application/desktop.mjs:27", "no server-issued open request key in 3.0"],
+        ["DESKTOP_OPEN_REQUEST_EXPIRED", "src/application/desktop.mjs:31", "no server-issued open request key in 3.0"]
       ]
     },
     "excludedStrings": {

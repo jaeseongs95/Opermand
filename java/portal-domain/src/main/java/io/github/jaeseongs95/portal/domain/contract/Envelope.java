@@ -19,12 +19,12 @@ public sealed interface Envelope<T> permits Envelope.Success, Envelope.Failure {
 
     /** The envelope of an answer: {@code ok=true}, the data, no error. */
     static <T> Envelope<T> success(T data) {
-        return new Success<>(ContractVersion.V2_0, true, data, null);
+        return new Success<>(ContractVersion.V3_0, true, data, null);
     }
 
     /** The envelope of a refusal: {@code ok=false}, no data, the error. */
     static <T> Envelope<T> failure(ErrorData error) {
-        return new Failure<>(ContractVersion.V2_0, false, null, error);
+        return new Failure<>(ContractVersion.V3_0, false, null, error);
     }
 
     @JsonInclude(JsonInclude.Include.ALWAYS)
