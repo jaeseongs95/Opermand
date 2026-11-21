@@ -120,6 +120,22 @@ class SshSessionPoolTest {
     }
 
     @Test
+    @DisplayName("SSH_PORTAL-D-0068 a failure after the connection was made (here the clock fails while the pooled session is built) is a failed connection for the waiter, not a slot that is never completed: the next request makes a new connection")
+    void aFailureAfterTheConnectionDoesNotLeaveTheSlotWaiting() throws Exception {
+        startAll(settings(Duration.ofSeconds(15), Duration.ofSeconds(10), 8));
+        adapter.clock().failTheNextRead(new IllegalStateException("injected: the clock failed"));
+
+        AcquireResult failed = java.util.concurrent.CompletableFuture.supplyAsync(() -> adapter.pool().acquire(new ProfileAlias(ALIAS), new CancelSource()), adapter.async())
+            .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+        AcquireResult next = java.util.concurrent.CompletableFuture.supplyAsync(() -> adapter.pool().acquire(new ProfileAlias(ALIAS), new CancelSource()), adapter.async())
+            .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+
+        assertThat(failed).isInstanceOf(AcquireResult.Failed.class);
+        assertThat(next).as("the slot of the failed attempt is gone: a new connection is made").isInstanceOf(AcquireResult.Leased.class);
+        ((AcquireResult.Leased) next).lease().close();
+    }
+
+    @Test
     @DisplayName("S3-SS-01 a session the server closed while it was idle: the next request makes a new connection, runs exactly once and succeeds")
     void aSessionClosedByTheServer() throws Exception {
         startAll(AdapterFixture.defaultSettings());
