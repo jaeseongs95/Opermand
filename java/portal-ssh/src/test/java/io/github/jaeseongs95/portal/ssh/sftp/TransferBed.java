@@ -74,7 +74,7 @@ final class TransferBed implements AutoCloseable {
     static final String SUDO_SERVER = "/usr/lib/openssh/sftp-server";
     /** The first of the usual places the target is asked about: it holds nothing, so the search has to go on to {@link #SUDO_SERVER}. */
     static final String EMPTY_PLACE = "/usr/libexec/openssh/sftp-server";
-    static final String SUDO_COMMAND = "sudo -n " + SUDO_SERVER;
+    static final String SUDO_COMMAND = "sudo -n '" + SUDO_SERVER + "'";
 
     /** What the test target offers for elevated file work. */
     enum Sudo {
@@ -125,7 +125,7 @@ final class TransferBed implements AutoCloseable {
         SftpDownloader downloader = new SftpDownloader(checker, classifier, channels);
         TargetSource noTargets = id -> new TargetLookup.NotRegistered(id);
         ElevationProbe probe = new ElevationProbe(executor, noTargets);
-        SudoSftpChannels sudoChannels = new SudoSftpChannels(channels, classifier, List.of(EMPTY_PLACE, SUDO_SERVER));
+        SudoSftpChannels sudoChannels = new SudoSftpChannels(channels, classifier, target -> List.of(new SftpServerPath(EMPTY_PLACE), new SftpServerPath(SUDO_SERVER)));
         this.transfer = new MinaRemoteFileTransfer(sessions, channels, checker, uploader, downloader, classifier, sudoChannels, probe, scheduler, Clock.systemUTC(),
             linkProbes);
     }
