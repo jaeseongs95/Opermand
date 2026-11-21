@@ -85,7 +85,7 @@ public class ArtifactImporter {
         try {
             read = source.open();
         } catch (RuntimeException e) {
-            LOG.warn("The source of the import " + id.value() + " could not be opened", e);
+            LOG.warn("The source of the import {} could not be opened", id.value(), e);
             return new ImportResult.Failed(ImportResult.Reason.SOURCE_FAILED);
         }
         try (read) {
@@ -100,7 +100,7 @@ public class ArtifactImporter {
                 }
             }
         } catch (IOException e) {
-            LOG.warn("The source of the import " + id.value() + " broke before its end", e);
+            LOG.warn("The source of the import {} broke before its end", id.value(), e);
             return new ImportResult.Failed(ImportResult.Reason.SOURCE_FAILED);
         }
         if (sink.writtenBytes() != spec.sizeBytes()) {
@@ -128,7 +128,7 @@ public class ArtifactImporter {
             payloads.delete(id);
             registry.release(id, ReleaseReason.REFUSED);
         } catch (RuntimeException e) {
-            LOG.warn("The imported artifact " + id.value() + " could not be discarded; the start-up check removes it", e);
+            LOG.warn("The imported artifact {} could not be discarded; the start-up check removes it", id.value(), e);
         }
     }
 }

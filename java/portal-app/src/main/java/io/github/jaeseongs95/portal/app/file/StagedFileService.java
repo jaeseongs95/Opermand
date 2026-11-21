@@ -418,7 +418,7 @@ public class StagedFileService {
             payloads.delete(id);
             registry.release(id, ReleaseReason.REFUSED);
         } catch (RuntimeException e) {
-            LOG.warn("The copy " + id.value() + " of a staged file could not be discarded; the start-up check removes it", e);
+            LOG.warn("The copy {} of a staged file could not be discarded; the start-up check removes it", id.value(), e);
         }
     }
 }

@@ -49,7 +49,7 @@ public class OutputReaper {
             } catch (RuntimeException e) {
                 // One output that cannot be removed must not stop the others; it is listed again by the next run.
                 failed++;
-                LOG.warn("The expired output " + expired.id().value() + " could not be removed and stays until the next run", e);
+                LOG.warn("The expired output {} could not be removed and stays until the next run", expired.id().value(), e);
             }
         }
         return new ReapReport.Reaped(removed, failed);

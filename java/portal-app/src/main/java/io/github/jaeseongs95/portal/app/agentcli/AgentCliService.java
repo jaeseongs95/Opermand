@@ -166,7 +166,7 @@ public class AgentCliService {
         try {
             store.recordRemote(run.operation(), status);
         } catch (RuntimeException e) {
-            LOG.warn("The remote status of the installation " + run.operation().value() + " could not be recorded", e);
+            LOG.warn("The remote status of the installation {} could not be recorded", run.operation().value(), e);
         }
         return outcome;
     }
