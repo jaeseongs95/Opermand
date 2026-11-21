@@ -26,7 +26,7 @@ dependencies {
 val zoneTest by tasks.registering(Test::class) {
     description = "Runs the cases tagged zone in a JVM whose default time zone has daylight saving time."
     group = "verification"
-    val tests = the<SourceSetContainer>().named("test")
+    val tests = extensions.getByType<JavaPluginExtension>().sourceSets.named("test")
     testClassesDirs = tests.get().output.classesDirs
     classpath = tests.get().runtimeClasspath
     useJUnitPlatform {
