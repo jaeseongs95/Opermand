@@ -50,6 +50,17 @@ class OutputReaperTest {
     }
 
     @Test
+    @DisplayName("S-D0162-01 D-0162: an output that is still pending is not removed by the reap even when its reservation time is over; a ready one with the same time is")
+    void aPendingOutputIsNotRemoved() {
+        outputs.add(id(1), NOW.minusSeconds(1), OutputState.PENDING);
+        outputs.add(id(2), NOW.minusSeconds(1), OutputState.READY);
+
+        assertThat(reaper.reap()).isEqualTo(new ReapReport.Reaped(1, 0));
+
+        assertThat(outputs.events).containsExactly("bytes " + id(2).value(), "row " + id(2).value());
+    }
+
+    @Test
     @DisplayName("S3-UC-06 / RC-A-173: while maintenance holds the installation nothing is deleted, and the reap resumes after the release")
     void maintenanceHoldsTheReapBack() {
         outputs.add(id(1), NOW.minusSeconds(1));
@@ -91,17 +102,23 @@ class OutputReaperTest {
     private static final class Outputs implements OutputManifestStore, OutputPayloadStore {
 
         private final Map<OutputId, Instant> expiry = new java.util.LinkedHashMap<>();
+        private final Map<OutputId, OutputState> states = new java.util.HashMap<>();
         final List<String> events = new ArrayList<>();
         OutputId failOn;
 
         void add(OutputId id, Instant expiresAt) {
+            add(id, expiresAt, OutputState.READY);
+        }
+
+        void add(OutputId id, Instant expiresAt, OutputState state) {
             expiry.put(id, expiresAt);
+            states.put(id, state);
         }
 
         @Override
         public List<OutputManifest> expired(Instant now) {
             return expiry.entrySet().stream().filter(entry -> !entry.getValue().isAfter(now)).map(entry -> new OutputManifest(entry.getKey(),
-                new OutputBinding(new OperationId("c".repeat(48)), new OutputTarget.Unbound()), OutputState.READY, entry.getValue(), 1, 1, new OutputFormats(Map.of()),
+                new OutputBinding(new OperationId("c".repeat(48)), new OutputTarget.Unbound()), states.get(entry.getKey()), entry.getValue(), 1, 1, new OutputFormats(Map.of()),
                 new StreamInfo.NoStream(), 1)).toList();
         }
 
