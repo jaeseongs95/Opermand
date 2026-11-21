@@ -82,6 +82,7 @@ SSH의 사정에 따른 차이:
   - `operation_result`: `result_texts`
   - `operation_legacy`: `original_text`
   - `maintenance_reservation`: `baseline`(null 허용)
+  - 2026-11-21 보정: 위 마지막 두 열(`operation_legacy.original_text`, `maintenance_reservation.baseline`)은 지금의 `V1`~`V8` 스크립트에 없다. 현재 긴 텍스트 열은 앞의 10개이고 `ProductScriptsTest.LONG_TEXT_COLUMNS`가 10개를 고정한다. 이 10개를 첨부 메타 표와 파일로 옮기는 단위는 `stage4-design.md` B-15·A.9(U18)이다. 그 단위가 이 절과 위 시험을 같은 커밋에서 고친다.
 - 이 열들은 요청 본문(명령, 호출 맥락, 결과 문장, 2.x 원문, 유지보수 보존 기준)이다. 이를 첨부 메타 표와 파일로 옮기면 저장 계약이 바뀌므로(저장소 어댑터·사용 사례·사례표 전체) 첨부 표 이전(장부 D-0092)에서 따로 다룬다. 이 변경은 열을 그대로 둔다. 같은 이유로 DBMS별 폴더 제거(D-0088)는 이 열들을 `${long_text}`로 쓰는 것으로 끝냈다.
 - 번호: 3.0.0은 배포 전이라 `V1_1`·`V6_1`을 없애고 `V1`·`V6` 안으로 합쳐 번호가 1~7로 연속이다(`V2`~`V5`·`V7`의 번호와 이름은 그대로).
 - 방언별 선언(`SqlBuilder.generateLongText`): H2 `CHARACTER LARGE OBJECT(2147483647)`, PostgreSQL `TEXT`, Oracle `CLOB`, Db2 `CLOB(2147483647)`, SQL Server `NVARCHAR(MAX)`(`VARCHAR(MAX)`는 데이터베이스 정렬 규칙의 코드 페이지에 따라 한글을 담지 못할 수 있다), MariaDB·MySQL `LONGTEXT`. 근거 주소는 메서드의 주석에 있다.
