@@ -1,7 +1,6 @@
 package io.github.jaeseongs95.portal.app.execution;
 
 import java.io.ByteArrayOutputStream;
-import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 
@@ -49,8 +48,7 @@ public final class OpenOutput implements OutputSink {
     private final long reservedBytes;
     private final OutputPayloadStore payloads;
     private final OutputManifestStore manifests;
-    private final OutputRedactor redactor;
-    private final JsonMapper json;
+    private final OutputRendering rendering;
     private final Digester digester;
     private final Clock clock;
     private final ByteArrayOutputStream stdout = new ByteArrayOutputStream();
@@ -63,8 +61,7 @@ public final class OpenOutput implements OutputSink {
         this.reservedBytes = reservedBytes;
         this.payloads = payloads;
         this.manifests = manifests;
-        this.redactor = redactor;
-        this.json = json;
+        this.rendering = new OutputRendering(redactor, json);
         this.digester = digester;
         this.clock = clock;
     }
@@ -91,16 +88,13 @@ public final class OpenOutput implements OutputSink {
      */
     public synchronized ExecutionOutcome finish(ExecutionOutcome outcome) {
         try {
-            String out = redactor.redact(new String(stdout.toByteArray(), StandardCharsets.UTF_8)).value();
-            String err = redactor.redact(new String(stderr.toByteArray(), StandardCharsets.UTF_8)).value();
-            byte[] jsonBytes = json.writeValueAsBytes(new OutputDocument(out, err));
-            byte[] textBytes = (err.isEmpty() ? out : out + "\n" + err).getBytes(StandardCharsets.UTF_8);
-            long size = (long) jsonBytes.length + textBytes.length;
+            OutputRendering.Rendered rendered = rendering.render(stdout.toByteArray(), stderr.toByteArray());
+            long size = rendered.size();
             if (size > reservedBytes) {
                 throw new IllegalStateException("The rendering of the output is larger than its reservation");
             }
             manifests.recordStream(id, completeStream(outcome));
-            OutputFormats formats = payloads.finish(id, jsonBytes, textBytes);
+            OutputFormats formats = payloads.finish(id, rendered.json(), rendered.text());
             manifests.markReady(id, formats, size);
             return outcome;
         } catch (RuntimeException e) {
