@@ -213,6 +213,27 @@ class EnvironmentCredentialSourceTest {
         assertThat(revealed(keyOf(lookup).pem())).isEqualTo("fallback key\n");
     }
 
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {"relative/home", "."})
+    @DisplayName("SSH_PORTAL-D-0166: a HOME that is not an absolute path on this system (Git Bash gives /c/Users/x on Windows, which has no drive) is not the home folder: user.home is")
+    void aHomeThatIsNotAbsoluteHereIsIgnored(String home) throws IOException {
+        file("userhome/k", "fallback key\n");
+
+        CredentialLookup lookup = resolve("aws-local", "auth = \"key\"\nkeyRef = '~/k'", Map.of("HOME", home, "user.home", directory.resolve("userhome").toString()));
+
+        assertThat(revealed(keyOf(lookup).pem())).isEqualTo("fallback key\n");
+    }
+
+    @Test
+    @DisplayName("SSH_PORTAL-D-0166: a HOME that is not a path at all is not the home folder either, and does not end the lookup with an exception")
+    void aHomeThatIsNotAPathIsIgnored() throws IOException {
+        file("userhome/k", "fallback key\n");
+
+        CredentialLookup lookup = resolve("aws-local", "auth = \"key\"\nkeyRef = '~/k'", Map.of("HOME", "\0bad", "user.home", directory.resolve("userhome").toString()));
+
+        assertThat(revealed(keyOf(lookup).pem())).isEqualTo("fallback key\n");
+    }
+
     @Test
     @DisplayName("VR-388: a key file that does not exist is skipped by a profile that does not use a key, and the password is used")
     void aMissingKeyDoesNotStopAPasswordProfile() throws IOException {

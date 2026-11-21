@@ -264,6 +264,46 @@ class EmbeddedSshServerTest {
     }
 
     @Test
+    @DisplayName("S3-TK-15 SSH_PORTAL-D-0131 a plain SFTP rename of two files onto one new name at the same moment: exactly one wins in every round, as OpenSSH's sftp-server (link, then unlink) does")
+    void aPlainRenameOntoANewNameHasOneWinner() throws Exception {
+        server = EmbeddedSshServer.builder().password(USER, PASSWORD).sftp(root).start();
+        int rounds = 400;
+        List<String> bothWon = new java.util.ArrayList<>();
+        java.util.concurrent.ExecutorService pair = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try (ClientSession first = client.open(server, USER, PASSWORD); ClientSession second = client.open(server, USER, PASSWORD);
+             SftpClient firstSftp = sftp(first); SftpClient secondSftp = sftp(second)) {
+            for (int round = 0; round < rounds; round++) {
+                Files.writeString(root.resolve("from-a-" + round), "a" + round);
+                Files.writeString(root.resolve("from-b-" + round), "b" + round);
+                java.util.concurrent.CyclicBarrier together = new java.util.concurrent.CyclicBarrier(2);
+                String target = "/won-" + round;
+                CompletableFuture<Boolean> a = CompletableFuture.supplyAsync(() -> renamed(firstSftp, together, "/from-a-" + round, target), pair);
+                CompletableFuture<Boolean> b = CompletableFuture.supplyAsync(() -> renamed(secondSftp, together, "/from-b-" + round, target), pair);
+                boolean aWon = a.get(LIMIT.toSeconds(), java.util.concurrent.TimeUnit.SECONDS);
+                boolean bWon = b.get(LIMIT.toSeconds(), java.util.concurrent.TimeUnit.SECONDS);
+                if (aWon == bWon) {
+                    bothWon.add("round " + round + ": " + (aWon ? "both renamed" : "neither renamed"));
+                }
+            }
+        } finally {
+            pair.shutdownNow();
+        }
+        assertThat(bothWon).as("rounds out of %d in which the rename did not have exactly one winner", rounds).isEmpty();
+    }
+
+    private static boolean renamed(SftpClient sftp, java.util.concurrent.CyclicBarrier together, String from, String to) {
+        try {
+            together.await();
+            sftp.rename(from, to);
+            return true;
+        } catch (IOException e) {
+            return false;
+        } catch (InterruptedException | java.util.concurrent.BrokenBarrierException e) {
+            throw new IllegalStateException(e);
+        }
+    }
+
+    @Test
     @DisplayName("S3-TK-14 the event log completes a waiter when the count is reached, and a wait that is not satisfied reports how many events it saw")
     void eventLog() throws Exception {
         EventLog<String> log = new EventLog<>();
