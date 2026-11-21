@@ -75,8 +75,8 @@ public class JdbcCommandPolicyStore implements CommandPolicyStore {
     @Transactional
     public PolicySnapshot replace(CommandPolicyDocument next, long expectedRevision) {
         if (policies.advanceRevision(expectedRevision) != 1) {
-            // The contract has no code of its own for a policy revision conflict yet (reported as a need); REQUEST_REFUSED is the closest.
-            throw new RequestRefusedException(RequestErrorCode.REQUEST_REFUSED);
+            // Another writer moved the revision first (or the caller read an older one): the caller reads the policy again and decides again, which only this code says (D-0164).
+            throw new RequestRefusedException(RequestErrorCode.POLICY_REVISION_CONFLICT);
         }
         long nextRevision = expectedRevision + 1;
         List<PolicyRuleRow> previousRows = rules.findAllOrdered();
@@ -105,6 +105,8 @@ public class JdbcCommandPolicyStore implements CommandPolicyStore {
                 aggregates.insert(row);
             }
         } catch (DuplicateKeyException e) {
+            // Not a conflict that a new read resolves: the revision was won in this transaction, so the document itself holds a key twice (CommandPolicyDocument refuses a
+            // target twice before it gets here). The refusal rolls the transaction, and with it the advanced revision, back.
             throw new RequestRefusedException(RequestErrorCode.REQUEST_REFUSED, e);
         }
         return new PolicySnapshot(nextRevision, next);
