@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""ironrdp-agent adoption spike, Linux runner (items 10 and 11 of the spike plan).
+"""ironrdp-agent 0.1.0 adoption spike, Linux runner (items 10 and 11 of the spike plan).
+
+The 0.1.0 prebuilt CLI is much smaller than upstream master (no type-unicode, wait-frame, cert, daemon stop,
+--no-prompt, RDP_PASSWORD). This driver tests what exists and records what is absent.
 
 Environment: AGENT (path to ironrdp-agent), ART (artifact dir), MODE (nla|tls), RECV (receiver dir),
 RDP_PW (test password, masked by the workflow), SERVER_CERT (path of the shadow server certificate, optional).
 """
-import concurrent.futures, hashlib, json, os, re, signal, struct, subprocess, sys, time
+import concurrent.futures, hashlib, json, os, re, signal, struct, subprocess, sys, tempfile, time
 
 AGENT = os.environ["AGENT"]
 ART = os.environ["ART"]
@@ -21,6 +24,7 @@ PROPS = ["--prop", "desktopwidth:i:1280", "--prop", "desktopheight:i:800", "--pr
          "--prop", "compression:i:0", "--prop", "ironrdp_colordepth:i:16", "--prop", "ironrdp_serverpointer:i:0"]
 UNIT = ("Hello, World! 0123456789 ~!@#$%^&*()_+-=[]{}|;':,./<>? \\ \"q\" "
         "한글 테스트 가나다 café €☃")
+DAEMONS = {}
 
 
 def scrub(t):
@@ -62,9 +66,7 @@ class R:
 
 
 def agent(args, env=None, timeout=60, endpoint=SOCK):
-    """Run the CLI with output going to temp files: a daemon spawned by `connect`/`daemon start` may inherit
-    pipes and would block a pipe-based read forever."""
-    import tempfile
+    """Run the CLI with output going to temp files (a child may inherit pipes and block a pipe-based read)."""
     cmd = [AGENT] + (["--endpoint", endpoint] if endpoint else []) + args
     e = dict(os.environ)
     if env:
@@ -94,6 +96,52 @@ def status(endpoint=SOCK):
     return {"code": r.code, "text": text, "state": m.group(1) if m else None}
 
 
+def start_daemon(endpoint=SOCK, password=PW, tag="d"):
+    """0.1.0 only has a foreground `daemon-start`; run it detached. The password goes in an overlay file."""
+    argv = [AGENT, "--endpoint", endpoint, "daemon-start"]
+    ov = None
+    if password:
+        ov = tempfile.NamedTemporaryFile("w", delete=False, suffix=".rdp")
+        os.chmod(ov.name, 0o600)
+        ov.write("username:s:%s\nClearTextPassword:s:%s\n" % (USER, password))
+        ov.close()
+        argv += ["--overlay", ov.name]
+    base = os.path.join(ART, "daemon-%s-%s" % (os.path.basename(endpoint), tag))
+    fo, fe = open(base + ".out.txt", "w"), open(base + ".err.txt", "w")
+    p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=fo, stderr=fe, start_new_session=True)
+    DAEMONS[endpoint] = (p, ov.name if ov else None, base)
+    t0 = time.time()
+    while time.time() - t0 < 30 and p.poll() is None:
+        time.sleep(0.3)
+        if agent(["status"], endpoint=endpoint, timeout=10).code == 0:
+            return True, p.pid
+    return False, p.pid
+
+
+def stop_daemon(endpoint=SOCK):
+    d = DAEMONS.pop(endpoint, None)
+    if not d:
+        return
+    p, ov, base = d
+    try:
+        p.kill()
+        p.wait(timeout=5)
+    except Exception:
+        pass
+    if ov and os.path.exists(ov):
+        os.remove(ov)
+    for suf in (".out.txt", ".err.txt"):
+        try:
+            t = open(base + suf).read()
+            open(base + suf, "w").write(scrub(t))
+        except Exception:
+            pass
+    try:
+        os.remove(endpoint)  # a killed daemon leaves its socket file behind
+    except Exception:
+        pass
+
+
 def wait_connected(label, timeout=90, endpoint=SOCK):
     t0 = time.time()
     seen = []
@@ -113,8 +161,7 @@ def wait_connected(label, timeout=90, endpoint=SOCK):
 
 
 def connect(extra=(), props=PROPS, endpoint=SOCK, server=SERVER):
-    return agent(["connect", "--no-prompt", "--auto-start", "--server", server] + list(props) + list(extra),
-                 env={"RDP_USERNAME": USER, "RDP_PASSWORD": PW}, endpoint=endpoint)
+    return agent(["connect", "--server", server, "-u", USER] + list(props) + list(extra), endpoint=endpoint, timeout=90)
 
 
 def rjson(name):
@@ -186,10 +233,6 @@ def compare(expected, actual):
     return eb == actual, d
 
 
-def chunks(text, n=96):
-    return [text[i:i + n] for i in range(0, len(text), n)]  # Python str indexes by code point
-
-
 def png_info(path):
     b = open(path, "rb").read()
     if b[:8] != b"\x89PNG\r\n\x1a\n":
@@ -219,21 +262,23 @@ def focus_input():
     return "clicked input to focus; focused=%s" % (rjson("state.json") or {}).get("focused")
 
 
-def type_case(text, chunk=96):
+def type_case(text):
+    """key-unicode, one Unicode scalar per press+release (the only text-entry command in 0.1.0)."""
     reset_recv()
     f = focus_input()
     bad = []
     t0 = time.time()
-    cs = chunks(text, chunk)
-    for i, c in enumerate(cs):
-        r = agent(["type-unicode", "--text", c], timeout=30)
-        if r.code != 0:
-            bad.append("chunk%d %s" % (i, r))
+    for i, ch in enumerate(text):  # Python iterates by code point
+        d = agent(["key-unicode", "--char", ch, "--pressed", "true"], timeout=30)
+        u = agent(["key-unicode", "--char", ch, "--pressed", "false"], timeout=30)
+        if d.code != 0 or u.code != 0:
+            if len(bad) < 5:
+                bad.append("char#%d %r down:%s up:%s" % (i, ch, d, u))
     send_ms = int((time.time() - t0) * 1000)
     got, settle = wait_stable(text.encode("utf-8"))
     ok, d = compare(text, got)
-    return ok, "chunks=%d sendMs=%d settleMs=%d cliFailures=%d [%s] focus=%r %s" % (
-        len(cs), send_ms, settle, len(bad), "; ".join(bad), f, d)
+    return ok, "scalars=%d cliCalls=%d sendMs=%d settleMs=%d cliFailures=%d [%s] focus=%r %s" % (
+        len(text), len(text) * 2, send_ms, settle, len(bad), "; ".join(bad), f, d)
 
 
 def agent_lines():
@@ -243,52 +288,39 @@ def agent_lines():
 
 def main():
     nla = MODE == "nla"
-    r = agent(["daemon", "start"])
-    save("daemon-start.txt", str(r))
-    result(9, "daemon start --endpoint PATH (background)", "pass" if r.code == 0 else "fail", str(r))
+    up, pid = start_daemon()
+    result(9, "daemon-start (foreground process, detached by the harness) with --overlay answers status", "pass" if up else "fail", "pid=%s" % pid)
     c = connect()
     save("connect1.txt", str(c))
-    s = wait_connected("c1-strict-nopin", 60)
-    m = re.search(r"cert trust\s+(\S+)\s+([0-9A-Fa-f:]{64,95})", s["text"])
-    srvfp = None
-    cert = os.environ.get("SERVER_CERT")
-    if cert and os.path.exists(cert):
-        out = subprocess.run(["openssl", "x509", "-in", cert, "-noout", "-fingerprint", "-sha256"],
-                             capture_output=True, text=True).stdout
-        srvfp = out.split("=", 1)[-1].strip().replace(":", "").lower()
-    if s["state"] == "Connected":
-        result(6, "strict TLS (default) with self-signed server cert, no pin", "info", "connected without pin: " + s["text"].strip())
-    else:
-        eq = bool(m and srvfp and m.group(2).replace(":", "").lower() == srvfp)
-        result(6, "strict TLS (default): self-signed cert rejected and status reports a fingerprint",
-               "pass" if m else "fail",
-               "state=%s reported=%s serverCertSha256(openssl)=%s equal=%s status: %s" % (
-                   s["state"], m.group(2) if m else None, srvfp, eq, s["text"].strip()))
-        if m:
-            t = agent(["cert", "trust", m.group(1), m.group(2)], endpoint=None)
-            result(6, "cert trust HOST:PORT SHA256", "pass" if t.code == 0 else "fail", str(t))
-            connect()
-            s = wait_connected("c2-strict-pinned", 90)
+    result(2, "connect command output / exit code", "info", str(c))
+    s = wait_connected("c1", 90)
     ok = s["state"] == "Connected"
-    result(11, "ironrdp-agent connects to the Linux RDP server (%s) with strict TLS + pin" % (
-        "NLA required" if nla else "TLS only, no auth"), "pass" if ok else "fail",
-        "state=%s status: %s" % (s["state"], s["text"].strip()))
-    lg = agent(["log"])
+    result(11, "ironrdp-agent connects to the Linux RDP server (%s) with the overlay password" % (
+        "NLA required" if nla else "TLS only, no auth"), "pass" if ok else "fail", "state=%s status: %s" % (s["state"], s["text"].strip()))
+    result(6, "strict TLS validation by default: a self-signed server certificate must be refused without a pin",
+           "fail" if ok else "info", "connected with no pin and no trust store: %s (source: rustls NoCertificateVerification at the 0.1.0 tag)" % ok)
+    lg = agent(["query-logs"])
     save("session-log.txt", lg.out + lg.err)
-    lines = [l for l in lg.out.splitlines() if re.search(r"(?i)credssp|nla|hybrid|ntlm|security protocol|selected protocol", l)][:12]
-    result(11, "session log lines about the security protocol", "info", " || ".join(lines))
+    lines = [l for l in lg.out.splitlines() if re.search(r"(?i)credssp|nla|hybrid|ntlm|security protocol|selected protocol|certificate|tls", l)][:14]
+    result(11, "session log lines about the security protocol / certificate", "info", " || ".join(lines))
     if not ok:
         return
-    agent(["daemon", "start", "--skip-certificate-check"], endpoint=CTL)
+    start_daemon(CTL, tag="ctl")
     connect(extra=["--prop", "enablecredsspsupport:i:0"], endpoint=CTL)
     sn = wait_connected("ctl-no-credssp", 30, CTL)
     if nla:
-        result(11, "control: client without CredSSP is refused by the NLA-only server (proves NLA is enforced)",
+        result(11, "control: client with CredSSP disabled is refused by the NLA-only server (proves NLA is enforced and used)",
                "pass" if sn["state"] != "Connected" else "fail", "state=%s status: %s" % (sn["state"], sn["text"].strip()))
     else:
-        result(11, "control (TLS-only server): client without CredSSP", "info", "state=%s" % sn["state"])
+        result(11, "control (TLS-only server): client with CredSSP disabled", "info", "state=%s" % sn["state"])
     agent(["disconnect"], endpoint=CTL)
-    agent(["daemon", "stop"], endpoint=CTL)
+    stop_daemon(CTL)
+    start_daemon(CTL, password="Wrong-Passw0rd!x", tag="wrongpw")
+    connect(endpoint=CTL)
+    sw = wait_connected("ctl-wrong-password", 30, CTL)
+    result(2, "wrong password: connection fails and the status says so" if nla else "wrong password against the no-auth TLS server", "pass" if sw["state"] != "Connected" else ("fail" if nla else "info"),
+           "state=%s status: %s" % (sw["state"], sw["text"].strip()))
+    stop_daemon(CTL)
 
     t0 = time.time()
     lay = None
@@ -306,54 +338,43 @@ def main():
 
     agents = agent_lines()
     save("agent-processes.txt", "\n".join(agents))
-    leak = [l for l in agents if PW in l or re.search(r"--password|\s-p\s", l)]
-    result(7, "password absent from the command line of every ironrdp-agent process (env-var path), Linux",
-           "pass" if agents and not leak else "fail",
-           "processes=%d leaks=%d cmdlines: %s" % (len(agents), len(leak), " || ".join(scrub(a) for a in agents)))
+    leak = [l for l in agents if PW in l]
+    result(7, "overlay path: password absent from the command line of the live ironrdp-agent daemon process (Linux)",
+           "pass" if agents and not leak else "fail", "processes=%d leaks=%d cmdlines: %s" % (len(agents), len(leak), " || ".join(scrub(a) for a in agents)))
     environs = []
     for l in agents:
-        pid = l.split()[0]
+        pid_ = l.split()[0]
         try:
-            env = open("/proc/%s/environ" % pid, "rb").read().decode(errors="replace")
-            environs.append("pid=%s environHasPassword=%s environHasRDP_PASSWORD=%s" % (pid, PW in env, "RDP_PASSWORD" in env))
+            env = open("/proc/%s/environ" % pid_, "rb").read().decode(errors="replace")
+            environs.append("pid=%s environHasPassword=%s" % (pid_, PW in env))
         except Exception as ex:
-            environs.append("pid=%s environ unreadable %r" % (pid, ex))
-    result(7, "agent/daemon process environment does not carry the password (read from /proc)", "info", "; ".join(environs))
+            environs.append("pid=%s environ unreadable %r" % (pid_, ex))
+    result(7, "daemon process environment does not carry the password (read from /proc)", "info", "; ".join(environs))
+    props = agent(["query-props"])
+    result(7, "query-props / query-logs output does not echo the password", "pass" if PW not in props.out + props.err + lg.out else "fail", "checked")
+    result(7, "status reports credentials loaded from the overlay", "info", str(agent(["status"])))
+    r_ = agent(["connect", "--server", SERVER, "-u", USER, "-p", PW])
+    # observed through ps while it runs is racy; by definition -p is argv (clap), record exit info only
+    result(7, "argv path: connect -p PASSWORD (by definition the password is in the CLI argv)", "info", str(r_))
 
     ok1, d = type_case(UNIT)
-    result(4, "type-unicode: mixed ASCII/Hangul/symbols, <=96 chars, byte-exact at target", "pass" if ok1 else "fail", d)
-    pad = UNIT
-    while len(pad) < 96:
-        pad += "x"
-    ok1, d = type_case(pad)
-    result(4, "type-unicode: exactly 96 chars byte-exact", "pass" if ok1 else "fail", d)
-    reset_recv()
-    r97 = agent(["type-unicode", "--text", pad + "y"])
-    time.sleep(2)
-    result(4, "97 chars in one call is rejected and nothing delivered", "pass" if r97.code != 0 and len(rbytes()) == 0 else "fail",
-           "%s receiverBytes=%d" % (r97, len(rbytes())))
-
-    def mk(n):
-        return "".join("[%04d] %s " % (i, UNIT) for i in range(1, n + 1))
-
-    for label, n, reps in (("~1100", 10, 5), ("~4400", 40, 2)):
-        okc = 0
-        fails = []
-        for it in range(reps):
-            ok1, d = type_case(mk(n))
-            okc += 1 if ok1 else 0
-            if not ok1:
-                fails.append("iter%d: %s" % (it + 1, d))
-        result(4, "type-unicode: %s-char mixed text as sequential <=96 calls, %d repetitions, byte-exact" % (label, reps),
-               "pass" if okc == reps else "fail", "passed %d/%d. %s" % (okc, reps, " ### ".join(fails)))
-    ok1, d = type_case(UNIT, 1)
-    result(4, "type-unicode: one character per call preserves order", "pass" if ok1 else "fail", d)
+    result(4, "key-unicode: mixed ASCII/Hangul/symbols string (<=96 chars), one char per call, byte-exact at target", "pass" if ok1 else "fail", d)
+    long = "".join("[%04d] %s " % (i, UNIT) for i in range(1, 7))
+    okc = 0
+    fails = []
+    for it in range(2):
+        ok1, d = type_case(long)
+        okc += 1 if ok1 else 0
+        if not ok1:
+            fails.append("iter%d: %s" % (it + 1, d))
+    result(4, "key-unicode: ~%d-char mixed text (beyond 96), 2 repetitions, byte-exact" % len(long), "pass" if okc == 2 else "fail",
+           "passed %d/2. %s" % (okc, " ### ".join(fails)))
     ok1, d = type_case("A\U0001F600B")
-    result(4, "type-unicode: character outside the BMP (U+1F600)", "info", "equal=%s received=%r %s" % (ok1, rbytes(), d))
+    result(4, "key-unicode: character outside the BMP (U+1F600)", "info", "equal=%s received=%r %s" % (ok1, rbytes(), d))
     ok1, d = type_case("line1\nline2")
-    result(4, "type-unicode: embedded LF", "info", "equal=%s received=%r %s" % (ok1, rbytes(), d))
+    result(4, "key-unicode: embedded LF", "info", "equal=%s received=%r %s" % (ok1, rbytes(), d))
     ok1, d = type_case("a\tb")
-    result(4, "type-unicode: embedded TAB", "info", "equal=%s received=%r %s" % (ok1, rbytes(), d))
+    result(4, "key-unicode: embedded TAB", "info", "equal=%s received=%r %s" % (ok1, rbytes(), d))
     p2 = os.path.join(ART, "screenshot-main-2.png")
     agent(["screenshot", p2])
     try:
@@ -391,8 +412,7 @@ def main():
     s5 = cur()
     okk = (s1 == "a" and s2 == "aA" and s3 == "aA\nb" and s4 == "aA\n" and s5 == "")
     result(4, "key-scancode: letter, Shift+letter, Enter, Backspace, Ctrl+A then Backspace observed at target",
-           "pass" if okk else "fail",
-           "a=%r Shift+a=%r Enter,b=%r Backspace=%r Ctrl+A,Backspace=%r" % (s1, s2, s3, s4, s5))
+           "pass" if okk else "fail", "a=%r Shift+a=%r Enter,b=%r Backspace=%r Ctrl+A,Backspace=%r" % (s1, s2, s3, s4, s5))
     agent(["mouse-move", "--x", "321", "--y", "123"])
     time.sleep(0.5)
     st = rjson("state.json")
@@ -436,83 +456,84 @@ def main():
 
     reset_recv()
     focus_input()
-    r = agent(["type-unicode", "--text", "ACKTEST"])
+    r = agent(["key-unicode", "--char", "Q", "--pressed", "true"])
+    r2 = agent(["key-unicode", "--char", "Q", "--pressed", "false"])
     t_ret = time.time()
     t_eff = None
     while time.time() - t_ret < 5:
-        if len(rbytes()) >= 7:
+        if len(rbytes()) >= 1:
             t_eff = time.time()
             break
         time.sleep(0.005)
-    result(5, "type-unicode success output / exit code", "info", str(r))
-    result(5, "time between CLI return and target seeing the text", "info",
-           "cliMs=%d returnToSeenMs=%s" % (r.ms, int((t_eff - t_ret) * 1000) if t_eff else "not seen in 5 s"))
-    for cmd in (["mouse-move", "--x", "10", "--y", "10"], ["wheel", "--delta", "120"],
-                ["wait-frame", "--after-frame", "0", "--timeout-ms", "3000"], ["status"]):
+    result(5, "key-unicode success output and exit code", "info", "%s || %s" % (r, r2))
+    result(5, "time between CLI return and target seeing the character", "info",
+           "cliMs=%d+%d returnToSeenMs=%s" % (r.ms, r2.ms, int((t_eff - t_ret) * 1000) if t_eff else "not seen in 5 s"))
+    for cmd in (["mouse-move", "--x", "10", "--y", "10"], ["wheel", "--delta", "120"], ["status"]):
         result(5, "output of '%s'" % " ".join(cmd), "info", str(agent(cmd)))
+    result(5, "invalid input is rejected with a message (key-unicode --char with two characters)", "info", str(agent(["key-unicode", "--char", "ab", "--pressed", "true"])))
     reset_recv()
     focus_input()
 
     def one(i):
-        t = "[%03d:%s]" % (i, chr(97 + i % 26) * 80)
-        return i, t, agent(["type-unicode", "--text", t], timeout=60)
+        ch = chr(97 + i % 26)
+        d = agent(["key-unicode", "--char", ch, "--pressed", "true"], timeout=60)
+        u = agent(["key-unicode", "--char", ch, "--pressed", "false"], timeout=60)
+        return ch, d, u
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=50) as ex:
-        rs = list(ex.map(one, range(1, 151)))
-    acc = [x for x in rs if x[2].code == 0]
-    rej = [x for x in rs if x[2].code != 0]
+        rs = list(ex.map(one, range(1, 201)))
+    acc = [x for x in rs if x[1].code == 0 and x[2].code == 0]
+    rej = [x for x in rs if not (x[1].code == 0 and x[2].code == 0)]
     got, _ = wait_stable(None, quiet=4, maxsec=120)
     g = got.decode("utf-8", "replace")
-    pat = r"\[(\d{3}):([a-z])\2{79}\]"
-    toks = [int(m.group(1)) for m in re.finditer(pat, g)]
-    accids = [x[0] for x in acc]
-    missing = [i for i in accids if i not in toks]
-    extra = [i for i in toks if i not in accids]
-    residue = re.sub(pat, "", g)
+    diff = []
+    for c in range(97, 123):
+        ch = chr(c)
+        e = sum(1 for x in acc if x[0] == ch)
+        a = g.count(ch)
+        if e != a:
+            diff.append("%s expected=%d got=%d" % (ch, e, a))
     msgs = {}
     for x in rej:
-        k = (x[2].err.strip() or x[2].out.strip())[:200]
+        k = ((x[1].err or x[1].out) + (x[2].err or x[2].out)).strip()[:200]
         msgs[k] = msgs.get(k, 0) + 1
-    result(5, "parallel flood: 150 concurrent type-unicode calls; accepted=%d rejected=%d" % (len(acc), len(rej)), "info", "rejection messages: %s" % msgs)
-    result(5, "every call reported as success was delivered intact; no rejected call leaked partial text",
-           "pass" if not missing and not extra and not residue else "fail",
-           "accepted=%d deliveredTokens=%d missingAccepted=%s extraRejected=%s residueChars=%d" % (len(acc), len(toks), missing, extra, len(residue)))
+    result(5, "parallel flood: 200 concurrent key-unicode pairs; accepted=%d rejected=%d" % (len(acc), len(rej)), "info", "rejection messages: %s" % msgs)
+    result(5, "every call reported as success was delivered (per-letter counts equal; nothing extra)",
+           "pass" if not diff and len(g) == len(acc) else "fail", "accepted=%d receivedLen=%d mismatches=%s" % (len(acc), len(g), diff))
 
     d = agent(["disconnect"])
-    ds = agent(["daemon", "status"])
-    result(9, "disconnect output and daemon status afterwards", "info", "%s | %s" % (d, ds))
-    st_ = agent(["daemon", "stop"])
+    ds = agent(["status"])
+    result(9, "disconnect output and status afterwards (daemon expected to stay up)", "info", "%s | %s" % (d, ds))
+    stop_daemon()
     time.sleep(2)
     left = agent_lines()
-    socks = [p for p in os.listdir("/tmp") if p.startswith("ironrdp-spike")]
-    result(9, "after disconnect + daemon stop: no ironrdp-agent process and no socket file left",
-           "pass" if not left and not socks else "fail", "stop: %s | processes=%s sockets=%s" % (st_, left, socks))
-    agent(["daemon", "start"])
+    result(9, "after disconnect + killing the daemon: no ironrdp-agent process left", "pass" if not left else "fail", "processes=%s" % left)
+    # killed daemon while connected, then reuse of the same endpoint path
+    start_daemon(tag="r2")
     connect()
     wait_connected("kill-connect", 60)
-    ag = [l.split()[0] for l in agent_lines() if "daemon" in l]
-    for p in ag:
-        try:
-            os.kill(int(p), signal.SIGKILL)
-        except Exception:
-            pass
+    p_, ov_, base_ = DAEMONS[SOCK]
+    p_.kill()
+    p_.wait()
     time.sleep(2)
     stt = agent(["status"])
-    socks = [p for p in os.listdir("/tmp") if p.startswith("ironrdp-spike")]
-    result(9, "daemon SIGKILLed while connected: status afterwards and what is left", "info",
-           "killed=%s status: %s | leftover sockets=%s" % (ag, stt, socks))
-    r2 = agent(["daemon", "start"])
+    sock_left = os.path.exists(SOCK)
+    result(9, "daemon SIGKILLed while connected: status afterwards and what is left", "info", "status: %s | stale socket file still present=%s" % (stt, sock_left))
+    ok2, pid2 = start_daemon(tag="r3")
     connect()
     s2 = wait_connected("kill-reconnect", 60)
-    result(9, "after SIGKILL a new daemon on the same endpoint path connects again (stale socket handled)",
-           "pass" if s2["state"] == "Connected" else "fail", "daemon start: %s state=%s" % (r2, s2["state"]))
+    result(9, "after SIGKILL a new daemon on the same endpoint path starts and connects (stale socket handled)",
+           "pass" if ok2 and s2["state"] == "Connected" else "fail", "daemon up=%s state=%s" % (ok2, s2["state"]))
     agent(["disconnect"])
-    agent(["daemon", "stop"])
+    stop_daemon()
 
 
 try:
     main()
-except Exception as ex:  # keep artifacts even if the harness breaks
+except Exception:  # keep artifacts even if the harness breaks
     import traceback
     result("harness", "driver exception", "fail", traceback.format_exc())
+finally:
+    for ep in list(DAEMONS):
+        stop_daemon(ep)
 json.dump(RESULTS, open(os.path.join(ART, "results.json"), "w"), ensure_ascii=False, indent=1)

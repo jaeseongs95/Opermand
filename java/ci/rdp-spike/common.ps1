@@ -4,6 +4,7 @@
 $script:Results = [System.Collections.Generic.List[object]]::new()
 $script:Secrets = [System.Collections.Generic.List[string]]::new()
 $script:AgentExe = $null
+$script:OverlayDir = Join-Path ([System.IO.Path]::GetTempPath()) 'rdp-spike-overlay'
 $script:ArtDir = $null
 $script:LogFile = $null
 $script:Utf8 = [System.Text.UTF8Encoding]::new($false)
@@ -128,6 +129,47 @@ function Format-AgentResult {
     if ($R.Out) { $t += "`n--stdout--`n$($R.Out.TrimEnd())" }
     if ($R.Err) { $t += "`n--stderr--`n$($R.Err.TrimEnd())" }
     return $t
+}
+
+# ironrdp-agent 0.1.0 only has a foreground `daemon-start`; run it detached with output captured to files.
+# A password is handed to the daemon through an overlay .rdp file (not through argv).
+$script:Daemons = @{}
+function Start-AgentDaemon {
+    param([Parameter(Mandatory)][string] $Endpoint, [string] $User, [string] $Password, [string[]] $ExtraArgs = @(), [string] $Tag = 'd')
+    $dir = Join-Path $script:ArtDir 'daemons'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $safe = ($Endpoint -replace '[^A-Za-z0-9]', '_')
+    $argList = @('--endpoint', $Endpoint, 'daemon-start')
+    $overlay = $null
+    if ($Password) {
+        $overlay = Join-Path $script:OverlayDir "$safe.rdp"
+        New-Item -ItemType Directory -Force -Path $script:OverlayDir | Out-Null
+        [System.IO.File]::WriteAllText($overlay, "username:s:$User`nClearTextPassword:s:$Password`n", $script:Utf8)
+        $argList += @('--overlay', $overlay)
+    }
+    $argList += $ExtraArgs
+    $outF = Join-Path $dir "$safe.$Tag.out.txt"; $errF = Join-Path $dir "$safe.$Tag.err.txt"
+    $p = Start-Process -FilePath $script:AgentExe -ArgumentList $argList -RedirectStandardOutput $outF -RedirectStandardError $errF -PassThru -WindowStyle Hidden
+    $script:Daemons[$Endpoint] = [pscustomobject]@{ Pid = $p.Id; Out = $outF; Err = $errF; Overlay = $overlay; Process = $p }
+    $deadline = (Get-Date).AddSeconds(30)
+    do {
+        Start-Sleep -Milliseconds 300
+        $st = Invoke-Agent -Endpoint $Endpoint -AgentArgs @('status') -TimeoutSec 10
+        if ($st.ExitCode -eq 0) { return [pscustomobject]@{ Up = $true; Pid = $p.Id; Status = $st.Out.Trim() } }
+    } while ((Get-Date) -lt $deadline -and -not $p.HasExited)
+    return [pscustomobject]@{ Up = $false; Pid = $p.Id; Status = "exited=$($p.HasExited) " + (Get-Content $errF -Raw -ErrorAction SilentlyContinue) }
+}
+
+function Stop-AgentDaemon {
+    param([Parameter(Mandatory)][string] $Endpoint, [switch] $Quiet)
+    $d = $script:Daemons[$Endpoint]
+    if (-not $d) { return $false }
+    try { Stop-Process -Id $d.Pid -Force -ErrorAction Stop } catch { }
+    Start-Sleep -Milliseconds 500
+    if ($d.Overlay -and (Test-Path $d.Overlay)) { Remove-Item $d.Overlay -Force -ErrorAction SilentlyContinue }
+    foreach ($f in @($d.Out, $d.Err)) { if (Test-Path $f) { $t = [System.IO.File]::ReadAllText($f); [System.IO.File]::WriteAllText($f, (Protect-Text $t), $script:Utf8) } }
+    $script:Daemons.Remove($Endpoint)
+    return $true
 }
 
 function Get-AgentStatus {

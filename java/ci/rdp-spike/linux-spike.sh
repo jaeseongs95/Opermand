@@ -35,7 +35,7 @@ AGENT="$(find "$WORK/agent" -type f -name ironrdp-agent | head -1)"; chmod +x "$
 if "$AGENT" --version >/dev/null 2>&1; then V=pass; else V=fail; fi
 res 10 "linux-x64 binary runs on the runner (glibc $(ldd --version | head -1 | awk '{print $NF}'), required >= 2.35)" "$V" "$(tr '\n' ' ' < "$ART/binary-info.txt" | cut -c1-900)"
 mkdir -p "$ART/help"
-for c in "--help" "--help-agent" "connect --help" "daemon --help" "daemon start --help" "cert --help" "type-unicode --help"; do
+for c in "--help" "--help-agent" "connect --help" "daemon-start --help" "key-unicode --help" "screenshot --help" "type-unicode --help" "cert --help" "daemon --help"; do
   "$AGENT" $c > "$ART/help/$(echo "$c" | tr ' -' '__').txt" 2>&1
 done
 [ "$V" = pass ] || exit 1
