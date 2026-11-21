@@ -2,6 +2,7 @@ package io.github.jaeseongs95.portal.store.sql;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.Locale;
 
 import javax.sql.DataSource;
 
@@ -169,7 +170,8 @@ public class SqlBuilder {
                 if (index > 0) {
                     sql.append(" OR ");
                 }
-                sql.append(pattern.formatted(index));
+                // Locale.ROOT: the suffix is a number in a statement, and the default format locale may write it with other digits (D-0165).
+                sql.append(String.format(Locale.ROOT, pattern, index));
             }
             sql.append(')');
             return this;
