@@ -66,10 +66,14 @@ class SchemaMigrationTest {
     }
 
     @Test
-    @DisplayName("S2-DB-01: every table of the schema is empty except the policy seed")
+    @DisplayName("S2-DB-01: every table of the schema is empty except the policy seed and the two rows of the budget gate (V8, D-0058)")
     void theTablesAreEmpty() {
         for (String table : TABLES) {
-            long expected = "command_policy".equals(table) ? 1 : 0;
+            long expected = switch (table) {
+                case "command_policy" -> 1;
+                case "budget_gate" -> 2;
+                default -> 0;
+            };
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Long.class)).as(table).isEqualTo(expected);
         }
     }
