@@ -103,11 +103,19 @@ public final class LinuxTargetPlatform implements TargetPlatform {
     /** A script without a working directory starts in {@code /}: the receiver needs an absolute one. */
     @Override
     public PreparedCommand prepareSource(SourceText source, SourceArguments args, WorkingDirectory workdir) {
+        return prepareSource(source, args, workdir, PosixPythonExecutable.DEFAULT, false);
+    }
+
+    /**
+     * The command that runs a Python source with the interpreter of the target, as a Windows target's counterpart does (defect SSH_PORTAL-D-0172); {@code elevate} puts
+     * {@code sudo -n --} before it. The port's own call has no parameter for the interpreter, so it runs {@link PosixPythonExecutable#DEFAULT}.
+     */
+    public PreparedCommand prepareSource(SourceText source, SourceArguments args, WorkingDirectory workdir, PosixPythonExecutable interpreter, boolean elevate) {
         String cwd = switch (workdir) {
             case WorkingDirectory.Default none -> "/";
             case WorkingDirectory.At at -> at.directory().value();
         };
-        return receiver.prepareLinux(source, args, cwd, false);
+        return receiver.prepareLinux(source, args, cwd, interpreter, elevate);
     }
 
     @Override
