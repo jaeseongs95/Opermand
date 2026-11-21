@@ -183,22 +183,31 @@ final class SftpDoubles {
         return proxy(real, (method, arguments) -> {
             if ("open".equals(method.getName()) && arguments != null && arguments.length == 2 && arguments[0] instanceof String path && path.endsWith(pathSuffix)
                 && arguments[1] instanceof java.util.Collection<?> modes && modes.equals(java.util.Set.of(SftpClient.OpenMode.Read))) {
-                SftpClient.CloseableHandle handle = (SftpClient.CloseableHandle) passThrough(real, method, arguments);
-                return Proxy.newProxyInstance(SftpClient.CloseableHandle.class.getClassLoader(), new Class<?>[] {SftpClient.CloseableHandle.class},
-                    (proxy, handleMethod, handleArguments) -> {
-                        if ("close".equals(handleMethod.getName())) {
-                            handle.close();
-                            throw new IOException("injected: closing the read handle failed");
-                        }
-                        try {
-                            return handleMethod.invoke(handle, handleArguments);
-                        } catch (InvocationTargetException e) {
-                            throw e.getCause();
-                        }
-                    });
+                return new ClosingFails((SftpClient.CloseableHandle) passThrough(real, method, arguments));
             }
             return passThrough(real, method, arguments);
         });
+    }
+
+    /** A handle of the real client whose {@code close()} closes the real handle first and then fails: a close that fails by itself after the answer is known. */
+    private static final class ClosingFails extends SftpClient.CloseableHandle {
+        private final SftpClient.CloseableHandle real;
+
+        ClosingFails(SftpClient.CloseableHandle real) {
+            super(real.getPath(), real.getIdentifier());
+            this.real = real;
+        }
+
+        @Override
+        public boolean isOpen() {
+            return real.isOpen();
+        }
+
+        @Override
+        public void close() throws IOException {
+            real.close();
+            throw new IOException("injected: closing the read handle failed");
+        }
     }
 
     /** Opens the real client of a session and puts a fault in front of it. */
