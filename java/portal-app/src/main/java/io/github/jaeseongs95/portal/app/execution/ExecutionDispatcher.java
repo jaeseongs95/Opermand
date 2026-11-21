@@ -228,7 +228,9 @@ public class ExecutionDispatcher {
 
     /**
      * Stops an operation that no runner took across: a cancel that came first settles as cancelled (nothing ran), any other refusal as failed before dispatch with the
-     * reason and the step. An operation that already ended is left alone.
+     * reason and the step. An operation that already ended is left alone. A write that lost the race every time is not dropped (defect D-0051): it is
+     * {@code OPERATION_DISPATCH_PERSISTENCE_FAILED}, which the caller logs, and the operation stays as the journal has it for the recovery after a restart, which settles it
+     * unknown and never sends it again.
      */
     private void refuseOrCancel(OperationId id, DispatchFailure failure) {
         for (int attempt = 0; attempt < SETTLE_ATTEMPTS; attempt++) {
@@ -255,6 +257,7 @@ public class ExecutionDispatcher {
                 }
             }
         }
+        throw new RequestRefusedException(OperationErrorCode.OPERATION_DISPATCH_PERSISTENCE_FAILED);
     }
 
     /**
