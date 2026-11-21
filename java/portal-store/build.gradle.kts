@@ -23,12 +23,13 @@ dependencies {
 // cannot give itself that zone: the default zone is read when the JVM starts, and H2 keeps what it read. The zoneTest task starts a second test JVM in such a zone (user.timezone is
 // the JVM's own property, the same on every operating system) and runs those cases only; the test task leaves them out and is finalized by zoneTest, so that
 // "./gradlew :portal-store:test" and "check" both run every case once.
+// The source set is read from the project's extension here, outside the task's block: inside it, "extensions" is the task's own and has no JavaPluginExtension.
+val testSourceSet = extensions.getByType<JavaPluginExtension>().sourceSets.named("test")
 val zoneTest by tasks.registering(Test::class) {
     description = "Runs the cases tagged zone in a JVM whose default time zone has daylight saving time."
     group = "verification"
-    val tests = extensions.getByType<JavaPluginExtension>().sourceSets.named("test")
-    testClassesDirs = tests.get().output.classesDirs
-    classpath = tests.get().runtimeClasspath
+    testClassesDirs = testSourceSet.get().output.classesDirs
+    classpath = testSourceSet.get().runtimeClasspath
     useJUnitPlatform {
         includeTags("zone")
     }
