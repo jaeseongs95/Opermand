@@ -22,7 +22,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledFuture;
 import org.apache.sshd.client.future.OpenFuture;
@@ -265,30 +264,17 @@ final class ExecSupervisor implements SupervisedExecChannel.Events {
 
     /** The exit status or exit signal of the command, if the server has sent one (the channel notifies its listeners when it arrives). */
     private void observeExit() {
-        Integer code = channel.getExitStatus();
-        String signal = channel.getExitSignal();
+        ExitStatus seen = channel.exit();
         synchronized (this) {
-            if (phase == Phase.DONE || !(exit instanceof ExitStatus.NoExit) || code == null && signal == null) {
+            if (phase == Phase.DONE || !(exit instanceof ExitStatus.NoExit) || seen instanceof ExitStatus.NoExit) {
                 return;
             }
-            exit = code != null ? new ExitStatus.Exited(code) : signaled(signal);
+            exit = seen;
             timeline.mark(ExecutionPhase.EXIT_SEEN);
             if (stop == StopReason.NONE && phase == Phase.RUNNING) {
                 scheduleClosing(request.limits().stopGrace());
             }
             evaluate();
-        }
-    }
-
-    private ExitStatus signaled(String name) {
-        String normalised = name.toUpperCase(Locale.ROOT);
-        if (normalised.startsWith("SIG")) {
-            normalised = normalised.substring(3);
-        }
-        try {
-            return new ExitStatus.Signaled(normalised);
-        } catch (IllegalArgumentException e) {
-            return new ExitStatus.Signaled("UNKNOWN");
         }
     }
 

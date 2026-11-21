@@ -11,7 +11,8 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.scheduling.TaskScheduler;
 
 /**
- * Watches one file transfer for the two things that stop it from outside: the time limit and the owner's cancel. Both are events, not a poll: the deadline is a task of
+ * Watches one remote request (a file transfer, and the wait of a channel open in {@code ChannelOpening}) for the two things that stop it from outside: the time limit and
+ * the owner's cancel. Both are events, not a poll: the deadline is a task of
  * the injected {@link TaskScheduler}, the cancel is a subscription to {@link CancelToken#whenRequested()}. When one fires, the watch records which, and runs the
  * interrupt (it closes the SFTP channel, so a call that blocks on the network fails at once). The first cause wins and stays.
  *
@@ -21,7 +22,7 @@ import org.springframework.scheduling.TaskScheduler;
  * <p>One watch serves one transfer and is closed with it. It is thread safe: the scheduler's thread and the cancelling thread call into it while the transfer thread
  * reads it.
  */
-final class TransferWatch implements AutoCloseable {
+public final class TransferWatch implements AutoCloseable {
 
     private final CancelToken cancel;
     private final AtomicReference<TransferFailureCause> fired = new AtomicReference<>();
@@ -29,7 +30,7 @@ final class TransferWatch implements AutoCloseable {
     private volatile Runnable interrupt = () -> { };
     private volatile boolean armed = true;
 
-    TransferWatch(TaskScheduler scheduler, Clock clock, Duration deadline, CancelToken cancel) {
+    public TransferWatch(TaskScheduler scheduler, Clock clock, Duration deadline, CancelToken cancel) {
         Objects.requireNonNull(scheduler, "scheduler");
         Objects.requireNonNull(clock, "clock");
         Objects.requireNonNull(deadline, "deadline");
@@ -39,7 +40,7 @@ final class TransferWatch implements AutoCloseable {
     }
 
     /** What to do when the transfer is stopped from outside; runs at once when it already was. */
-    void interruptWith(Runnable action) {
+    public void interruptWith(Runnable action) {
         this.interrupt = Objects.requireNonNull(action, "action");
         if (fired.get() != null && armed) {
             action.run();
@@ -47,12 +48,12 @@ final class TransferWatch implements AutoCloseable {
     }
 
     /** Why the transfer was stopped from outside, if it was. */
-    Optional<TransferFailureCause> fired() {
+    public Optional<TransferFailureCause> fired() {
         return Optional.ofNullable(fired.get());
     }
 
     /** The checkpoint of a loop: the cause when the transfer was stopped, also when the cancel was requested a moment ago and the event has not run yet. */
-    Optional<TransferFailureCause> stopRequested() {
+    public Optional<TransferFailureCause> stopRequested() {
         if (armed && fired.get() == null && cancel.requested()) {
             fire(TransferFailureCause.CANCELLED);
         }
@@ -60,7 +61,7 @@ final class TransferWatch implements AutoCloseable {
     }
 
     /** From now on nothing stops the transfer from outside. */
-    void disarm() {
+    public void disarm() {
         armed = false;
         deadlineTask.cancel(false);
     }
