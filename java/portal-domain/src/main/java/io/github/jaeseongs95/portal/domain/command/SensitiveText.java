@@ -24,7 +24,8 @@ public record SensitiveText(String value) {
     /** The normalised secret reference, ending at the end of the text or at a character that cannot be part of the name (execution-context.mjs:13). */
     private static final Pattern SECRET_REFERENCE = Pattern.compile("secret://[a-z][a-z0-9-]{0,31}/[A-Za-z0-9][A-Za-z0-9_.-]{0,63}(?=$|[\\s\"'`,;)\\]}])");
     private static final Pattern NAME_CHARACTER = Pattern.compile("[A-Za-z0-9_./:-]");
-    private static final Pattern SENSITIVE_PLACE = Pattern.compile("/etc/shadow|\\.ssh/id_|/secrets(?:/|\\b)|\\.env(?:\\b|/)", Pattern.CASE_INSENSITIVE);
+    /** A separator of a path is {@code /} or {@code \}: the text of a command is the target's, whatever the operating system of the server is (D-0169). */
+    private static final Pattern SENSITIVE_PLACE = Pattern.compile("/etc/shadow|\\.ssh[/\\\\]id_|[/\\\\]secrets(?:[/\\\\]|\\b)|\\.env(?:\\b|[/\\\\])", Pattern.CASE_INSENSITIVE);
 
     public SensitiveText {
         Objects.requireNonNull(value, "value");

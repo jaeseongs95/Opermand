@@ -27,6 +27,16 @@ class CallerContextTest {
     }
 
     @Test
+    @DisplayName("S-D0169-01 a sensitive place written with the separators of a Windows path is sensitive as well (the text of a command is not tied to the server's operating system)")
+    void sensitivePlacesWithWindowsSeparators() {
+        for (String path : List.of("C:\\Users\\operator\\.ssh\\id_ed25519", "C:\\ProgramData\\service\\secrets\\db", "\\secrets", "D:\\work\\.env", "D:\\work\\.env\\local")) {
+            assertThat(new SensitiveText("type " + path).isSensitive()).as(path).isTrue();
+        }
+        assertThat(new SensitiveText("dir C:\\tools\\secretsanta\\run").isSensitive()).isFalse();
+        assertThat(new SensitiveText("dir C:\\Users\\operator\\.ssh\\config").isSensitive()).isFalse();
+    }
+
+    @Test
     @DisplayName("RC-A-753 / RC-A-439 credential material in a description is refused with COMMAND_CONTEXT_CONTAINS_SECRET")
     void credentialsAreRefused() {
         for (String text : List.of("-----BEGIN PRIVATE KEY-----", "send Bearer synthetic-credential", "api_key=synthetic", "api-key: x", "apikey = x", "password: x", "secret=x", "token=x",
