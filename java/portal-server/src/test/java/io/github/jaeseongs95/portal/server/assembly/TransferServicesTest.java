@@ -209,7 +209,7 @@ class TransferServicesTest {
     }
 
     @Test
-    @DisplayName("G4: an artifact that is no longer what was approved is refused as a file guard before any byte is sent: another digest, a file that is not ready, and a missing one")
+    @DisplayName("G4 / S-D0054-01 D-0054: an artifact that is no longer what was approved is refused as a file guard with the reason authority before any byte is sent: another digest, a file that is not ready, and a missing one")
     void anArtifactThatChangedIsRefusedBeforeDispatch() {
         byte[] bytes = bytes(100, 4);
         ArtifactId id = readyUpload(bytes);
@@ -220,7 +220,8 @@ class TransferServicesTest {
 
         for (UploadJob job : new UploadJob[] {changed, missing, notReady}) {
             assertThatThrownBy(() -> uploads.upload(job, CONTROL)).isInstanceOfSatisfying(DispatchRefusedException.class,
-                e -> assertThat(e.failure()).isEqualTo(DispatchFailure.refused(DispatchReason.UNKNOWN, DispatchStage.FILE_GUARD)));
+                e -> assertThat(e.failure()).as("the approval no longer covers the artifact: authority, not unknown (D-0054)")
+                    .isEqualTo(DispatchFailure.refused(DispatchReason.AUTHORITY, DispatchStage.FILE_GUARD)));
         }
         assertThat(remote.uploads).isEmpty();
     }
