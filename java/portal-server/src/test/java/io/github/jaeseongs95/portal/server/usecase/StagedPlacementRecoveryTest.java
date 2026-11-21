@@ -14,9 +14,12 @@ import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Import;
 
 import io.github.jaeseongs95.portal.app.artifact.ArtifactImporter;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactPayloadStore;
+import io.github.jaeseongs95.portal.app.artifact.ArtifactPinning;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRecord;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRegistry;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRetention;
@@ -26,11 +29,13 @@ import io.github.jaeseongs95.portal.app.artifact.StagedActionKind;
 import io.github.jaeseongs95.portal.app.artifact.StagedActionState;
 import io.github.jaeseongs95.portal.app.artifact.StagingTimes;
 import io.github.jaeseongs95.portal.app.file.OperationUploadAdmission;
+import io.github.jaeseongs95.portal.app.file.StagedActionSettlement;
 import io.github.jaeseongs95.portal.app.file.StagedBegin;
 import io.github.jaeseongs95.portal.app.file.StagedFileService;
 import io.github.jaeseongs95.portal.app.file.StagedPlacement;
 import io.github.jaeseongs95.portal.app.file.StagedPlacementRequest;
 import io.github.jaeseongs95.portal.app.file.UploadAdmission;
+import io.github.jaeseongs95.portal.app.file.UploadArtifactRelease;
 import io.github.jaeseongs95.portal.app.journal.OperationJournal;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
 import io.github.jaeseongs95.portal.app.operation.OperationIntake;
@@ -65,6 +70,15 @@ import io.github.jaeseongs95.portal.domain.path.PathSyntax;
 class StagedPlacementRecoveryTest {
 
     private static final OwnerId OWNER = new OwnerId("recovery-owner");
+
+    /**
+     * The listeners of terminal operations that the product has and the slice leaves out: they give the copy of an upload back when its operation ended and settle the action of
+     * a staged file. They make this class a context of its own, in which an operation that ends is told to them like in the product.
+     */
+    @TestConfiguration(proxyBeanMethods = false)
+    @Import({UploadArtifactRelease.class, StagedActionSettlement.class, ArtifactPinning.class})
+    static class WithSettlementListeners {
+    }
 
     private final StagedFileService staged;
     private final OperationUploadAdmission realAdmission;
