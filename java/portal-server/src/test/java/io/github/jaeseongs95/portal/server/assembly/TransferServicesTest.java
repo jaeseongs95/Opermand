@@ -288,7 +288,9 @@ class TransferServicesTest {
     @Test
     @DisplayName("S-D0012-14 (S3-AR-02 replaced): a small file is downloaded although less than a whole file (10,000) of the budget is left: the target is asked for the size first and the budget judges that size")
     void aSmallDownloadFitsWhereTheLargestFileWouldNot() {
-        for (int i = 0; i < 9; i++) {
+        // Ten uploads leave 5,000 of the budget of 100,000, less than the whole file (10,000) that the old reservation held for every download; nine left 14,500 and
+        // passed with the old reservation as well (defect D-0147).
+        for (int i = 0; i < 10; i++) {
             reserveUpload(bytes(9_500, i));
         }
         remote.served = bytes(1_000, 3);
@@ -296,7 +298,7 @@ class TransferServicesTest {
         DownloadExecution execution = downloads.download(downloadJob(), CONTROL);
 
         assertThat(execution).isInstanceOf(DownloadExecution.Stored.class);
-        assertThat(registry.budget().chargedBytes()).isEqualTo(85_500L + 1_000L);
+        assertThat(registry.budget().chargedBytes()).isEqualTo(95_000L + 1_000L);
     }
 
     @Test
