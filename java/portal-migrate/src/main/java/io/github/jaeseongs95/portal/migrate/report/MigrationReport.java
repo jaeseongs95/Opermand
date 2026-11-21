@@ -46,6 +46,9 @@ public final class MigrationReport {
     private final Map<String, Integer> notMigrated = new LinkedHashMap<>();
     private final List<Issue> issues = new ArrayList<>();
     private final List<String> reinterpretations = new ArrayList<>();
+    private final List<String> settingsNotes = new ArrayList<>();
+    private final List<String> actions = new ArrayList<>();
+    private String settingsResult;
     private int planned;
     private int plannedUnknown;
     private int coveredDuplicates;
@@ -86,6 +89,17 @@ public final class MigrationReport {
 
     public void reinterpreted(String reference, String text) {
         reinterpretations.add(reference + ": " + text);
+    }
+
+    /** What became of the settings of the 2.x environment file: key names and reasons, never a value. */
+    public void settings(List<String> notes, List<String> actionsRequired) {
+        settingsNotes.addAll(notes);
+        actions.addAll(actionsRequired);
+    }
+
+    /** What the run did, or would do, with the settings file. */
+    public void settingsResult(String text) {
+        settingsResult = text;
     }
 
     public void planned(boolean unknown) {
@@ -144,6 +158,18 @@ public final class MigrationReport {
 
     public List<Issue> issues() {
         return List.copyOf(issues);
+    }
+
+    public List<String> settingsNotes() {
+        return List.copyOf(settingsNotes);
+    }
+
+    public List<String> actions() {
+        return List.copyOf(actions);
+    }
+
+    public String settingsResult() {
+        return settingsResult;
     }
 
     public List<String> reinterpretations() {

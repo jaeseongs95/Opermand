@@ -68,9 +68,7 @@ class MigrateUnknownTest {
         assertThat(refused.exitCode()).as(refused.output()).isEqualTo(2);
         assertThat(refused.output()).contains("CONFLICT UNKNOWN_BUDGET").contains("the store would hold 3 unknown operations (0 now, 3 to move) and the unknown budget is 3")
             .contains("Nothing was written");
-        try (Store store = kit.open(target)) {
-            assertThat(store.total()).as("the store exists (the check needs it) but holds no operation").isZero();
-        }
+        assertThat(target).as("a move that cannot be made leaves no store (and no folder) behind").doesNotExist();
 
         Run allowed = kit.run(kit.importArgs(legacy.folder(), target, "--unknown-budget=4"));
 

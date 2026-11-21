@@ -56,7 +56,7 @@ final class MigrationKit {
         return args(source, target, true, more);
     }
 
-    private String[] args(Path source, Path target, boolean dryRun, String... more) {
+    String[] args(Path source, Path target, boolean dryRun, String... more) {
         ArrayList<String> args = new ArrayList<>(List.of("--source=" + source, "--target=" + target));
         if (dryRun) {
             args.add("--dry-run");
@@ -67,7 +67,7 @@ final class MigrationKit {
 
     /** An open 3.0 store, read through the store's own journal (the journal the server uses); close it before the command runs again (the store file is locked while open). */
     Store open(Path target) {
-        String location = target.toAbsolutePath().resolve("store").resolve("portal").toString().replace('\\', '/');
+        String location = target.toAbsolutePath().resolve("portal").toString().replace('\\', '/');
         ConfigurableApplicationContext context = new SpringApplicationBuilder(ReadOnlyTargetConfiguration.class).web(WebApplicationType.NONE).bannerMode(Banner.Mode.OFF)
             .properties("spring.datasource.url=jdbc:h2:file:" + location, "spring.datasource.username=sa", "spring.datasource.password=", "spring.sql.init.mode=never",
                 "logging.level.root=WARN")
