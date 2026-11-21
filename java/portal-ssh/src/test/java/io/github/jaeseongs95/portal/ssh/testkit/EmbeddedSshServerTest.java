@@ -272,7 +272,8 @@ class EmbeddedSshServerTest {
         java.util.concurrent.ExecutorService pair = java.util.concurrent.Executors.newFixedThreadPool(2);
         try (ClientSession first = client.open(server, USER, PASSWORD); ClientSession second = client.open(server, USER, PASSWORD);
              SftpClient firstSftp = sftp(first); SftpClient secondSftp = sftp(second)) {
-            for (int round = 0; round < rounds; round++) {
+            for (int index = 0; index < rounds; index++) {
+                int round = index;
                 Files.writeString(root.resolve("from-a-" + round), "a" + round);
                 Files.writeString(root.resolve("from-b-" + round), "b" + round);
                 java.util.concurrent.CyclicBarrier together = new java.util.concurrent.CyclicBarrier(2);
