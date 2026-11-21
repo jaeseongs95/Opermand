@@ -21,6 +21,12 @@ import java.util.regex.Pattern;
  */
 final class EnvText {
 
+    private final SettingsContract contract;
+
+    EnvText(SettingsContract contract) {
+        this.contract = contract;
+    }
+
     /** 2.x refused an environment file larger than this. */
     static final int MAX_BYTES = 65536;
 
@@ -40,10 +46,7 @@ final class EnvText {
     record Parsed(Map<String, Entry> entries, List<String> duplicates, List<String> problems) {
     }
 
-    private EnvText() {
-    }
-
-    static Parsed parse(byte[] bytes) {
+    Parsed parse(byte[] bytes) {
         Map<String, Entry> entries = new LinkedHashMap<>();
         List<String> duplicates = new ArrayList<>();
         List<String> problems = new ArrayList<>();
@@ -69,14 +72,14 @@ final class EnvText {
         return new Parsed(entries, duplicates, problems);
     }
 
-    private static void read(int number, String line, Map<String, Entry> entries, List<String> duplicates, List<String> problems) {
+    private void read(int number, String line, Map<String, Entry> entries, List<String> duplicates, List<String> problems) {
         Matcher match = LINE.matcher(line);
         if (!match.matches()) {
             problems.add("line " + number + " is not a KEY=value entry, which 2.x refused too");
             return;
         }
         String key = match.group(1);
-        if (!SettingsContract.legacyAccepts(key)) {
+        if (!contract.legacyAccepts(key)) {
             problems.add("line " + number + ": " + key + " is not a setting of 2.x, which refused it too");
             return;
         }

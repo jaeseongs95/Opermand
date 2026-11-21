@@ -33,16 +33,13 @@ public final class OwnerOnlyFile {
 
     private static final Set<PosixFilePermission> OWNER_ONLY = PosixFilePermissions.fromString("rw-------");
 
-    private OwnerOnlyFile() {
-    }
-
     /**
      * Creates the file with the content, private to its owner.
      *
      * @throws java.nio.file.FileAlreadyExistsException when something is at the path (it is left as it is)
      * @throws IOException when the file cannot be made private or written; nothing is left at the path
      */
-    public static void createNew(Path file, byte[] content) throws IOException {
+    public void createNew(Path file, byte[] content) throws IOException {
         Path folder = file.toAbsolutePath().getParent();
         Files.createDirectories(folder);
         Path staging = Files.createTempFile(folder, ".portal-migrate-", ".tmp");
@@ -61,7 +58,7 @@ public final class OwnerOnlyFile {
         }
     }
 
-    private static void restrict(Path path) throws IOException {
+    private void restrict(Path path) throws IOException {
         FileStore store = Files.getFileStore(path);
         if (store.supportsFileAttributeView("posix")) {
             Files.setPosixFilePermissions(path, OWNER_ONLY);

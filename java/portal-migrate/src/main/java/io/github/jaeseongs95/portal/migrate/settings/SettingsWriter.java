@@ -13,6 +13,8 @@ import java.util.Arrays;
  */
 public final class SettingsWriter {
 
+    private final OwnerOnlyFile files = new OwnerOnlyFile();
+
     /** What the write did. */
     public enum Result {
         /** The file was made now. */
@@ -31,7 +33,7 @@ public final class SettingsWriter {
         byte[] content = plan.text().getBytes(StandardCharsets.UTF_8);
         Path out = plan.out();
         try {
-            OwnerOnlyFile.createNew(out, content);
+            files.createNew(out, content);
             return Result.WRITTEN;
         } catch (FileAlreadyExistsException there) {
             return Arrays.equals(Files.readAllBytes(out), content) ? Result.ALREADY_THERE : Result.LEFT_AS_IT_IS;

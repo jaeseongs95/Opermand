@@ -71,7 +71,7 @@ class MigrateSettingsFailureTest {
         Path profile = LegacyEnvFixture.profileFile(root.resolve("etc").resolve("config.toml"));
         Path env = LegacyEnvFixture.write(root.resolve("etc").resolve("bridge.env"), LegacyEnvFixture.installerLines(profile));
         String sharedKey = "shared-key-" + id(7);
-        LegacyFixture legacy = new LegacyFixture(root.resolve("legacy")).operations(List.of(done(1).key(sharedKey), done(2).key(sharedKey)));
+        LegacyFixture legacy = new LegacyFixture(root.resolve("legacy")).operations(List.of(done(1).key(sharedKey))).commandJournal(List.of(done(2).key(sharedKey)));
         Path target = root.resolve("v3");
         Path out = root.resolve("out.env");
 

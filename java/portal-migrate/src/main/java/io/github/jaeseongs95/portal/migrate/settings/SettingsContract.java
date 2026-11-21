@@ -47,31 +47,28 @@ public final class SettingsContract {
     /** The profile credentials 2.x took from the environment file: kept under the same names (decision D3-09). */
     private static final Pattern PROFILE_CREDENTIAL = Pattern.compile("SSH_MCP_[A-Z0-9_]+");
 
-    private SettingsContract() {
-    }
-
     /** The settings 2.4.2 accepted as keys of its environment file. */
-    public static Set<String> legacyKeys() {
+    public Set<String> legacyKeys() {
         return LEGACY_KEYS;
     }
 
     /** The keys 3.0 does not have. */
-    public static Set<String> removedKeys() {
+    public Set<String> removedKeys() {
         return REMOVED.keySet();
     }
 
     /** The keys 3.0 has and 2.x had not. */
-    public static Set<String> addedKeys() {
+    public Set<String> addedKeys() {
         return ADDED;
     }
 
     /** True for a setting 2.x accepted: one of its keys or an {@code SSH_MCP_*} credential. */
-    public static boolean legacyAccepts(String key) {
+    public boolean legacyAccepts(String key) {
         return LEGACY_KEYS.contains(key) || PROFILE_CREDENTIAL.matcher(key).matches();
     }
 
     /** The reason 3.0 has no such key, or null when it has. */
-    public static String removalReason(String key) {
+    public String removalReason(String key) {
         return REMOVED.get(key);
     }
 }

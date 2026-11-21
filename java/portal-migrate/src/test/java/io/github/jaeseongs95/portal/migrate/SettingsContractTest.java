@@ -21,6 +21,8 @@ import io.github.jaeseongs95.portal.migrate.settings.SettingsContract;
  */
 class SettingsContractTest {
 
+    private final SettingsContract contract = new SettingsContract();
+
     /** Item 6 of the contract changes of the 3.0 baseline (stage 4): the keys that are no longer allowed. */
     private static final Set<String> DROPPED_BY_3_0 = Set.of("BRIDGE_AUDIT_PATH", "BRIDGE_TRANSFER_ROOT", "BRIDGE_ACCESS_TEAM_DOMAIN", "BRIDGE_ACCESS_AUD", "BRIDGE_ACCESS_OWNER_EMAILS",
         "BRIDGE_OIDC_JWKS_URL", "BRIDGE_OIDC_OWNER_EMAILS");
@@ -42,14 +44,14 @@ class SettingsContractTest {
 
     @Test
     void theTableKnowsExactlyTheKeys2xAccepted() throws IOException {
-        assertThat(SettingsContract.legacyKeys()).containsExactlyInAnyOrderElementsOf(keysOf2x());
+        assertThat(contract.legacyKeys()).containsExactlyInAnyOrderElementsOf(keysOf2x());
     }
 
     @Test
     void theDroppedKeysAreTheSevenOfTheBaselineAndAllOfThemWereKeysOf2x() throws IOException {
-        assertThat(SettingsContract.removedKeys()).containsExactlyInAnyOrderElementsOf(DROPPED_BY_3_0);
-        assertThat(keysOf2x()).containsAll(SettingsContract.removedKeys());
-        assertThat(SettingsContract.addedKeys()).containsExactlyInAnyOrderElementsOf(ADDED_BY_3_0);
+        assertThat(contract.removedKeys()).containsExactlyInAnyOrderElementsOf(DROPPED_BY_3_0);
+        assertThat(keysOf2x()).containsAll(contract.removedKeys());
+        assertThat(contract.addedKeys()).containsExactlyInAnyOrderElementsOf(ADDED_BY_3_0);
         assertThat(keysOf2x()).as("a key 3.0 added was not a key of 2.x").doesNotContainAnyElementsOf(ADDED_BY_3_0);
     }
 
@@ -61,20 +63,20 @@ class SettingsContractTest {
 
         assertThat(allowedIn3).hasSize(37);
         for (String key : keysOf2x()) {
-            assertThat(SettingsContract.legacyAccepts(key)).isTrue();
-            assertThat(SettingsContract.removalReason(key) != null).as(key).isEqualTo(DROPPED_BY_3_0.contains(key));
+            assertThat(contract.legacyAccepts(key)).isTrue();
+            assertThat(contract.removalReason(key) != null).as(key).isEqualTo(DROPPED_BY_3_0.contains(key));
         }
         for (String key : DROPPED_BY_3_0) {
-            assertThat(SettingsContract.removalReason(key)).as(key).isNotBlank();
+            assertThat(contract.removalReason(key)).as(key).isNotBlank();
         }
     }
 
     @Test
     void theProfileCredentialsOfThe2xFileAreAcceptedAndOtherNamesAreNot() {
-        assertThat(SettingsContract.legacyAccepts("SSH_MCP_ALPHA_WRITE_PASSWORD")).isTrue();
-        assertThat(SettingsContract.legacyAccepts("SSH_MCP_")).isFalse();
-        assertThat(SettingsContract.legacyAccepts("SSH_MCP_lower")).isFalse();
-        assertThat(SettingsContract.legacyAccepts("NODE_OPTIONS")).isFalse();
-        assertThat(SettingsContract.legacyAccepts("BRIDGE_DATA_DIR")).as("a key of 3.0 is not a key of 2.x").isFalse();
+        assertThat(contract.legacyAccepts("SSH_MCP_ALPHA_WRITE_PASSWORD")).isTrue();
+        assertThat(contract.legacyAccepts("SSH_MCP_")).isFalse();
+        assertThat(contract.legacyAccepts("SSH_MCP_lower")).isFalse();
+        assertThat(contract.legacyAccepts("NODE_OPTIONS")).isFalse();
+        assertThat(contract.legacyAccepts("BRIDGE_DATA_DIR")).as("a key of 3.0 is not a key of 2.x").isFalse();
     }
 }

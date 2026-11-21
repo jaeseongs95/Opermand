@@ -20,6 +20,9 @@ import io.github.jaeseongs95.portal.migrate.settings.SettingsPlan.Problem;
  */
 public final class SettingsPlanner {
 
+    private final SettingsContract contract = new SettingsContract();
+    private final EnvText envText = new EnvText(contract);
+
     /**
      * Reads and converts.
      *
@@ -33,7 +36,7 @@ public final class SettingsPlanner {
         if (bytes == null) {
             return new SettingsPlan(out, null, List.of(), List.of(), problems);
         }
-        EnvText.Parsed parsed = EnvText.parse(bytes);
+        EnvText.Parsed parsed = envText.parse(bytes);
         parsed.problems().forEach(message -> problems.add(new Problem("SETTINGS_ENTRY", "environment file", message)));
         if (!problems.isEmpty()) {
             return new SettingsPlan(out, null, List.of(), List.of(), problems);
@@ -43,7 +46,7 @@ public final class SettingsPlanner {
         List<String> lines = new ArrayList<>();
         List<String> moved = new ArrayList<>();
         for (Entry entry : parsed.entries().values()) {
-            String removal = SettingsContract.removalReason(entry.key());
+            String removal = contract.removalReason(entry.key());
             if (removal != null) {
                 notes.add("removed in 3.0, not carried over: " + entry.key() + " - " + removal);
             } else if (SettingsContract.ADMIN_AUTH_MODE.equals(entry.key()) && "access".equals(entry.value())) {
