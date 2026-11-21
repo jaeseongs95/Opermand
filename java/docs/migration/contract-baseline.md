@@ -1,13 +1,13 @@
 # 계약 기준본 (Contract Baseline) — ssh-approval-portal 2.4.2 -> Java 3.0.0
 
-- 대상 소스: `D:/codex/build/ssh-portal-v300-prep` (브랜치 `feature/v300-prep`, HEAD `a44c4d145ca1a3b2fa68701a5b7f5cd92ff15967`, package.json version `2.4.2`).
+- 대상 소스: 브랜치 `feature/v300-prep` 작업 사본(HEAD `a44c4d145ca1a3b2fa68701a5b7f5cd92ff15967`, package.json version `2.4.2`).
 - 결정: 「계약 유지」 (MCP 도구 이름·입력 스키마·응답 봉투 Contract 2.0, 관리자 HTTP API, 완료 hook 형식, 설정 키).
 - 용도: JUnit 계약 시험이 Java 서버의 실제 출력을 이 기준본과 비교한다. 기준본은 `java/portal-web/src/test/resources/contract/` 아래에 있다.
 - 작성 방식: 소스를 읽어 옮겼다. Node·Gradle·Python은 실행하지 않았다(지시). 설명 문장은 한 글자도 다듬거나 번역하지 않고 소스 문자열 그대로 두었다(아래 4.3의 grep 대조로 확인).
 
 ## 1. 산출물과 출처
 
-기준본 루트: `D:/codex/build/ssh-portal-v300-prep/java/portal-web/src/test/resources/contract/`
+기준본 루트: `java/portal-web/src/test/resources/contract/`
 
 | 산출물 | 내용 | 출처(file:line, HEAD a44c4d1) |
 | --- | --- | --- |
@@ -232,7 +232,7 @@ hook에서 `portal-files.mjs`가 받는 하위 명령·인자 (hooks JSON에서 
 9. `scripts/portal-files.mjs`의 내부 동작(hook이 읽는 출력 형식, receipt·ACK, `--wait` 대기 의미, `portal-files upload --file` CLI)은 읽지 않았다. 메인 확정(3.0 계획)에 따라 hook의 `command`만 Java 런처로 바뀌고 나머지 의미 필드는 유지되므로, hook 비교는 5.1절의 규칙(「비교 대상 = command를 제외한 모든 필드」)으로 정리한다. 스크립트 내부 동작은 hook 계약 파일 비교의 대상이 아니라 Java 런처 구현 요구사항이며 이 기준본 범위 밖이다.
 12. outputSchema `$schema` = draft-07, 근거 `test/mcp-contracts.test.mjs:244`(2.x 시험 단언), 노출본 대조 불가. 그 시험(`test/mcp-contracts.test.mjs:238-251`)은 `listTools()`가 돌려주는 모든 도구의 `inputSchema`·`outputSchema`를 순회해 `published.$schema === 'http://json-schema.org/draft-07/schema#'`를 단언하고 Ajv(draft-07)와 Ajv2020으로 컴파일한다(`compiled === tools.length * 2`). 시험이 쓰는 `fixture()`(:24-52)는 `desktop` 서비스를 주지 않으므로 대상은 공개 10 + show-* 3 + ui-* 6 = 19개 도구이다. ui-* 6개는 포함된다(같은 시험 파일 :195-196이 `listTools()`에 ui-* 6개가 나옴을 단언함). desktop-* 5개는 이 시험의 순회 대상이 아니다(desktop 미주입). 같은 등록 경로를 쓰므로 draft-07일 것으로 추정하지만 시험으로 확인된 것은 아니다.
 13. annotations·`_meta`·serverInfo·리소스는 소스 값 그대로이며 노출본이 없어 대조하지 못했다. 소스에 값이 없는 것: 도구 `title`(소스에 지정 없음 -> 모든 도구 파일에 `title` 없음), MCP `capabilities` 광고 내용(SDK가 만드는 값이라 소스에 없음 -> `server.json`에 옮기지 못함), `tools/list`의 도구 `execution` 등 SDK가 덧붙일 수 있는 필드.
-10. 이번 작업 중 scratchpad(`C:\Users\Lenovo\AppData\Local\Temp\claude\...\scratchpad\codes_all.txt`)에 error.code grep 중간 결과를 임시로 썼다(지시의 쓰기 경로 두 곳 밖이지만 세션 임시 폴더). 산출물은 아니며 저장소에는 없다.
+10. 이번 작업 중 세션 임시 폴더(`codes_all.txt`)에 error.code grep 중간 결과를 임시로 썼다(지시의 쓰기 경로 두 곳 밖이지만 세션 임시 폴더). 산출물은 아니며 저장소에는 없다.
 11. 영문판 문서: 프로젝트 문서 규칙은 영문판·한글판을 모두 요구하나, 지시된 산출물은 이 한글 문서 하나라서 영문판은 만들지 않았다.
 
 ## 8. JUnit 계약 시험이 알아야 할 점

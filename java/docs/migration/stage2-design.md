@@ -1,8 +1,8 @@
 # 3.0.0 Java 전환 2단계 설계 초안 (portal-domain · portal-store · portal-app 포트)
 
 상태: 초안(설계 문서 작성 담당 산출물, 메인 판정 전). 이 문서는 코드·빌드·시험을 하지 않고 쓴 설계다.
-기준 작업 사본: `D:/codex/build/ssh-portal-v300-domain` (브랜치 `feature/v300-domain`, HEAD `35b7360`).
-계획 정본: `C:\Users\Lenovo\.claude\plans\inherited-marinating-island.md`(구조 표, 2·3단계, 미종결 결함 표).
+기준 작업 사본: 브랜치 `feature/v300-domain`(HEAD `35b7360`).
+계획 정본: 저장소 밖 계획 문서(구조 표, 2·3단계, 미종결 결함 표).
 
 ## 0. 읽는 법
 
@@ -21,7 +21,7 @@
 - 읽지 못한 것(미검증): `src/application/{agent-cli,files(166줄 이후),history(60줄 이후),desktop,opaque-files,command-policy-review,request-safety}.mjs`의 세부, `preservation-verification.mjs`·`offline-preservation.mjs`·`operation-migration.mjs` 전체(보존 비교·이전은 4·7단계), `artifacts.mjs`의 300줄 이후, 공식 문서 원문(H2·Spring Data JDBC 문서는 이번에 열지 못했다).
 
 ### 0.3 vendor 규칙 조사 문서
-`D:/codex/build/ssh-portal-v300-prep/java/docs/migration/vendor-ssh-mcp-rules.md`는 2026-11-12 이 문서를 쓰는 시점에 존재하지 않았다(해당 폴더에 `vendor*` 파일 0개를 확인). 그래서 6절의 분류기·redactor 규칙은 「vendor 문서 대기」로 두었다.
+`feature/v300-prep` 작업 사본의 `java/docs/migration/vendor-ssh-mcp-rules.md`는 2026-11-12 이 문서를 쓰는 시점에 존재하지 않았다(해당 폴더에 `vendor*` 파일 0개를 확인). 그래서 6절의 분류기·redactor 규칙은 「vendor 문서 대기」로 두었다.
 
 ### 0.4 핵심 수치(자체 점검 결과는 부록 A)
 - 상태 값: Operation 상태 11(wire 공개 enum). 2.x는 13개(내구 11 + `pending`·`evaluating`)였으나 3.0.0은 `accepted`·`evaluating`을 없앴다(SSH_PORTAL-D-0119, 2.2절·결정 D-03 개정). 2.x 승인 큐 job 상태는 2.x 13개의 부분집합이었다.

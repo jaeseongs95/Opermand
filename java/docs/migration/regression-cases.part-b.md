@@ -3,7 +3,7 @@
 ## 1. 머리말
 
 - 목적: ssh-approval-portal v2.4.2(Node·Python)의 기존 시험 행동을 Java 25·Spring Boot 3.0.0 JUnit 회귀 사례로 옮기기 위한 기준표(B범위)다. 메인이 Java 구현 담당에게 「이 사례를 모두 JUnit으로 고정하라」고 줄 때 쓴다. 빠진 원 시험은 0이어야 한다.
-- 기준 저장소: `D:/codex/build/ssh-portal-v300-prep` (브랜치 feature/v300-prep, HEAD a44c4d1 기반). 원자료: `java/docs/migration/test-inventory.raw.md`.
+- 기준 저장소: 브랜치 feature/v300-prep 작업 사본(HEAD a44c4d1 기반). 원자료: `java/docs/migration/test-inventory.raw.md`.
 - B범위: (1) mjs 표에서 `test/` 다음 첫 글자가 `m`~`z`인 파일 (2) 파이썬 표 `test/test_*.py` 전체 (3) PowerShell·셸 표 전체. a~l mjs는 다른 담당(part-a)이 한다.
 - B범위 원자료 행 수: **1,088** = mjs 611(raw 1222~1832행) + py 335(raw 1840~2174행) + ps1·sh 142(raw 2184~2325행).
 - 묶음: 원자료 행 범위별로 11개 묶음(G01~G11)으로 나누어 작성했다. 각 묶음은 아래 4개 절(사례 표·삭제 표·대응표·결함 연결)에 자기 소절을 가진다. 묶음 사이에서 같은 행동이 겹치면 사례가 묶음별로 따로 있을 수 있다(통합 단계에서 대조).
