@@ -19,6 +19,7 @@ import io.github.jaeseongs95.portal.app.remote.UnconfirmedCause;
 import io.github.jaeseongs95.portal.app.remote.UploadRequest;
 import io.github.jaeseongs95.portal.app.remote.UploadResult;
 import io.github.jaeseongs95.portal.app.storage.PayloadRead;
+import io.github.jaeseongs95.portal.ssh.profile.TestFiles;
 import io.github.jaeseongs95.portal.domain.error.TransferErrorCode;
 import io.github.jaeseongs95.portal.domain.operation.CleanupState;
 import io.github.jaeseongs95.portal.domain.operation.OverwriteMode;
@@ -50,6 +51,9 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.apache.sshd.sftp.common.SftpConstants;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
 
@@ -106,7 +110,7 @@ class UploadTest {
     }
 
     private boolean fileSystemHasPosixModes() throws IOException {
-        return Files.getFileStore(root).supportsFileAttributeView(PosixFileAttributeView.class);
+        return TestFiles.hasAbility("posix", Files.getFileStore(root).supportsFileAttributeView(PosixFileAttributeView.class));
     }
 
     // ---- S3-SF-01: a new file ----
@@ -142,6 +146,39 @@ class UploadTest {
         if (fileSystemHasPosixModes()) {
             assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(root.resolve("private.bin")))).isEqualTo("rw-------");
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(ints = {SftpConstants.SSH_FX_FAILURE, SftpConstants.SSH_FX_PERMISSION_DENIED, SftpConstants.SSH_FX_OP_UNSUPPORTED})
+    @DisplayName("SSH_PORTAL-D-0056 a server that cannot give the new temporary file its 0600 mode ends the upload: nothing is published, the temporary file is removed (it used to go on with the umask's mode)")
+    void aTemporaryFileThatCannotBeProtectedIsNotUsed(int status) throws IOException {
+        TransferBed testBed = startWith(client -> new SftpDoubles().refusingToSetTheModeOfAHandle(client, status));
+        byte[] content = pattern(2048);
+
+        UploadResult result = testBed.transfer().upload(testBed.upload("/private.bin", content, OverwriteMode.FAIL_IF_EXISTS), TransferBed.source(content), testBed.control());
+
+        assertThat(result).as("a file whose mode could not be set must not receive the content").isInstanceOf(UploadResult.Refused.class);
+        assertThat(((UploadResult.Refused) result).cleanup()).isEqualTo(CleanupState.COMPLETE);
+        assertThat(root.resolve("private.bin")).doesNotExist();
+        assertThat(leftovers()).isEmpty();
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    @DisplayName("SSH_PORTAL-D-0067 a replacement that was read back and confirmed stays published when the read handle cannot be closed afterwards: the file is there and no rollback happened")
+    void aFailingCloseOfTheConfirmingHandleDoesNotUndoTheReplacement(boolean replacingAnExistingFile) throws IOException {
+        TransferBed testBed = startWith(client -> new SftpDoubles().failingToCloseTheReadHandle(client, "/out.bin"));
+        if (replacingAnExistingFile) {
+            Files.write(root.resolve("out.bin"), OLD);
+        }
+        byte[] content = pattern(2048);
+
+        UploadResult result = testBed.transfer().upload(testBed.upload("/out.bin", content, replacingAnExistingFile ? OverwriteMode.REPLACE : OverwriteMode.FAIL_IF_EXISTS),
+            TransferBed.source(content), testBed.control());
+
+        assertThat(result).as("the replacement was confirmed before the close failed: %s", result).isInstanceOf(UploadResult.Published.class);
+        assertThat(Files.readAllBytes(root.resolve("out.bin"))).isEqualTo(content);
+        assertThat(leftovers()).isEmpty();
     }
 
     @Test
