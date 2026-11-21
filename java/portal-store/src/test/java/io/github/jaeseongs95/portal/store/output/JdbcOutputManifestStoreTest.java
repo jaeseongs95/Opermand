@@ -249,6 +249,9 @@ class JdbcOutputManifestStoreTest {
 
         assertThat(w.manifests.expired(T0.plus(Duration.ofMinutes(59)))).isEmpty();
         assertThat(w.manifests.expired(T0.plus(Duration.ofHours(1))).stream().map(OutputManifest::id).toList()).containsExactly(first);
+        // The second output is still being written (PENDING): the cleaner leaves it, whatever its expiry is (D-0162); once it is given up it is listed.
+        assertThat(w.manifests.expired(T0.plus(Duration.ofMinutes(70))).stream().map(OutputManifest::id).toList()).containsExactly(first);
+        w.manifests.markUnavailable(second, T0.plus(Duration.ofMinutes(65)));
         assertThat(w.manifests.expired(T0.plus(Duration.ofMinutes(70))).stream().map(OutputManifest::id).toList()).containsExactlyInAnyOrder(first, second);
         List<OutputManifest> expired = w.manifests.expired(T0.plus(Duration.ofHours(1)));
         assertThat(expired.get(0).formats().spans()).hasSize(2);
