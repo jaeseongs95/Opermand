@@ -1,6 +1,7 @@
 package io.github.jaeseongs95.portal.domain.target;
 
 import io.github.jaeseongs95.portal.domain.id.Digester;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -38,8 +39,22 @@ public record ResolvedTarget(Target target, ConnectionProfile reader, Connection
         }
     }
 
-    /** The resolved target with the revision and connection identity the digester computes from the three parts. */
+    /**
+     * The resolved target with the revision and connection identity the digester computes from the three parts; the profiles name no jump host.
+     *
+     * @throws IllegalArgumentException when a profile names a jump host (use {@link #of(Target, ConnectionProfile, ConnectionProfile, List, Digester)})
+     */
     public static ResolvedTarget of(Target target, ConnectionProfile reader, ConnectionProfile writer, Digester digester) {
-        return new ResolvedTarget(target, reader, writer, TargetRevision.of(target, reader, writer, digester), TargetConnection.of(writer, digester));
+        return of(target, reader, writer, List.of(), digester);
+    }
+
+    /**
+     * The resolved target whose revision and connection identity cover the jump profiles too, nearest first (defect D-0083): the route of the connection is part of what an
+     * approval and a rule are bound to.
+     *
+     * @throws IllegalArgumentException when the jump profiles do not fit the {@code via} links of the profiles
+     */
+    public static ResolvedTarget of(Target target, ConnectionProfile reader, ConnectionProfile writer, List<ConnectionProfile> jumps, Digester digester) {
+        return new ResolvedTarget(target, reader, writer, TargetRevision.of(target, reader, writer, jumps, digester), TargetConnection.of(writer, jumps, digester));
     }
 }

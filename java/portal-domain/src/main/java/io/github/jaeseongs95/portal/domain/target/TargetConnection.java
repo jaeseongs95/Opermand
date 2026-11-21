@@ -3,6 +3,7 @@ package io.github.jaeseongs95.portal.domain.target;
 import io.github.jaeseongs95.portal.domain.id.CanonicalForm;
 import io.github.jaeseongs95.portal.domain.id.Digest;
 import io.github.jaeseongs95.portal.domain.id.Digester;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -22,12 +23,28 @@ public record TargetConnection(Digest value) {
         return new TargetConnection(new Digest(hex));
     }
 
-    /** Computes the canonical connection digest from the seven connection core fields of {@code profile}. */
+    /**
+     * Computes the canonical connection digest from the seven connection core fields of {@code profile}, which names no jump host.
+     *
+     * @throws IllegalArgumentException when the profile names a jump host, whose profile this form does not have (use {@link #of(ConnectionProfile, List, Digester)})
+     */
     public static TargetConnection of(ConnectionProfile profile, Digester digester) {
+        return of(profile, List.of(), digester);
+    }
+
+    /**
+     * Computes the canonical connection digest from the seven connection core fields of {@code profile} and of each jump profile it goes through, nearest first (defect D-0083):
+     * a policy rule bound to this identity does not apply to a connection that passes other jump hosts behind the same alias.
+     *
+     * @throws IllegalArgumentException when the jump profiles do not fit the {@code via} links
+     */
+    public static TargetConnection of(ConnectionProfile profile, List<ConnectionProfile> jumps, Digester digester) {
         Objects.requireNonNull(profile, "profile");
         Objects.requireNonNull(digester, "digester");
+        JumpChain chain = JumpChain.of(profile, jumps);
         CanonicalForm form = new CanonicalForm();
         profile.describeConnectionTo(form);
+        chain.describeConnectionTo(form);
         return new TargetConnection(form.digest(digester));
     }
 

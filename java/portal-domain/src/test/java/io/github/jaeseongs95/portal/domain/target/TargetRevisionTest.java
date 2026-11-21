@@ -63,8 +63,7 @@ class TargetRevisionTest {
         changed.add(revision(base, profileWith("host.example.test", 22, "deploy", "key-ref-2", AccessMode.READ_ONLY), writer));
         changed.add(revision(base, reader, new ConnectionProfile("host.example.test", 22, "deploy", Setting.given("ssh-ed25519 OTHER"), Setting.unset(), AuthMethod.KEY,
             Setting.given("key-ref-1"), Setting.unset(), AccessMode.READ_WRITE, TtyMode.NO_TTY)));
-        changed.add(revision(base, reader, new ConnectionProfile("host.example.test", 22, "deploy", Setting.given("ssh-ed25519 AAAAC3Nza"), Setting.given(new ProfileAlias("jump")),
-            AuthMethod.KEY, Setting.given("key-ref-1"), Setting.unset(), AccessMode.READ_WRITE, TtyMode.NO_TTY)));
+        changed.add(TargetRevision.of(base, reader, behindJump("jump"), List.of(jumpHost("jump.example.test")), digester));
         changed.add(revision(base, reader, new ConnectionProfile("host.example.test", 22, "deploy", Setting.given("ssh-ed25519 AAAAC3Nza"), Setting.unset(), AuthMethod.PASSWORD,
             Setting.given("key-ref-1"), Setting.unset(), AccessMode.READ_WRITE, TtyMode.NO_TTY)));
         changed.add(revision(base, reader, new ConnectionProfile("host.example.test", 22, "deploy", Setting.given("ssh-ed25519 AAAAC3Nza"), Setting.unset(), AuthMethod.KEY,
@@ -90,6 +89,56 @@ class TargetRevisionTest {
     void shape() {
         assertThatThrownBy(() -> TargetRevision.of("abc")).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> TargetRevision.of("A".repeat(64))).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("S-D0083-01 (D-0083): the jump profile is part of the revision: another jump host behind the same alias, or another authentication of it, gives another revision")
+    void theJumpHostCountsBehindTheSameAlias() {
+        Target base = TargetFixtures.linux("alpha");
+        ConnectionProfile reader = TargetFixtures.reader();
+        ConnectionProfile writer = behindJump("jump");
+        TargetRevision original = TargetRevision.of(base, reader, writer, List.of(jumpHost("jump.example.test")), digester);
+
+        assertThat(TargetRevision.of(base, reader, writer, List.of(jumpHost("jump.example.test")), digester)).as("the same route, the same revision").isEqualTo(original);
+        assertThat(TargetRevision.of(base, reader, writer, List.of(jumpHost("other-jump.example.test")), digester)).as("another host behind the alias").isNotEqualTo(original);
+        assertThat(TargetRevision.of(base, reader, writer, List.of(new ConnectionProfile("jump.example.test", 22, "deploy", Setting.given("ssh-ed25519 AAAAC3Nza"), Setting.unset(),
+            AuthMethod.PASSWORD, Setting.given("key-ref-1"), Setting.unset(), AccessMode.READ_WRITE, TtyMode.NO_TTY)), digester)).as("another authentication of the jump host").isNotEqualTo(original);
+        assertThat(TargetRevision.of(base, reader, writer, List.of(jumpHost("jump.example.test", 2222)), digester)).as("another port of the jump host").isNotEqualTo(original);
+    }
+
+    @Test
+    @DisplayName("S-D0083-02 (D-0083): the same holds for the connection identity a rule is bound to, and a chain that does not fit the via links is refused")
+    void theJumpHostCountsForTheConnectionIdentity() {
+        ConnectionProfile writer = behindJump("jump");
+        TargetConnection original = TargetConnection.of(writer, List.of(jumpHost("jump.example.test")), digester);
+
+        assertThat(TargetConnection.of(writer, List.of(jumpHost("jump.example.test")), digester)).isEqualTo(original);
+        assertThat(TargetConnection.of(writer, List.of(jumpHost("other-jump.example.test")), digester)).isNotEqualTo(original);
+        assertThat(TargetConnection.of(TargetFixtures.writer(), digester)).as("the identity of a profile without a jump host is unchanged by the chain support")
+            .isEqualTo(TargetConnection.of(TargetFixtures.writer(), List.of(), digester));
+
+        Target base = TargetFixtures.linux("alpha");
+        assertThatThrownBy(() -> TargetRevision.of(base, TargetFixtures.reader(), writer, digester)).as("a jump host is named and no profile of it is given")
+            .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> TargetConnection.of(writer, digester)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> TargetRevision.of(base, TargetFixtures.reader(), TargetFixtures.writer(), List.of(jumpHost("jump.example.test")), digester))
+            .as("a jump profile is given and the profile names no jump host").isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> TargetRevision.of(base, TargetFixtures.reader(), writer, List.of(behindJump("second")), digester))
+            .as("the jump profile names a jump host of its own that is not given").isInstanceOf(IllegalArgumentException.class);
+    }
+
+    private static ConnectionProfile behindJump(String alias) {
+        return new ConnectionProfile("host.example.test", 22, "deploy", Setting.given("ssh-ed25519 AAAAC3Nza"), Setting.given(new ProfileAlias(alias)), AuthMethod.KEY,
+            Setting.given("key-ref-1"), Setting.unset(), AccessMode.READ_WRITE, TtyMode.NO_TTY);
+    }
+
+    private static ConnectionProfile jumpHost(String host) {
+        return jumpHost(host, 22);
+    }
+
+    private static ConnectionProfile jumpHost(String host, int port) {
+        return new ConnectionProfile(host, port, "deploy", Setting.given("ssh-ed25519 AAAAC3Nza"), Setting.unset(), AuthMethod.KEY, Setting.given("key-ref-1"), Setting.unset(),
+            AccessMode.READ_WRITE, TtyMode.NO_TTY);
     }
 
     private static ConnectionProfile profileWith(String host, int port, String user, String keyRef, AccessMode access) {
