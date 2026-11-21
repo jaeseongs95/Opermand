@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Stream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -228,9 +229,27 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
         if (path.getRoot() != null || path.getNameCount() == 0 || !HOME_NAME.equals(path.getName(0).toString())) {
             return path;
         }
-        return text("HOME").or(() -> text("user.home")).map(Path::of)
-            .map(home -> path.getNameCount() == 1 ? home : home.resolve(path.subpath(1, path.getNameCount())))
+        return homeFolder()
+            .map(home ->path.getNameCount() == 1 ? home : home.resolve(path.subpath(1, path.getNameCount())))
             .orElse(path);
+    }
+
+    /**
+     * The home folder: {@code HOME} when it is an absolute path of this system, else {@code user.home}. It is one rule for every system, with no test of which one this is: a
+     * {@code HOME} that is not an absolute path here (Git Bash and similar shells give {@code /c/Users/x} on Windows, which has no drive and so names no place) or that is not a
+     * path at all is skipped, because a path that is not absolute would be read from the working directory of the process.
+     */
+    private Optional<Path> homeFolder() {
+        return Stream.of("HOME", "user.home").map(this::text).flatMap(Optional::stream).flatMap(spelling -> absolutePath(spelling).stream()).findFirst();
+    }
+
+    private Optional<Path> absolutePath(String spelling) {
+        try {
+            Path path = Path.of(spelling);
+            return path.isAbsolute() ? Optional.of(path) : Optional.empty();
+        } catch (InvalidPathException e) {
+            return Optional.empty();
+        }
     }
 
     /** Reads a file; {@code source} is a phrase that says where its path was set (it opens the log line), because the path itself may be a secret text and is never logged. */
