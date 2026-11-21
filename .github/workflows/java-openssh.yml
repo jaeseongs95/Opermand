@@ -57,16 +57,24 @@ jobs:
         run: ./gradlew --no-daemon --console=plain :portal-arch-checks:test
       # Case S-D0117-09: the unit tests of the file rules need permission bits and symbolic links, which this runner has and a Windows user token does not. The property says so:
       # a test that needs one of them and does not find it fails here instead of skipping (the build hands the property to the test JVM, the test code reads it). The property
-      # is not one of the sizes of the test JVM (portal.test.cpus, heap, forks), so the step above is not affected. The whole of portal-store is run; of portal-ssh the two packages
-      # that use the file rules (profile and hostkey): the rest of the module has a Linux-only race of its own that is reported as a defect and not hidden here (defect
-      # SSH_PORTAL-D-0131: UploadTest S3-SF-16 / RC-B-924, two concurrent uploads to one new name were both published once on this runner).
-      - name: Unit tests of all modules and file rules of portal-ssh with permission bits and symbolic links required
+      # is not one of the sizes of the test JVM (portal.test.cpus, heap, forks), so the step above is not affected. The whole of portal-ssh is run here, not only its profile and
+      # hostkey packages: the file, exec, session, platform and cli tests check permission bits (a temporary file is 0600, a replaced file keeps its mode, chmod is applied) that
+      # only a POSIX file system of the test server's root can show, so they have to run on this job as well as on the Windows one (defect SSH_PORTAL-D-0174). The one race
+      # that kept them out before, two concurrent uploads to one new name both published (defect SSH_PORTAL-D-0131), was the test server's rename (JDK Files.move checks the
+      # target and then renames, which replaces it on POSIX), not the product; the test server now links and unlinks as OpenSSH's sftp-server does.
+      - name: Unit tests of all modules, with permission bits and symbolic links required
         working-directory: java
         run: >-
           ./gradlew --no-daemon --console=plain --continue
-          :portal-domain:test :portal-app:test :portal-store:test :portal-server:test :portal-web:test
-          :portal-ssh:test --tests 'io.github.jaeseongs95.portal.ssh.profile.*' --tests 'io.github.jaeseongs95.portal.ssh.hostkey.*'
+          :portal-domain:test :portal-app:test :portal-store:test :portal-server:test :portal-web:test :portal-ssh:test
           -Pportal.test.require=posix,links
+      # What the tests of this job ran, and every test that was skipped with its reason (java/ci/TestSummary.java reads the JUnit reports). The job fails on a skipped test whose
+      # reason is not named here, so that a test that silently stopped running is a failure. The one skip a Linux runner has by nature: the tests of the access control list rules
+      # need a file system with an access control list view (NTFS), and a Linux file system has the permission bits only; the Windows job runs them (its own skips are listed there).
+      - name: Summary of the tests and the skipped ones
+        if: always()
+        shell: bash
+        run: java java/ci/TestSummary.java --allow-skip='has no acl view (it is a posix store)' java/*/build/test-results
       - name: Stop the OpenSSH server and remove the account
         if: always()
         run: sh java/ci/openssh-linux.sh stop
@@ -111,19 +119,26 @@ jobs:
             -Pportal.test.openssh.known-hosts="$PORTAL_OPENSSH_KNOWN_HOSTS" \
             -Pportal.test.openssh.platform=windows \
             -Pportal.test.openssh.windows-python="$PORTAL_OPENSSH_WINDOWS_PYTHON"
-      # Case S-D0117-09: the tests of the access control list rules need an NTFS volume, which only this job has (the Linux job has permission bits and symbolic links and runs
-      # the tests for those; its ACL tests are skipped there). -Pportal.test.require=acl makes a test that needs the ability fail instead of skipping when the file system has no
-      # access control list. Two tests are still skipped on this runner, for a different reason that is a fact about the account: they need a removal to fail, and the elevated
-      # administrator token of the runner can delete what the list forbids it to delete (their skip message says "this account could delete the probe"). Those two (the
-      # "cannot be removed again" tests of AclPrivateStorageTest and PrivateFileRuleTest) are therefore verified only by local runs with an account that is not an administrator.
-      # The classes run are the ACL rule tests and the classes whose tests go through the ACL rules on this volume (the storage package and the payload store of portal-store, the
-      # profile and hostkey packages of portal-ssh, with the host key test for a folder in place of the file); the module tests as a whole are not part of this job.
-      # The tests change real ACLs in the runner's temporary folder.
+      # Case S-D0117-09: the tests of the access control list rules need an NTFS volume, which only this job has (the Linux job has permission bits and runs the tests for those;
+      # its ACL tests are skipped there). -Pportal.test.require=acl,links makes a test that needs an access control list or a symbolic link fail instead of skipping. Links are in
+      # the list because this runner's administrator token can make them (the report of the run before this change had no skipped test that needed one), so a runner that can no
+      # longer make them is a failure and not a quiet skip. Permission bits (posix) cannot be required here: an NTFS volume has none, and a FIFO (mkfifo) does not exist; the tests
+      # that need them are the 12 skipped tests whose reason says "no posix view (it is an NTFS volume)", and they run on the Linux job with posix required. Two tests are skipped
+      # for a reason that is a fact about the account: they need a removal to fail, and the elevated administrator token of the runner can delete what the list forbids it to
+      # delete (their skip message says "this account could delete the probe"); the "cannot be removed again" tests of AclPrivateStorageTest and PrivateFileRuleTest are therefore
+      # verified only by local runs with an account that is not an administrator. The whole check of all modules runs here; the tests change real ACLs in the runner's temporary
+      # folder.
       - name: Full Gradle check across all modules with access control lists required
         shell: bash
         working-directory: java
         run: >-
-          ./gradlew --no-daemon --console=plain --continue check -Pportal.test.require=acl
+          ./gradlew --no-daemon --console=plain --continue check -Pportal.test.require=acl,links
+      # What the tests of this job ran and which were skipped, with the reasons (java/ci/TestSummary.java). The job fails on a skipped test whose reason is not one of the two
+      # named above: no posix view on an NTFS volume (principled, see the comment above, and run on the Linux job), and an account that could delete the probe.
+      - name: Summary of the tests and the skipped ones
+        if: always()
+        shell: bash
+        run: java java/ci/TestSummary.java --allow-skip='has no posix view (it is an NTFS volume)' --allow-skip='this account could delete the probe' java/*/build/test-results
       # Diagnostic: the server log (LogLevel VERBOSE, no command text) of the sshd the preparation script started.
       # It runs whatever the tests did and cannot fail the job (continue-on-error), so it never hides the result of the tests. First it prints, for reference only, how many ping commands
       # started after the prepared sshd are running and how many sshd processes exist. The ping count is not evidence for case S-D0038-02: a 15 s command ends by itself
