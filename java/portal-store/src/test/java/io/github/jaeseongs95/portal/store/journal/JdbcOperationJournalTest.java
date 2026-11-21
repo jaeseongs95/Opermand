@@ -5,15 +5,19 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
-import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.List;
-import java.util.TimeZone;
+import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.jdbc.core.BatchPreparedStatementSetter;
 import org.springframework.jdbc.core.JdbcTemplate;
 
@@ -159,7 +163,8 @@ class JdbcOperationJournalTest {
     void theJournalHasNoRowLimit() {
         long before = operations.count();
         int filler = 10_000;
-        Timestamp at = Timestamp.from(JournalFixture.NOW);
+        // The column holds the UTC date and time of the moment (D-0161), whatever zone the JVM of the run is in.
+        LocalDateTime at = LocalDateTime.ofInstant(JournalFixture.NOW, ZoneOffset.UTC);
         // The rows are written straight into the table (a bulk batch, ANSI SQL): 10,000 intakes through accept would only repeat the same insert. Every NOT NULL column is set.
         jdbc.batchUpdate("INSERT INTO operation (id, request_key, owner_id, target_id, target_revision, kind, state, version, approval_mode, profile, contract_digest, "
             + "created_at, updated_at, recovery_reason, audit_failure) VALUES (?, ?, 'owner', 'alpha', ?, 'COMMAND', 'PENDING', 1, 'NOT_DECIDED', 'default', ?, ?, ?, 'NONE', 'NONE')",
@@ -170,8 +175,8 @@ class JdbcOperationJournalTest {
                     ps.setString(2, "filler-" + i);
                     ps.setString(3, JournalFixture.REVISION);
                     ps.setString(4, JournalFixture.REVISION);
-                    ps.setTimestamp(5, at);
-                    ps.setTimestamp(6, at);
+                    ps.setObject(5, at);
+                    ps.setObject(6, at);
                 }
 
                 @Override
@@ -259,23 +264,52 @@ class JdbcOperationJournalTest {
         assertThat(journal.find(queued.id()).orElseThrow().input()).isEqualTo(spec.input());
     }
 
+    /**
+     * The zone of the JVM of the {@code zoneTest} task (build file of this module): a zone that repeats an hour when daylight saving time ends. Its default zone is read when the
+     * JVM starts (H2 keeps what it read), so a test cannot change it for itself; the task starts a JVM in it.
+     */
+    private static final ZoneId DAYLIGHT_SAVING_ZONE = ZoneId.of("America/Los_Angeles");
+
     @Test
-    @DisplayName("S2-DB-07: an Instant that is stored and read under a JVM time zone that is not UTC comes back as the same Instant")
-    void instantsSurviveANonUtcZone() {
-        TimeZone before = TimeZone.getDefault();
-        try {
-            int number = 0;
-            for (String zone : List.of("Asia/Seoul", "Pacific/Auckland", "America/Los_Angeles")) {
-                TimeZone.setDefault(TimeZone.getTimeZone(zone));
-                Instant moment = Instant.parse("2027-07-01T12:34:56.123456Z");
-                Operation accepted = accept(fx.command("zone" + number++, "alpha", "echo " + zone, new ConflictKey.None())).operation();
-                Operation moved = journal.save(accepted.requestCancel(moment), accepted.version());
-                assertThat(journal.find(moved.id()).orElseThrow().updatedAt()).as(zone).isEqualTo(moment);
-                assertThat(journal.find(moved.id()).orElseThrow().createdAt()).as(zone).isEqualTo(accepted.createdAt());
-            }
-        } finally {
-            TimeZone.setDefault(before);
-        }
+    @Tag("zone")
+    @DisplayName("S2-DB-07 (D-0161): two moments that are the same local time of the JVM's zone (the hour that daylight saving time repeats) are stored as two different UTC values, "
+        + "read back as themselves and kept in order")
+    void momentsThatShareALocalTimeStayApart() {
+        assertThat(ZoneId.systemDefault()).as("the zoneTest task starts this JVM in a zone with daylight saving time").isEqualTo(DAYLIGHT_SAVING_ZONE);
+        Instant first = Instant.parse("2027-11-07T08:30:00Z");
+        Instant second = Instant.parse("2027-11-07T09:30:00Z");
+        assertThat(second.atZone(DAYLIGHT_SAVING_ZONE).toLocalDateTime()).as("the premise: 01:30 before and after the change of the clock").isEqualTo(first.atZone(DAYLIGHT_SAVING_ZONE).toLocalDateTime());
+        NewOperation earlySpec = fx.command("zone-early", "alpha", "echo early", new ConflictKey.None());
+        NewOperation lateSpec = fx.command("zone-late", "alpha", "echo late", new ConflictKey.None());
+
+        Operation early = journal.accept(earlySpec, JournalFixture.review(earlySpec), ids.next(), first, () -> { }).operation();
+        Operation late = journal.accept(lateSpec, JournalFixture.review(lateSpec), ids.next(), second, () -> { }).operation();
+
+        assertThat(journal.find(early.id()).orElseThrow().createdAt()).isEqualTo(first);
+        assertThat(journal.find(late.id()).orElseThrow().createdAt()).isEqualTo(second);
+        assertThat(jdbc.queryForObject("SELECT CAST(created_at AS VARCHAR(40)) FROM operation WHERE id = ?", String.class, early.id().value())).startsWith("2027-11-07 08:30:00");
+        assertThat(jdbc.queryForObject("SELECT CAST(created_at AS VARCHAR(40)) FROM operation WHERE id = ?", String.class, late.id().value())).startsWith("2027-11-07 09:30:00");
+        Set<OperationState> pending = Set.of(OperationState.PENDING, OperationState.QUEUED);
+        assertThat(operations.findByStateInOrderByCreatedAtDescIdDesc(pending, PageRequest.ofSize(10)).stream().map(OperationRow::id)
+            .filter(Set.of(early.id().value(), late.id().value())::contains)).containsExactly(late.id().value(), early.id().value());
+        assertThat(operations.findByStateInAndCreatedAtBeforeOrderByCreatedAtDescIdDesc(pending, Instant.parse("2027-11-07T09:00:00Z"), PageRequest.ofSize(10)).stream()
+            .map(OperationRow::id)).containsExactly(early.id().value());
+    }
+
+    @Test
+    @Tag("zone")
+    @DisplayName("S2-DB-07 (D-0161): what was stored under another zone of the host is read as the same moment: the column holds the UTC date and time, the zone of the JVM is not part of it")
+    void theColumnDoesNotDependOnTheZoneOfTheJvm() {
+        assertThat(ZoneId.systemDefault()).isEqualTo(DAYLIGHT_SAVING_ZONE);
+        NewOperation spec = fx.command("zone-moved", "alpha", "echo moved", new ConflictKey.None());
+        Instant moment = Instant.parse("2027-07-01T12:34:56.123456Z");
+        Operation accepted = journal.accept(spec, JournalFixture.review(spec), ids.next(), moment, () -> { }).operation();
+        Operation moved = journal.save(accepted.requestCancel(moment.plusSeconds(1)), accepted.version());
+
+        assertThat(jdbc.queryForObject("SELECT CAST(created_at AS VARCHAR(40)) FROM operation WHERE id = ?", String.class, accepted.id().value())).isEqualTo("2027-07-01 12:34:56.123456");
+        assertThat(jdbc.queryForObject("SELECT CAST(updated_at AS VARCHAR(40)) FROM operation WHERE id = ?", String.class, accepted.id().value())).isEqualTo("2027-07-01 12:34:57.123456");
+        assertThat(journal.find(moved.id()).orElseThrow().updatedAt()).isEqualTo(moment.plusSeconds(1));
+        assertThat(journal.find(moved.id()).orElseThrow().createdAt()).isEqualTo(moment);
     }
 
     @Test

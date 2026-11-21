@@ -3,8 +3,10 @@ package io.github.jaeseongs95.portal.store.cli;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -14,6 +16,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
@@ -123,6 +126,27 @@ class JdbcAgentCliRequestStoreTest {
         assertThat(slice.next()).isEqualTo(new HistoryCursor.End());
         assertThat(jdbc.queryForList("SELECT * FROM agent_cli_request ORDER BY operation_id")).isEqualTo(requestsBefore);
         assertThat(jdbc.queryForList("SELECT * FROM operation ORDER BY id")).isEqualTo(operationsBefore);
+    }
+
+    @Test
+    @Tag("zone")
+    @DisplayName("S-D0161-04: requests created in the hour that daylight saving time repeats are listed newest first with their own moments, and a cursor at the newer one finds the older")
+    void historyKeepsTheMomentsOfTheRepeatedHourApart() {
+        assertThat(ZoneId.systemDefault()).as("the zoneTest task starts this JVM in a zone with daylight saving time").isEqualTo(ZoneId.of("America/Los_Angeles"));
+        Instant first = Instant.parse("2027-11-07T08:30:00Z");
+        Instant second = Instant.parse("2027-11-07T09:30:00Z");
+        OperationId early = operationId(1);
+        insertOperation(early, first, "alpha", REVISION_A, "alpha-write");
+        store.insert(install(early, AgentCliProviderId.parse("codex"), new RemoteStatus.NotReported()));
+        OperationId late = operationId(2);
+        insertOperation(late, second, "alpha", REVISION_A, "alpha-write");
+        store.insert(install(late, AgentCliProviderId.parse("codex"), new RemoteStatus.NotReported()));
+
+        AgentCliHistoryReader.Slice page = reader.slice(binding(AgentCliProviderId.parse("codex")), new HistoryCursor.FirstPage());
+
+        assertThat(ids(page)).containsExactly(late, early);
+        assertThat(page.hits()).extracting(AgentCliHistoryReader.Hit::createdAt).containsExactly(second, first);
+        assertThat(ids(reader.slice(binding(AgentCliProviderId.parse("codex")), new HistoryCursor.After(second, late)))).containsExactly(early);
     }
 
     @Test
@@ -373,7 +397,8 @@ class JdbcAgentCliRequestStoreTest {
 
     /** The operation row the install request references (the journal owns this table; the test inserts the NOT NULL columns with plain SQL). */
     private void insertOperation(OperationId id, Instant createdAt, String targetId, String targetRevision, String profile) {
-        Timestamp at = Timestamp.from(createdAt);
+        // The column holds the UTC date and time of the moment (D-0161), whatever zone the JVM of the run is in.
+        LocalDateTime at = LocalDateTime.ofInstant(createdAt, ZoneOffset.UTC);
         jdbc.update("""
             INSERT INTO operation (id, request_key, owner_id, target_id, target_revision, kind, state, version, approval_mode, profile,
                 input_digest, contract_digest, created_at, updated_at, recovery_reason, audit_failure)

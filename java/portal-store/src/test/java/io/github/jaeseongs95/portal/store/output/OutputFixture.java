@@ -1,7 +1,8 @@
 package io.github.jaeseongs95.portal.store.output;
 
-import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 
 import javax.sql.DataSource;
 
@@ -19,7 +20,8 @@ import io.github.jaeseongs95.portal.domain.target.TargetRevision;
  */
 final class OutputFixture {
 
-    private static final Instant CREATED = Instant.parse("2026-11-12T00:00:00Z");
+    /** The column holds the UTC date and time of the moment (D-0161), whatever zone the JVM of the run is in. */
+    private static final LocalDateTime CREATED = LocalDateTime.ofInstant(Instant.parse("2026-11-12T00:00:00Z"), ZoneOffset.UTC);
 
     private final JdbcTemplate jdbc;
     private int counter;
@@ -34,7 +36,7 @@ final class OutputFixture {
         String id = String.format("%048x", counter);
         jdbc.update("INSERT INTO operation (id, request_key, owner_id, target_id, target_revision, kind, state, version, approval_mode, profile, contract_digest,"
             + " created_at, updated_at, recovery_reason, audit_failure) VALUES (?, ?, 'owner', 'alpha', ?, 'COMMAND', 'COMPLETED', 1, 'OWNER', 'profile', ?, ?, ?, 'NONE', 'NONE')",
-            id, "request-key-" + counter, "a".repeat(64), "b".repeat(64), Timestamp.from(CREATED), Timestamp.from(CREATED));
+            id, "request-key-" + counter, "a".repeat(64), "b".repeat(64), CREATED, CREATED);
         return new OperationId(id);
     }
 

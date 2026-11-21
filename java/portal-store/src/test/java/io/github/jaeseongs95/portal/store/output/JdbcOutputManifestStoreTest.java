@@ -8,12 +8,14 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 
 import javax.sql.DataSource;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.context.annotation.Import;
@@ -144,6 +146,37 @@ class JdbcOutputManifestStoreTest {
         assertThat(w.manifests.find(given, T0)).isInstanceOf(OutputLookup.Unavailable.class);
         assertThat(w.manifests.find(given, expiresAt)).isInstanceOf(OutputLookup.Expired.class);
         assertThat(w.row(given).targetId()).isNull();
+    }
+
+    @Test
+    @Tag("zone")
+    @DisplayName("S-D0161-03: an output that was given up before the hour that daylight saving time repeats is listed as expired when its time is over, not an hour later")
+    void anExpiryIsNotStretchedByTheRepeatedHour(@TempDir Path folder) {
+        assertThat(ZoneId.systemDefault()).as("the zoneTest task starts this JVM in a zone with daylight saving time").isEqualTo(ZoneId.of("America/Los_Angeles"));
+        OutputWorld w = factory.create(folder, OutputLimits.defaults());
+        OutputId id = w.reserve(fixture.unbound(), 100, Instant.parse("2027-11-07T07:45:00Z"));
+        // The expiry is 01:45 PDT. A quarter of an hour past 09:00Z the clock shows 01:15 PST: the same hour again, but after the expiry as a moment.
+        w.manifests.markUnavailable(id, Instant.parse("2027-11-07T08:45:00Z"));
+
+        assertThat(w.manifests.expired(Instant.parse("2027-11-07T08:30:00Z"))).isEmpty();
+        assertThat(w.manifests.expired(Instant.parse("2027-11-07T09:15:00Z"))).extracting(OutputManifest::id).containsExactly(id);
+        assertThat(w.row(id).expiresAt()).isEqualTo(Instant.parse("2027-11-07T08:45:00Z"));
+    }
+
+    @Test
+    @DisplayName("S-D0162-01: the cleaner lists an output that was given up or is ready once its expiry has passed, and never one that is still being written")
+    void theCleanerSkipsAnOutputThatIsBeingWritten(@TempDir Path folder) {
+        OutputWorld w = factory.create(folder, OutputLimits.defaults());
+        OutputId writing = w.reserve(fixture.unbound(), 100, T0);
+        OutputId givenUp = w.reserve(fixture.unbound(), 100, T0);
+        w.manifests.markUnavailable(givenUp, T0.plus(Duration.ofHours(1)));
+        OutputId ready = w.reserve(fixture.unbound(), 100, T0);
+        w.manifests.markReady(ready, w.payloads.finish(ready, utf8("{}"), utf8("done")), 6);
+        Instant afterTheRetention = T0.plus(Duration.ofHours(3));
+
+        assertThat(w.manifests.expired(afterTheRetention)).extracting(OutputManifest::id).containsExactlyInAnyOrder(givenUp, ready);
+        assertThat(w.manifests.inState(OutputState.PENDING)).extracting(OutputManifest::id).containsExactly(writing);
+        assertThat(w.manifests.expired(T0.plus(Duration.ofMinutes(59)))).isEmpty();
     }
 
     @Test
