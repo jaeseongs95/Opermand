@@ -12,7 +12,7 @@ import io.github.jaeseongs95.portal.domain.operation.UploadInput;
 /**
  * Lets go of the artifact of an upload when its operation reaches a final state (S3-AR-07): the copy that {@code submit} pinned is given back to the expiry calculation. It is a
  * listener of {@link TerminalOperationListener}, so the dispatcher does not know about artifacts. An operation of another kind is not its business; an {@code UNKNOWN} one keeps
- * the artifact (see {@link ArtifactPinning}); telling it twice, as a restart does, is harmless.
+ * the artifact (see {@link ArtifactPinning}); telling it twice, as {@code SettlementRecovery} does for an operation whose first call was lost, is harmless.
  */
 @Component
 public class UploadArtifactRelease implements TerminalOperationListener {

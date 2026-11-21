@@ -9,25 +9,22 @@ import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
 import io.github.jaeseongs95.portal.domain.operation.NewOperation;
 
-/** The intake of uploads in the assembly tests: it remembers what it was given and answers a fresh id, or refuses when the test says the queue is full. */
+/** The intake of uploads in the assembly tests: it remembers what it was given and answers the id it was given, or refuses when the test says the queue is full. */
 final class FakeAdmission implements UploadAdmission {
 
     final List<NewOperation> admitted = new ArrayList<>();
     boolean full;
-    private int counter;
-
     void reset() {
         admitted.clear();
         full = false;
     }
 
     @Override
-    public OperationId admit(NewOperation operation) {
+    public OperationId admit(NewOperation operation, OperationId id) {
         if (full) {
             throw new RequestRefusedException(OperationErrorCode.OPERATION_QUEUE_FULL);
         }
         admitted.add(operation);
-        counter++;
-        return new OperationId(String.format("%048x", counter));
+        return id;
     }
 }

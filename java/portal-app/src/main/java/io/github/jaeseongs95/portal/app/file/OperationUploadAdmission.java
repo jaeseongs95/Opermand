@@ -41,14 +41,15 @@ public class OperationUploadAdmission implements UploadAdmission {
      *     judgement is only a review; nothing is stored
      */
     @Override
-    public OperationId admit(NewOperation operation) {
+    public OperationId admit(NewOperation operation, OperationId id) {
         Objects.requireNonNull(operation, "operation");
+        Objects.requireNonNull(id, "id");
         if (operation.kind() != OperationKind.UPLOAD) {
             throw new IllegalArgumentException("Only an upload is admitted here: " + operation.kind());
         }
         AdmissionTicket ticket = place();
         try {
-            return intake.submit(operation).id();
+            return intake.submit(operation, id).id();
         } finally {
             ticket.release();
         }

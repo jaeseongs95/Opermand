@@ -14,10 +14,15 @@ import io.github.jaeseongs95.portal.domain.operation.NewOperation;
 public interface UploadAdmission {
 
     /**
-     * Accepts the upload operation and answers its id.
+     * Accepts the upload operation under the id the caller made for it, and answers the id of the operation that exists. The caller makes the id first because it has to
+     * record, before the admission, which operation it is about to start (the reserved action of a staged file, defect D-0155); a stop between the record and the admission is
+     * then settled by asking the journal for that id. When the same request key with the same contract was accepted before, the answer is the id of that operation, which is the
+     * reserved id when the caller is the same.
      *
+     * @param operation what to accept
+     * @param id the id the operation gets when it is new
      * @throws io.github.jaeseongs95.portal.domain.error.RequestRefusedException the request was refused, with the code of the limit or the conflict
      * @throws io.github.jaeseongs95.portal.domain.error.DispatchRefusedException the audit of the new operation did not become durable (DECISION_AUDIT, AUDIT_FAILED); nothing is stored
      */
-    OperationId admit(NewOperation operation);
+    OperationId admit(NewOperation operation, OperationId id);
 }

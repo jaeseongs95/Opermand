@@ -2,10 +2,12 @@ package io.github.jaeseongs95.portal.server.assembly;
 
 import java.time.Clock;
 
-import org.springframework.beans.factory.SmartInitializingSingleton;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 import io.github.jaeseongs95.portal.app.lifecycle.StartupProtection;
+import io.github.jaeseongs95.portal.app.lifecycle.StartupSequence;
+import io.github.jaeseongs95.portal.app.lifecycle.StartupStep;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
 import io.github.jaeseongs95.portal.store.artifact.ArtifactStartupCheck;
 import io.github.jaeseongs95.portal.store.output.OutputStartupCheck;
@@ -18,9 +20,13 @@ import io.github.jaeseongs95.portal.store.output.OutputStartupCheck;
  * <p>The guard comes first: when the protection of a store fails, {@link StartupProtection#verify()} stops the start before a file is read (RC-B-004). While a maintenance
  * reservation holds the installation (it is stored, so it survives a restart) the expired outputs are not deleted either: only the recovery that deletes nothing runs
  * (RC-A-173).
+ *
+ * <p>It is a {@link StartupStep} that runs after the protection check and before the recovery of the journal, which opens the dispatcher ({@link StartupSequence} runs the
+ * steps by their {@link Order}, defect D-0159): a command that starts reserves an output, and the outputs that the last run left pending must be given up before it, not after.
  */
 @Component
-public class StorageStartup implements SmartInitializingSingleton {
+@Order(StartupStep.STORAGE)
+public class StorageStartup implements StartupStep {
 
     private final StartupProtection protection;
     private final MaintenanceStore maintenance;
@@ -37,7 +43,7 @@ public class StorageStartup implements SmartInitializingSingleton {
     }
 
     @Override
-    public void afterSingletonsInstantiated() {
+    public void run() {
         protection.verify();
         artifacts.reconcile();
         if (maintenance.occupied()) {

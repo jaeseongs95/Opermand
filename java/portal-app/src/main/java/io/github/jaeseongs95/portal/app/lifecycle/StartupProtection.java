@@ -1,6 +1,6 @@
 package io.github.jaeseongs95.portal.app.lifecycle;
 
-import org.springframework.beans.factory.SmartInitializingSingleton;
+import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
 import io.github.jaeseongs95.portal.app.storage.ProtectionCheck;
@@ -12,11 +12,12 @@ import io.github.jaeseongs95.portal.app.storage.StorageProtection;
  * is started, so a failure stops the start and no scheduled reaper ever runs. The reapers check the same guard before each run as well ({@code ReapGate}), so a folder whose
  * protection is lost <em>after</em> the start also keeps its bytes.
  *
- * <p>It implements {@link SmartInitializingSingleton} ({@code spring-beans}) and not Boot's {@code ApplicationRunner}: portal-app depends on Spring Framework only, and the
- * failure has to be in the refresh of the context to be a refused start.
+ * <p>It is the first {@link StartupStep} ({@link StartupSequence} runs it when every singleton exists) and not Boot's {@code ApplicationRunner}: portal-app depends on Spring
+ * Framework only, and the failure has to be in the refresh of the context to be a refused start.
  */
 @Component
-public class StartupProtection implements SmartInitializingSingleton {
+@Order(StartupStep.PROTECTION)
+public class StartupProtection implements StartupStep {
 
     private final StorageProtection protection;
 
@@ -25,7 +26,7 @@ public class StartupProtection implements SmartInitializingSingleton {
     }
 
     @Override
-    public void afterSingletonsInstantiated() {
+    public void run() {
         verify();
     }
 

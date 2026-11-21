@@ -2,7 +2,9 @@ package io.github.jaeseongs95.portal.app.operation;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -107,6 +109,19 @@ public class OperationIntake {
      * @throws DispatchRefusedException the audit did not become durable ({@link DispatchStage#DECISION_AUDIT}); nothing is stored
      */
     public Operation submit(NewOperation spec) {
+        return accept(spec, ids::next);
+    }
+
+    /**
+     * {@link #submit(NewOperation)} for a caller that made the id of the operation before the call, because it records which operation it is about to start (the reserved
+     * action of a staged file, defect D-0155). The id is used when the operation is new; when the key was accepted before, the answer is that operation, whatever its id.
+     */
+    public Operation submit(NewOperation spec, OperationId id) {
+        Objects.requireNonNull(id, "id");
+        return accept(spec, () -> id);
+    }
+
+    private Operation accept(NewOperation spec, Supplier<OperationId> newId) {
         ResolvedTarget target = targets.requireAt(spec.targetId(), spec.targetRevision());
         Optional<Operation> known = journal.findByRequestKey(spec.requestKey());
         if (known.isPresent()) {
@@ -119,7 +134,7 @@ public class OperationIntake {
         Admission admission = judge.judge(spec, target);
         Runnable room = admission instanceof Admission.Queue ? () -> requireRoomInQueue(spec.targetId()) : () -> { };
         room.run();
-        OperationId id = ids.next();
+        OperationId id = newId.get();
         Instant at = clock.instant();
         auditBeforeStoring(id, spec, admission);
         JournalInsert inserted;

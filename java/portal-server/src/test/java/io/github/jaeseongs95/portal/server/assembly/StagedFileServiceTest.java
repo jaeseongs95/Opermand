@@ -288,7 +288,8 @@ class StagedFileServiceTest {
 
         assertThat(registry.budget().chargedBytes()).isEqualTo(before);
         assertThat(registry.holding()).hasSize(1);
-        assertThat(staged.stat(OWNER, uuid).actions()).isEmpty();
+        assertThat(staged.stat(OWNER, uuid).actions()).as("the reserved action is refused, not left reserved (D-0155)").extracting(StagedAction::state)
+            .containsExactly(StagedActionState.REFUSED);
     }
 
     // ---- helpers ----
