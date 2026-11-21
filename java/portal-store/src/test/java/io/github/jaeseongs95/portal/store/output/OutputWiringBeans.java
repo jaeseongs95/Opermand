@@ -5,6 +5,9 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.security.SecureRandom;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Comparator;
 import java.util.stream.Stream;
 
@@ -30,6 +33,11 @@ class OutputWiringBeans {
     StorageRoots storageRoots() throws IOException {
         Path folder = Files.createTempDirectory("portal-output-wiring");
         return new StorageRoots(folder, folder);
+    }
+
+    @Bean
+    Clock clock() {
+        return Clock.fixed(Instant.parse("2026-11-12T00:00:00Z"), ZoneOffset.UTC);
     }
 
     @Bean

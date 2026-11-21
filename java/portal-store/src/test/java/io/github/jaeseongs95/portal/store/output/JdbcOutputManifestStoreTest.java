@@ -180,6 +180,23 @@ class JdbcOutputManifestStoreTest {
     }
 
     @Test
+    @DisplayName("S-D0162-02: an output that becomes ready is readable for the retention time from that moment, not from its reservation")
+    void aReadyOutputIsRetainedFromTheMomentItIsReady(@TempDir Path folder) {
+        Instant ready = T0.plus(Duration.ofMinutes(50));
+        OutputWorld w = factory.create(folder, OutputLimits.defaults(), Clock.fixed(ready, ZoneOffset.UTC));
+        OutputId id = w.reserve(fixture.unbound(), 100, T0);
+        assertThat(w.row(id).expiresAt()).as("reserved with the retention time counted from the reservation").isEqualTo(T0.plus(Duration.ofHours(1)));
+
+        OutputManifest manifest = w.manifests.markReady(id, w.payloads.finish(id, utf8("{}"), utf8("late")), 6);
+
+        assertThat(manifest.expiresAt()).isEqualTo(ready.plus(Duration.ofHours(1)));
+        assertThat(w.row(id).expiresAt()).isEqualTo(ready.plus(Duration.ofHours(1)));
+        assertThat(w.manifests.find(id, T0.plus(Duration.ofMinutes(70)))).as("ten minutes after the reservation's hour").isInstanceOf(OutputLookup.Ready.class);
+        assertThat(w.manifests.find(id, ready.plus(Duration.ofHours(1)))).isInstanceOf(OutputLookup.Expired.class);
+        assertThat(w.manifests.expired(T0.plus(Duration.ofMinutes(70)))).isEmpty();
+    }
+
+    @Test
     @DisplayName("S2-OUT-03: a change that does not fit the state is refused: ready twice, a stream after ready, a completed stream reopened, a ready output given up, an unknown output")
     void changesThatDoNotFitTheStateAreRefused(@TempDir Path folder) {
         OutputWorld w = factory.create(folder, OutputLimits.defaults());

@@ -34,9 +34,9 @@ public record CommandOutputRow(@Id String id, String executionId, String targetI
             streamSize, streamSha256, stdoutCursor, stderrCursor, streamTruncated, version);
     }
 
-    /** The row after {@code PENDING} to {@code READY}: the real size, which is also the charge. */
-    public CommandOutputRow withReady(long size) {
-        return new CommandOutputRow(id, executionId, targetId, targetRevision, OutputState.READY, expiresAt, size, size, streamState, streamBytes, streamSize,
+    /** The row after {@code PENDING} to {@code READY}: the real size, which is also the charge, and the expiry counted from the moment it became ready. */
+    public CommandOutputRow withReady(long size, Instant nextExpiry) {
+        return new CommandOutputRow(id, executionId, targetId, targetRevision, OutputState.READY, nextExpiry, size, size, streamState, streamBytes, streamSize,
             streamSha256, stdoutCursor, stderrCursor, streamTruncated, version);
     }
 

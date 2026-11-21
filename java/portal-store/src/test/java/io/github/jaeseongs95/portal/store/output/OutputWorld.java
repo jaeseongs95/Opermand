@@ -5,6 +5,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Instant;
 import java.security.SecureRandom;
 
@@ -37,7 +38,7 @@ final class OutputWorld {
     final CommandOutputPageRowRepository pages;
     private final JdbcAggregateOperations aggregates;
 
-    OutputWorld(Path folder, OutputLimits limits, CommandOutputRowRepository rows, CommandOutputFormatRowRepository formats, CommandOutputPageRowRepository pages,
+    OutputWorld(Path folder, OutputLimits limits, Clock clock, CommandOutputRowRepository rows, CommandOutputFormatRowRepository formats, CommandOutputPageRowRepository pages,
                 JdbcAggregateOperations aggregates, OutputMapper mapper, PlatformTransactionManager transactionManager) {
         this.rows = rows;
         this.formats = formats;
@@ -46,7 +47,7 @@ final class OutputWorld {
         this.files = new OutputFiles(new StorageRoots(folder, folder), TestStorage.rules());
         this.payloads = new FileOutputPayloadStore(files, new Sha256Digester(), limits);
         this.manifests = new JdbcOutputManifestStore(rows, formats, pages, aggregates, mapper, new OperationIdGenerator(new SecureRandom()), payloads, transactionManager,
-            limits);
+            limits, clock);
         this.startup = new OutputStartupCheck(manifests, payloads);
     }
 

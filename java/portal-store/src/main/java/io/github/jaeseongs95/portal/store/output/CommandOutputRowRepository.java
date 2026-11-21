@@ -33,8 +33,11 @@ interface CommandOutputRowRepository extends CrudRepository<CommandOutputRow, St
     @Query("SELECT COALESCE(SUM(charge_bytes), 0) FROM command_output")
     long totalCharge();
 
-    /** The outputs whose expiry is not after {@code now}. */
-    List<CommandOutputRow> findByExpiresAtLessThanEqual(Instant now);
+    /**
+     * The outputs that are not in {@code state} and whose expiry is not after {@code now}. The cleaner asks it with {@code PENDING}: an output that is still being written is
+     * not the cleaner's (2.x {@code command-output.mjs:338}); its expiry is set again when it is ready or given up. The index {@code ix_command_output_expiry} is on (state, expires_at).
+     */
+    List<CommandOutputRow> findByStateNotAndExpiresAtLessThanEqual(OutputState state, Instant now);
 
     List<CommandOutputRow> findByState(OutputState state);
 
