@@ -38,6 +38,17 @@
     "BRIDGE_VAULT_URL", "BRIDGE_VAULT_MOUNT", "BRIDGE_VAULT_TOKEN_REF", "BRIDGE_SOURCE_URL"
   ],
   "adminAuthModes": ["token", "oidc"],
+  "keyPrefix": "BRIDGE_",
+  "unknownKeyPolicy": "Startup fails when the environment or an environment file holds a key with the prefix BRIDGE_ that is neither in allowedKeys nor in removedKeys, and fails with the reason below when it is in removedKeys. The check is a LegacyKeyGuard run before binding (stage4-design.md B-1.6a); it is not left to ConfigurationProperties ignoreUnknownFields, which does not apply to environment variables.",
+  "removedKeys": [
+    {"key": "BRIDGE_ACCESS_TEAM_DOMAIN", "reason": "access mode is removed (2026-11-15 decision 1); use BRIDGE_ADMIN_AUTH_MODE token or oidc"},
+    {"key": "BRIDGE_ACCESS_AUD", "reason": "access mode is removed (2026-11-15 decision 1); use BRIDGE_ADMIN_AUTH_MODE token or oidc"},
+    {"key": "BRIDGE_ACCESS_OWNER_EMAILS", "reason": "access mode is removed (2026-11-15 decision 1); use BRIDGE_ADMIN_AUTH_MODE token or oidc"},
+    {"key": "BRIDGE_OIDC_OWNER_EMAILS", "reason": "the OIDC owner is one account, named by its provider subject: BRIDGE_OIDC_OWNER_SUBJECT"},
+    {"key": "BRIDGE_OIDC_JWKS_URL", "reason": "OAuth2 Login finds the signing keys by issuer discovery; the key is not read"},
+    {"key": "BRIDGE_AUDIT_PATH", "reason": "the audit log is a database table; the data folder is BRIDGE_DATA_DIR"},
+    {"key": "BRIDGE_TRANSFER_ROOT", "reason": "transfers live under BRIDGE_DATA_DIR"}
+  ],
   "originPattern": "^https://(?:\\[[0-9a-f:]+\\]|[a-z0-9._-]+)(?::[1-9][0-9]{0,4})?$",
   "originMaxBytes": 4096,
   "originVectors": [

@@ -59,9 +59,10 @@
   {
     "port": "admin", "method": "POST", "pathPattern": "^/api/files/downloads$", "source": "src/adapters/http/file-api.mjs:22-23,58",
     "auth": "same as POST /api/files/uploads.",
-    "auth30": "owner",
+    "auth30": "owner-or-device",
     "requestShape": "application/json; body at most 8192 bytes; required key remotePath; optional target, elevate, expectedTargetRevision (file-api.mjs:12-13)",
-    "responseShape": "200 presentJob(files.requestDownload(...)) (fields as POST .../finish)"
+    "responseShape": "200 presentJob(files.requestDownload(...)) (fields as POST .../finish)",
+    "note": "3.0 (stage4-design.md B-2): owner-or-device, like POST /api/files/uploads. It only creates a download request that the owner approves; a device token has no approval authority. 2.x client command request-download (src/adapters/cli/portal-client.mjs:107) keeps working with a device token."
   },
   {
     "port": "admin", "method": "GET", "pathPattern": "^/api/targets$", "source": "src/adapters/http/protocol.mjs:149",
@@ -95,8 +96,8 @@
     "port": "admin", "method": "GET", "pathPattern": "^/api/session$", "source": "src/adapters/http/protocol.mjs:169",
     "auth": "routeKind session (admin-policy.mjs:14): mode token => no authentication; mode access|oidc => verified identity required, no browser session.",
     "auth30": "session-probe",
-    "requestShape": "none",
-    "responseShape": "200 {mode: adminAccess.mode} (mode values seen in source: token, access, oidc)"
+    "requestShape": "none; sends no cookie requirement. Never creates a session (stage4-design.md B-4, review N15).",
+    "responseShape": "3.0: 200 {mode, authenticated:false, bridgeDisplayName, targetDisplayName} without a session or with an expired one; for a valid session 200 {mode, authenticated:true, bridgeDisplayName, targetDisplayName, commandAutomation, multiTarget, csrfToken}. The CSRF token is only ever given to an authenticated session. 2.4.2: 200 {mode: adminAccess.mode} (mode values seen in source: token, access, oidc); the display names and flags were injected into the HTML as data-* attributes (protocol.mjs:243-245), which 3.0 does not do."
   },
   {
     "port": "admin", "method": "GET", "pathPattern": "^/api/version$", "source": "src/adapters/http/protocol.mjs:170-175",
@@ -218,11 +219,20 @@
     "responseShape": "200 same headers as GET, empty body"
   },
   {
-    "port": "admin", "method": "GET", "pathPattern": "^(/|/settings|/bridge|/preferences|/servers|/history|/app\\.js)$", "source": "src/adapters/http/protocol.mjs:242-246",
+    "port": "admin", "method": "GET", "pathPattern": "^(/|/settings|/bridge|/preferences|/servers|/history|/devices|/reconciliation|/login|/app\\.js)$", "source": "src/adapters/http/protocol.mjs:242-246",
     "auth": "routeKind static (admin-policy.mjs:16): mode token => no authentication; mode access|oidc => verified identity required, no browser session. (/signed-out is also static, listed separately.)",
     "auth30": "static",
     "requestShape": "none",
-    "responseShape": "200: text/html; charset=utf-8 (admin web page; data-auth-mode, data-command-automation, data-multi-target, data-bridge-display-name, data-target-display-name injected, <title> rewritten) for every path except /app.js; text/javascript; charset=utf-8 for /app.js. Headers: Cache-Control: no-store, Content-Security-Policy \"default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\", Referrer-Policy: no-referrer"
+    "responseShape": "3.0: 200 text/html; charset=utf-8, the same classpath shell for every page path (the page reads GET /api/session; the server injects nothing and does not rewrite <title>); /app.js is text/javascript; charset=utf-8 and imports its ES modules from /assets/. Headers: Cache-Control: no-store, Content-Security-Policy \"default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'\", Referrer-Policy: no-referrer. /login accepts the query ?error (the page shows the refusal). 2.4.2: 200: text/html; charset=utf-8 (admin web page; data-auth-mode, data-command-automation, data-multi-target, data-bridge-display-name, data-target-display-name injected, <title> rewritten) for every path except /app.js; text/javascript; charset=utf-8 for /app.js. Headers: Cache-Control: no-store, Content-Security-Policy \"default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\", Referrer-Policy: no-referrer",
+    "note": "3.0 (stage4-design.md A.6, review N12): /devices (device token screen), /reconciliation (unknown operations list) and /login are new page paths; form-action is 'self' because /login/token is a form post. All of them are auth30 static: they carry no data and the page asks GET /api/session."
+  },
+  {
+    "port": "admin", "method": "GET", "pathPattern": "^/assets/(?:[A-Za-z0-9_-][A-Za-z0-9._-]*/)*[A-Za-z0-9_-][A-Za-z0-9._-]*\\.(?:js|css|svg|png|ico|woff2|json)$", "source": "3.0 only: stage4-design.md A.6 (StaticPageConfiguration)",
+    "auth": "3.0 only, no 2.4.2 route (2.4.2 served one inline /app.js).",
+    "auth30": "static",
+    "requestShape": "none; path segments never start with a dot, so no parent or hidden path is served",
+    "responseShape": "200 the classpath file under static/assets with its media type, Cache-Control: no-store, X-Content-Type-Options: nosniff; 404 for any other path",
+    "note": "Review N12: the ES modules of the UI (no bundler) are static, unauthenticated and carry no data; without this entry they would fall to the owner catch-all and the page could not load them before login."
   },
   {
     "port": "admin", "method": "GET", "pathPattern": "^/api/pending$", "source": "src/adapters/http/protocol.mjs:247",
@@ -302,32 +312,41 @@
     "responseShape": "200 {released:true, ownership:'durable-v1', [comparisonContract: BASELINE_PRESERVATION_CONTRACT when a contract header was sent]}"
   },
   {
-    "port": "admin", "method": "POST", "pathPattern": "^/api/([a-f0-9]{48})/(approve|deny|download)$", "source": "src/adapters/http/protocol.mjs:288-303",
+    "port": "admin", "method": "POST", "pathPattern": "^/api/([a-f0-9]{48})/(approve|deny)$", "source": "src/adapters/http/protocol.mjs:288-303",
     "auth": "admin-api; POST + Origin == adminOrigin (admin-policy.mjs:33-35). The handler itself does not check the method.",
     "auth30": "owner",
     "requestShape": "no body; approve honours request header Prefer: respond-async",
-    "responseShape": "approve: 200 presentJob(result of queue.approve) after execution, or with Prefer: respond-async 202 presentJob(queue.start(id)) plus header Preference-Applied: respond-async; deny: 200 presentJob(queue.deny(id)); download: 200 {downloadUrl: capabilities.downloadLink(job)}. approve without respond-async detaches the admission lease (protocol.mjs:300)."
+    "responseShape": "approve: 200 presentJob(result of queue.approve) after execution, or with Prefer: respond-async 202 presentJob(queue.start(id)) plus header Preference-Applied: respond-async; deny: 200 presentJob(queue.deny(id)). approve without respond-async detaches the admission lease (protocol.mjs:300).",
+    "note": "3.0 (stage4-design.md B-2, review N2): split from download. approve and deny stay owner only: a device token never decides an operation."
+  },
+  {
+    "port": "admin", "method": "POST", "pathPattern": "^/api/([a-f0-9]{48})/download$", "source": "src/adapters/http/protocol.mjs:288-290,303",
+    "auth": "admin-api; POST + Origin == adminOrigin (admin-policy.mjs:33-35). The handler itself does not check the method.",
+    "auth30": "owner-or-device",
+    "requestShape": "no body",
+    "responseShape": "200 {downloadUrl: capabilities.downloadLink(job)} (protocol.mjs:290). The URL carries the signed one-time ticket (see GET /downloads/...).",
+    "note": "3.0 (stage4-design.md B-2, review N2, decision L-2): owner-or-device. 2.x portal-client.mjs saved a finished download through this route (src/adapters/cli/portal-client.mjs:172); a device token must be able to get the link of a download the owner approved. It decides nothing."
   },
   {
     "port": "admin", "method": "POST", "pathPattern": "^/login/token$", "source": "3.0 only: stage4-design.md A.3 (TokenLoginFilter)",
     "auth": "3.0 only, no 2.4.2 route.",
     "auth30": "login",
-    "requestShape": "form field token (application/x-www-form-urlencoded); registered only when BRIDGE_ADMIN_AUTH_MODE is token",
-    "responseShape": "token equal to BRIDGE_ADMIN_TOKEN (constant-time comparison): new browser session (session id changed), redirect to /; otherwise 401 ProblemDetail and audit ADMIN_LOGIN_REFUSED"
+    "requestShape": "form field token (application/x-www-form-urlencoded); registered only when BRIDGE_ADMIN_AUTH_MODE is token. Exempt from CSRF (no session exists yet) but Origin must equal BRIDGE_ADMIN_ORIGIN. Anonymous attempts are rate limited per source (stage4-design.md B-4a)",
+    "responseShape": "token equal to BRIDGE_ADMIN_TOKEN (constant-time comparison): new browser session (session id changed), redirect to /; otherwise 401 ProblemDetail UNAUTHENTICATED and the refusal is folded into the audit refusal streak ADMIN_LOGIN_REFUSED (count, first and last time per source); too many attempts: 429 ProblemDetail LOGIN_THROTTLED with Retry-After. A failed attempt never creates a session"
   },
   {
     "port": "admin", "method": "GET", "pathPattern": "^/oauth2/authorization/oidc$", "source": "3.0 only: stage4-design.md A.3 (OidcAdminAuthMethod, Spring Security OAuth2 Login)",
     "auth": "3.0 only, no 2.4.2 route.",
     "auth30": "login",
     "requestShape": "none; registered only when BRIDGE_ADMIN_AUTH_MODE is oidc",
-    "responseShape": "302 to the authorization endpoint of BRIDGE_OIDC_ISSUER (found by issuer discovery)"
+    "responseShape": "302 to the authorization endpoint of BRIDGE_OIDC_ISSUER (found by issuer discovery). The redirect_uri is BRIDGE_ADMIN_ORIGIN + /login/oauth2/code/oidc; it is never built from Host or forwarded headers. The authorization request lives in a short pre-authentication session; when the number of such sessions is at its ceiling: 503 ProblemDetail LOGIN_BUSY (stage4-design.md B-4a)"
   },
   {
     "port": "admin", "method": "GET", "pathPattern": "^/login/oauth2/code/oidc$", "source": "3.0 only: stage4-design.md A.3 (OidcAdminAuthMethod, OwnerSubjectPolicy)",
     "auth": "3.0 only, no 2.4.2 route.",
     "auth30": "login",
     "requestShape": "query code and state from the provider; registered only when BRIDGE_ADMIN_AUTH_MODE is oidc",
-    "responseShape": "iss equal to BRIDGE_OIDC_ISSUER and sub equal to BRIDGE_OIDC_OWNER_SUBJECT: new browser session, redirect to /; any other account: no session, 403 and audit ADMIN_LOGIN_REFUSED (issuer, subject)"
+    "responseShape": "iss equal to BRIDGE_OIDC_ISSUER and sub equal to BRIDGE_OIDC_OWNER_SUBJECT: new browser session, redirect to /; any other account: no session, 403 text/html (the forbidden page) and the refusal is folded into the audit refusal streak ADMIN_LOGIN_REFUSED (issuer, subject); any other failure of the flow (provider error, state mismatch, missing authorization request): 302 to /login?error with no session"
   },
   {
     "port": "admin", "method": "POST", "pathPattern": "^/logout$", "source": "3.0 only: stage4-design.md B-4",
@@ -370,6 +389,38 @@
     "auth30": "owner",
     "requestShape": "application/json {outcome: completed|failed|never_ran}",
     "responseShape": "200 the operation after reconciliation (completed => COMPLETED with OwnerConfirmed evidence, failed => FAILED, never_ran => CANCELLED NOT_DISPATCHED); not UNKNOWN => 409 ProblemDetail INVALID_OPERATION_TRANSITION; nothing is run again; audit OPERATION_RECONCILED"
+  },
+  {
+    "port": "admin", "method": "POST", "pathPattern": "^/api/artifacts$", "source": "src/adapters/http/opaque-file-api.mjs:22-76 (route :28, create :28/:35/:66/:69)",
+    "auth": "admin-api plus a mandatory verified principal (opaque-file-api.mjs:24-26 => 401 {error:'UNAUTHORIZED'} / 403 {error:'FORBIDDEN'}); artifact write routes require Origin == adminOrigin (admin-policy.mjs:26-27, else 403) and a principal (token mode uses the fixed subject 'portal-token-owner', admin-policy.mjs:30). Principal is re-checked after the body is read (opaque-file-api.mjs:49-52 => ARTIFACT_AUTHORIZATION_CHANGED).",
+    "auth30": "owner-or-device",
+    "requestShape": "Content-Type exactly application/json (Content-Encoding absent or identity) else 415 {error:'UNSUPPORTED_ARTIFACT_CONTENT_TYPE'}; body at most 8192 bytes else 413 {error:'ARTIFACT_REQUEST_TOO_LARGE'}; object with exactly the keys operationKey, fileName, size, sha256 else 400 {error:'INVALID_ARTIFACT_FIELDS'}; invalid JSON => 400 {error:'INVALID_JSON'}; query string => 400 {error:'INVALID_ARTIFACT_ROUTE'}",
+    "responseShape": "200 {uuid} (src/application/opaque-files.mjs:168); errors {error:<code>} with the status map in opaque-file-api.mjs:9-18 (400/403/404/409/410/413/422/500/503/507), unmapped => 500",
+    "note": "3.0 (stage4-design.md B-2a, review N1, decision L-1): restored from 2.4.2 and open to a device token. The staged UUID flow is a 2.x feature: the PC client sends the bytes here and the model only receives the UUID that the MCP files tool then takes. /api/files/uploads needs a remotePath and a target, so it cannot replace it. Origin: when present it must equal BRIDGE_ADMIN_ORIGIN; the body is read in full and the identity is checked again afterwards (ARTIFACT_AUTHORIZATION_CHANGED) as in 2.4.2. The 2.4.2 text above is the record of the 2.x behaviour; in 3.0 the identity is the administrator token owner, a session owner or a device token, and errors are ProblemDetail (stage4-design.md B-7)."
+  },
+  {
+    "port": "admin", "method": "GET", "pathPattern": "^/api/artifacts/([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})$", "source": "src/adapters/http/opaque-file-api.mjs:5,31-33",
+    "auth": "same as POST /api/artifacts: artifact read requires Origin == adminOrigin and a principal (admin-policy.mjs:9,26-31; opaque-file-api.mjs:24-26).",
+    "auth30": "owner-or-device",
+    "requestShape": "none (a query string => 400 {error:'INVALID_ARTIFACT_ROUTE'})",
+    "responseShape": "200 opaqueFiles.stat({uuid}) result; fields per the MCP files tool projection: uuid, state, fileName, size, sha256, expiresAt, received, sequence, operations[{operationKey, action, requestId, state}] (public-contract.mjs:221-222; the HTTP body may contain further fields: 미확인)",
+    "note": "3.0 (stage4-design.md B-2a, review N1, decision L-1): restored from 2.4.2 and open to a device token. The staged UUID flow is a 2.x feature: the PC client sends the bytes here and the model only receives the UUID that the MCP files tool then takes. /api/files/uploads needs a remotePath and a target, so it cannot replace it. Origin: when present it must equal BRIDGE_ADMIN_ORIGIN; the body is read in full and the identity is checked again afterwards (ARTIFACT_AUTHORIZATION_CHANGED) as in 2.4.2. The 2.4.2 text above is the record of the 2.x behaviour; in 3.0 the identity is the administrator token owner, a session owner or a device token, and errors are ProblemDetail (stage4-design.md B-7)."
+  },
+  {
+    "port": "admin", "method": "POST", "pathPattern": "^/api/artifacts/([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})/complete$", "source": "src/adapters/http/opaque-file-api.mjs:5,35,66,69",
+    "auth": "same as POST /api/artifacts.",
+    "auth30": "owner-or-device",
+    "requestShape": "Content-Type application/json; body must be an object with no keys, at most 8192 bytes",
+    "responseShape": "200 {uuid} (src/application/opaque-files.mjs:175)",
+    "note": "3.0 (stage4-design.md B-2a, review N1, decision L-1): restored from 2.4.2 and open to a device token. The staged UUID flow is a 2.x feature: the PC client sends the bytes here and the model only receives the UUID that the MCP files tool then takes. /api/files/uploads needs a remotePath and a target, so it cannot replace it. Origin: when present it must equal BRIDGE_ADMIN_ORIGIN; the body is read in full and the identity is checked again afterwards (ARTIFACT_AUTHORIZATION_CHANGED) as in 2.4.2. The 2.4.2 text above is the record of the 2.x behaviour; in 3.0 the identity is the administrator token owner, a session owner or a device token, and errors are ProblemDetail (stage4-design.md B-7)."
+  },
+  {
+    "port": "admin", "method": "PUT", "pathPattern": "^/api/artifacts/([a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12})/chunks/(0|[1-9][0-9]*)$", "source": "src/adapters/http/opaque-file-api.mjs:5,34-61",
+    "auth": "same as POST /api/artifacts (artifact write: PUT is allowed through the Origin gate by admin-policy.mjs:11-12).",
+    "auth30": "owner-or-device",
+    "requestShape": "Content-Type exactly application/octet-stream (Content-Encoding absent or identity); raw bytes, 1..262144 (CHUNK_BYTES); required header X-Chunk-Sha256 = 64 lowercase hex SHA-256 of the body; path segment is the sequence number (safe integer) else 400 {error:'INVALID_ARTIFACT_CHUNK'}; body > 262144 => 413 {error:'ARTIFACT_REQUEST_TOO_LARGE'}",
+    "responseShape": "200 {uuid, ...ack} where ack is the store's append acknowledgement (src/application/opaque-files.mjs:173; ack fields: 미확인)",
+    "note": "3.0 (stage4-design.md B-2a, review N1, decision L-1): restored from 2.4.2 and open to a device token. The staged UUID flow is a 2.x feature: the PC client sends the bytes here and the model only receives the UUID that the MCP files tool then takes. /api/files/uploads needs a remotePath and a target, so it cannot replace it. Origin: when present it must equal BRIDGE_ADMIN_ORIGIN; the body is read in full and the identity is checked again afterwards (ARTIFACT_AUTHORIZATION_CHANGED) as in 2.4.2. The 2.4.2 text above is the record of the 2.x behaviour; in 3.0 the identity is the administrator token owner, a session owner or a device token, and errors are ProblemDetail (stage4-design.md B-7)."
   },
   {
     "port": "admin", "method": "*", "pathPattern": "(any other admin path)", "source": "src/adapters/http/protocol.mjs:289,304-306",

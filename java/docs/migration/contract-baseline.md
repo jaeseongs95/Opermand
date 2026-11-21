@@ -2,7 +2,7 @@
 
 - 대상 소스: 브랜치 `feature/v300-prep` 작업 사본(HEAD `a44c4d145ca1a3b2fa68701a5b7f5cd92ff15967`, package.json version `2.4.2`).
 - 결정: 「계약 유지」 (MCP 도구 이름·입력 스키마·응답 봉투 Contract 2.0, 관리자 HTTP API, 완료 hook 형식, 설정 키).
-- 3.0 개정(2026-11-21): 기준본은 Contract 3.0으로 고쳤다. 2.4.2와 다른 곳은 9절 변경표의 행뿐이고, 1~8절은 2.4.2 기준본을 만든 기록이다. 8.1절과 5.1절의 비교 규칙은 9.3절이 덧붙인 규칙과 함께 읽는다.
+- 3.0 개정(2026-11-21): 기준본은 Contract 3.0으로 고쳤다. 2.4.2와 다른 곳은 9절 변경표의 행뿐이고, 1~8절은 2.4.2 기준본을 만든 기록이다. 8.1절과 5.1절의 비교 규칙은 9.3절이 덧붙인 규칙과 함께 읽는다. 같은 날 독립 검토(`cb8ff00` 기준) 반영(U0r)으로 `admin-routes.json`·`settings-contract.json`·`envelope.schema.json`을 다시 고쳤다(9.1절의 해당 행, 설계는 `stage4-design.md` F.1절). 이 개정 뒤 `admin-routes.json`은 60항목, 허용 설정 키는 37개, `ErrorCode` 열거형은 217개(바뀌지 않음), 도구 스키마는 바뀌지 않았다.
 - 용도: JUnit 계약 시험이 Java 서버의 실제 출력을 이 기준본과 비교한다. 기준본은 `java/portal-web/src/test/resources/contract/` 아래에 있다.
 - 작성 방식: 소스를 읽어 옮겼다. Node·Gradle·Python은 실행하지 않았다(지시). 설명 문장은 한 글자도 다듬거나 번역하지 않고 소스 문자열 그대로 두었다(아래 4.3의 grep 대조로 확인).
 
@@ -272,13 +272,22 @@ hook에서 `portal-files.mjs`가 받는 하위 명령·인자 (hooks JSON에서 
 | `mcp/tools/desktop-close.json` `description` | `The original open requestKey cannot create another lease.` | `The original open operationKey cannot create another lease.` | B-1.3 |
 | `mcp/tools/targets.json` `$defs.guiDescriptor.properties.openRequest` | 있음(`requestKey`, `expiresAt`) | 없음 | B-1.3 |
 | `mcp/envelope.schema.json` `x-portal-errorCodes.contract30Removals` | 없음 | `DESKTOP_OPEN_REQUEST_CAPACITY`·`_GENERATION`·`_EXPIRED`(2.x 위치·이유). `serverLayerCandidates`의 2.x 기록은 그대로 | B-1.3 |
-| `http/admin-routes.json` 항목 삭제 | `POST /api/artifacts`, `GET`·`POST …/complete`·`PUT …/chunks/n` `/api/artifacts/{uuid}`, `POST /api/session/start`, `POST /api/session/logout` | 없음(51 → 45항목) | B-1.5, 2026-11-15 결정 1 |
-| `http/admin-routes.json` 항목 추가 | 없음 | `POST /login/token`, `GET /oauth2/authorization/oidc`, `GET /login/oauth2/code/oidc`, `POST /logout`, `GET`·`POST /api/devices`, `POST /api/devices/{id}/revoke`, `GET /api/operations/reconciliation`, `POST /api/operations/{id}/reconcile`(45 → 54항목) | B-1.5, B-2, B-10 |
+| `http/admin-routes.json` 항목 삭제 | `POST /api/session/start`, `POST /api/session/logout` | 없음(51 → 49항목). `/api/artifacts` 4항목은 삭제하지 않는다(아래 복원 행) | B-1.5, 2026-11-15 결정 1 |
+| `http/admin-routes.json` 항목 추가 | 없음 | `POST /login/token`, `GET /oauth2/authorization/oidc`, `GET /login/oauth2/code/oidc`, `POST /logout`, `GET`·`POST /api/devices`, `POST /api/devices/{id}/revoke`, `GET /api/operations/reconciliation`, `POST /api/operations/{id}/reconcile`(49 → 58항목) | B-1.5, B-2, B-10 |
+| `http/admin-routes.json` `/api/artifacts` 4항목 | 2.4.2 항목(`auth`는 principal 필수) | 2.4.2 항목 그대로 두고 `auth30: owner-or-device`와 3.0 `note`를 더함. 첫 3.0 개정(cb8ff00)이 지웠던 것을 복원 | B-2a, 검토 N1, 결정 L-1 |
+| `http/admin-routes.json` `POST /api/{id}/(approve\|deny\|download)` | 한 항목, `owner` | 두 항목: `(approve\|deny)` `owner`, `download` `owner-or-device`(58 → 59항목) | B-2, 검토 N2, 결정 L-2 |
+| `http/admin-routes.json` `POST /api/files/downloads` `auth30` | `owner` | `owner-or-device` | B-2, 규칙 「굳이 편의기능 있는건 빼지마」 |
+| `http/admin-routes.json` 정적 화면 항목 | 패턴 `/`, `/settings`, `/bridge`, `/preferences`, `/servers`, `/history`, `/app.js` | `/devices`, `/reconciliation`, `/login`을 더함. 서버가 HTML에 값을 끼워 넣지 않음(화면이 `GET /api/session`을 읽음), 본문 CSP의 `form-action`은 `'self'` | A.6, 검토 N12 |
+| `http/admin-routes.json` `GET /assets/**` | 없음 | 정적 항목 하나 추가(UI의 ES 모듈, 59 → 60항목) | A.6, 검토 N12 |
+| `http/admin-routes.json` `GET /api/session` | `{mode}` | `{mode, authenticated, bridgeDisplayName, targetDisplayName}`, 로그인 세션이면 `commandAutomation`·`multiTarget`·`csrfToken`도. 익명에는 세션도 토큰도 주지 않음 | B-4, 검토 N15 |
+| `http/admin-routes.json` 로그인 항목 3개의 요청·응답 | (3.0에서 새로 생긴 항목) | `POST /login/token`은 CSRF 제외·Origin 필수·429 `LOGIN_THROTTLED`, OIDC 시작은 503 `LOGIN_BUSY`·`redirect_uri`는 `BRIDGE_ADMIN_ORIGIN`에서, 콜백은 허용 계정이 아니면 403 HTML·그 밖의 실패는 `/login?error` | B-4a, B-8a, 검토 N5·N9·N15 |
+| `mcp/envelope.schema.json` `x-portal-errorCodes.webLayerCodes` | 없음 | 보안 계층 HTTP 전용 코드 여섯 개(`UNAUTHENTICATED`·`FORBIDDEN`·`CSRF_REJECTED`·`ORIGIN_REJECTED`·`LOGIN_THROTTLED`·`LOGIN_BUSY`)와 상태. `ErrorCode` 217개는 그대로 | B-7, B-4a |
 | `http/admin-routes.json` 모든 항목 `auth30` | 없음 | 3.0 인증 범주(9.2절) | B-1.5, B-2, B-4 |
 | `http/admin-routes.json` `GET /health` `responseShape` | `{healthy:true, version, …}`, 실패 `{error:…}` | 앞에 3.0 모양 `{"status":"UP"}`/503 `{"status":"DOWN"}`을 적고 2.4.2 문장은 뒤에 기록으로 둠 | B-5 |
 | `settings/settings-contract.json` `allowedKeys` | `BRIDGE_AUDIT_PATH`, `BRIDGE_TRANSFER_ROOT`, `BRIDGE_ACCESS_TEAM_DOMAIN`, `BRIDGE_ACCESS_AUD`, `BRIDGE_ACCESS_OWNER_EMAILS`, `BRIDGE_OIDC_JWKS_URL`, `BRIDGE_OIDC_OWNER_EMAILS` 있음 | 위 7개 없음. `BRIDGE_DATA_DIR`, `BRIDGE_OIDC_CLIENT_SECRET`, `BRIDGE_OIDC_OWNER_SUBJECT`, `BRIDGE_SOURCE_URL` 있음 | B-1.6, 2026-11-15 결정 1·5, 2026-11-21 사용자 결정 |
 | `settings/settings-contract.json` `defaults` | `BRIDGE_SOURCE_URL` 없음 | `"BRIDGE_SOURCE_URL": ""` | B-1.6, B-9 |
 | `settings/settings-contract.json` `adminAuthModes` | 없음(2.x 값 token·access·oidc) | `["token","oidc"]` | B-1.6 |
+| `settings/settings-contract.json` `keyPrefix`·`unknownKeyPolicy`·`removedKeys` | 없음 | `BRIDGE_`, 옛 키 가드의 규칙, 뺀 7개 키와 교체 이유(허용 키 40 → 37) | A.1(`LegacyKeyGuard`), 검토 N16 |
 | hooks 비교 규칙 | 플러그인 매니페스트 전 필드 비교 | 매니페스트 `version` 제외(JSON은 그대로) | B-1.7 |
 
 ### 9.2 `auth30` 범주
@@ -288,12 +297,12 @@ hook에서 `portal-files.mjs`가 받는 하위 명령·인자 (hooks JSON에서 
 | `public` | 인증 없음(MCP 포트 `/health`) |
 | `mcp-bearer` | `Authorization: Bearer <BRIDGE_MCP_TOKEN>`만. 관리자 토큰·기기 토큰은 거절 |
 | `owner` | 소유자만: 관리자 토큰 Bearer(무상태), 또는 로그인 세션 + 안전하지 않은 메서드면 `X-CSRF-TOKEN`과 `Origin == BRIDGE_ADMIN_ORIGIN` |
-| `owner-or-device` | `owner`에 더해 기기 토큰 Bearer도 받음(기기 토큰은 이 범주와 `download-capability`에서만 유효) |
+| `owner-or-device` | `owner`에 더해 기기 토큰 Bearer도 받음(기기 토큰은 이 범주에서만 유효). 항목 14개: `GET /api/targets`, 업로드 4, staged UUID 4(`/api/artifacts`), `POST /api/files/downloads`, `POST /api/{id}/download`, 작업 읽기 3(`GET /api/{id}`, `?observe=1`, `/api/operations/by-key`). 승인·거부·환경·정책·용량·데스크톱·유지보수·기기 토큰 관리·정리는 포함되지 않음 |
 | `owner-token` | 관리자 토큰 Bearer만(유지보수 경로). 세션은 받지 않음 |
 | `login` | 인증 전에 부르는 로그인 경로. 설정한 모드의 경로만 등록 |
-| `static` | 인증 없는 정적 화면(데이터 없음). 화면은 `GET /api/session`으로 로그인 여부를 확인 |
-| `session-probe` | 인증 없이 로그인 여부와 CSRF 토큰을 답함(`GET /api/session`) |
-| `download-capability` | `owner-or-device` + 경로의 일회용 다운로드 토큰 |
+| `static` | 인증 없는 정적 화면과 UI 모듈(`/assets/**`, 데이터 없음). 화면은 `GET /api/session`으로 로그인 여부를 확인 |
+| `session-probe` | 인증 없이 로그인 여부를 답함(`GET /api/session`). 익명에게는 세션도 CSRF 토큰도 주지 않고, 로그인한 세션에만 토큰을 줌 |
+| `download-capability` | **인증 없음 + 서명된 일회용 티켓만**(관리자 토큰·기기 토큰·세션 불필요). 티켓은 파일·대상에 묶이고 수명 10분 이하이며 `GET`이 소비함(2.x 토큰 모드와 같음, B-2b). 이전 개정의 「`owner-or-device`에 더해」는 철회 |
 
 ### 9.3 3.0 비교 규칙(8.1절·5.1절에 덧붙임)
 
@@ -301,4 +310,7 @@ hook에서 `portal-files.mjs`가 받는 하위 명령·인자 (hooks JSON에서 
 - hooks: 플러그인 매니페스트(`claude-plugin.json`, `codex-plugin.json`)의 `version`은 제품 판을 따르므로 `serverInfo.version`처럼 비교하지 않는다. 나머지 필드는 전부 비교한다.
 - 관리자 HTTP 오류 본문: 4xx·5xx 본문은 RFC 9457 `application/problem+json`이다. `type = urn:ssh-approval-portal:error:<CODE>`, `title = <CODE>`, 확장 속성 `code`·`retryable`·`executionAttempted`(B-7). `admin-routes.json`의 `{error:'…'}` 문장은 2.4.2 기록이며 3.0 비교 대상이 아니다. 비교 대상은 메서드·경로·`auth30`·성공 응답 모양이다.
 - `admin-routes.json`의 `auth`는 2.4.2 동작 기록이고, 3.0 시험은 `auth30`으로 판정한다.
+- 보안 계층이 컨트롤러 앞에서 내는 401·403·429·503 본문은 `envelope.schema.json`의 `x-portal-errorCodes.webLayerCodes`의 코드를 `code`로 쓰는 같은 `ProblemDetail`이다. 이 코드는 `ErrorCode` 열거형이 소유하지 않으므로 `ErrorCodeBaselineTest`의 217개 합계에 들어가지 않는다.
+- 설정 키는 `settings-contract.json`의 `allowedKeys`(허용)와 `removedKeys`(옛 키, 이유 포함)로만 가른다. 접두 `BRIDGE_`를 가진 키가 둘 다에 없으면 시작이 멈춘다(`unknownKeyPolicy`).
+- 이 파일들을 읽는 최소 시험은 `ContractBaselineIntegrityTest`이고, 각 단위의 실제 시험이 생기면 해당 사례를 넘겨받아 지운다(`stage4-design.md` F.3절).
 - 기준본을 더 바꾸는 단위는 같은 커밋에서 9.1절에 행(항목, 이전, 이후, 근거 결정)을 더하고 `stage4-design.md`의 해당 절을 고친다. 변경표에 없는 차이는 두지 않는다.
