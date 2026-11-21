@@ -166,6 +166,34 @@ class HistoryServiceTest {
         assertThat(service.page(new HistoryFilter(Set.of(), new TargetFilter.AnyTarget()), new HistoryCursor.FirstPage()).entries()).isEmpty();
     }
 
+    @Test
+    @DisplayName("S-D0160-01 D-0160: more than 10,000 rows that are not listed before a listed one never end the history; the cursor goes on after the last row read, and the walk reaches the old entry")
+    void aLongRunOfUnlistedRowsIsNotTheEndOfTheHistory() {
+        TargetId gone = new TargetId("gone-1");
+        List<Operation> history = new ArrayList<>();
+        int unlisted = 10_500;
+        for (int i = unlisted + 1; i >= 2; i--) {
+            history.add(command(i, gone, targets.current().revision(), WRITE, "echo " + i));
+        }
+        Operation old = command(1, KNOWN, targets.current().revision(), WRITE, "echo old");
+        history.add(old);
+        HistoryService service = new HistoryService(new ListQuery(history), targets);
+        HistoryFilter filter = new HistoryFilter(Set.of(), new TargetFilter.AnyTarget());
+
+        HistoryResult first = service.page(filter, new HistoryCursor.FirstPage());
+
+        assertThat(first.entries()).as("the first request found nothing it may list").isEmpty();
+        assertThat(first.next()).as("but it did not reach the end of the history").isInstanceOf(HistoryCursor.After.class);
+        List<OperationId> found = new ArrayList<>();
+        HistoryResult page = first;
+        for (int requests = 0; requests < 20 && !(page.next() instanceof HistoryCursor.End); requests++) {
+            page = service.page(filter, page.next());
+            page.entries().forEach(entry -> found.add(entry.operation().id()));
+        }
+        assertThat(found).containsExactly(old.id());
+        assertThat(page.next()).isInstanceOf(HistoryCursor.End.class);
+    }
+
     // ---- helpers ----
 
     private Operation command(int number, TargetId target, TargetRevision revision, ProfileAlias profile, String text) {

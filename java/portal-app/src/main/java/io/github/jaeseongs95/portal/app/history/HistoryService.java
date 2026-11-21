@@ -38,7 +38,10 @@ import io.github.jaeseongs95.portal.domain.target.TargetLookup;
  * <li>every listed operation says whether its target is still as it ran ({@code ACTIVE}), was changed or is switched off;</li>
  * <li>an agent CLI installation is listed only while its target is enabled with the revision and the write profile it was approved for (RC-B-397);</li>
  * <li>a page holds at most {@value #PAGE_SIZE} entries and about {@value #RESPONSE_BYTES} bytes of text; the first entry that alone is larger than the limit is
- * {@code HISTORY_ENTRY_TOO_LARGE}, and a page that fills up early continues exactly after its last entry (RC-B-394, RC-B-399).</li>
+ * {@code HISTORY_ENTRY_TOO_LARGE}, and a page that fills up early continues exactly after its last entry (RC-B-394, RC-B-399);</li>
+ * <li>one request reads a bounded number of rows. When that many rows were read and the page is still not full (because the rows that are not listed come in a long run),
+ * the page is shorter, perhaps empty, and its cursor continues after the last row that was read: a cursor that is not {@link HistoryCursor.End} always means that more
+ * history may follow, and the end of the history is never reported before it is reached (defect D-0160).</li>
  * </ul>
  * The use case only reads. The size of an entry is the UTF-8 bytes of the texts it carries (the command, its contexts, the paths, the texts of the result) plus a fixed amount
  * for the rest; the answer envelope of stage 4 may measure more exactly, and that measure replaces this one when it exists.
@@ -52,7 +55,10 @@ public class HistoryService {
     public static final int RESPONSE_BYTES = 256 * 1024;
     /** What an entry weighs besides its texts: ids, states, times and the target fields. */
     static final int ENTRY_OVERHEAD_BYTES = 1024;
-    /** The query scans at most 10,000 rows (its own bound); the walk over its pages stops there too. */
+    /**
+     * How many pages of the query one request walks: a bound on the work of one request, not on the history. When the bound is reached before a page is full, the answer
+     * is the entries found so far and the cursor of the next position, and the next request goes on from there (defect D-0160).
+     */
     private static final int MAX_QUERY_PAGES = 10_000 / PAGE_SIZE;
 
     private final HistoryQuery query;
@@ -67,7 +73,8 @@ public class HistoryService {
     public HistoryResult page(HistoryFilter filter, HistoryCursor after) {
         Objects.requireNonNull(filter, "filter");
         Objects.requireNonNull(after, "after");
-        List<HistoryEntry> listed = collect(filter, after);
+        Walk walk = collect(filter, after);
+        List<HistoryEntry> listed = walk.listed();
         List<HistoryEntry> shown = new ArrayList<>();
         long bytes = 0;
         for (HistoryEntry entry : listed.subList(0, Math.min(PAGE_SIZE, listed.size()))) {
@@ -81,8 +88,10 @@ public class HistoryService {
             shown.add(entry);
             bytes += weight;
         }
-        boolean more = listed.size() > shown.size();
-        return new HistoryResult(shown, more ? continuationAfter(shown.get(shown.size() - 1)) : new HistoryCursor.End());
+        if (listed.size() > shown.size()) {
+            return new HistoryResult(shown, continuationAfter(shown.get(shown.size() - 1)));
+        }
+        return new HistoryResult(shown, walk.resume());
     }
 
     /** One operation with its full public metadata; one that does not exist or is not listed (its target is not registered) is {@code OPERATION_NOT_FOUND}. */
@@ -97,21 +106,30 @@ public class HistoryService {
         return entry;
     }
 
-    /** Walks the pages of the query until one more than a page is listed or the history ends; the extra one tells whether a following page exists. */
-    private List<HistoryEntry> collect(HistoryFilter filter, HistoryCursor after) {
+    /**
+     * Walks the pages of the query until one more than a page is listed, the history ends or the bound of one request is reached. The extra entry tells whether a following
+     * page exists; {@code resume} is where the next request goes on when the bound stopped the walk before the history ended, and {@code End} when it ended.
+     */
+    private Walk collect(HistoryFilter filter, HistoryCursor after) {
         List<HistoryEntry> listed = new ArrayList<>();
         HistoryCursor cursor = after;
+        HistoryCursor resume = new HistoryCursor.End();
         for (int pages = 0; pages < MAX_QUERY_PAGES && listed.size() <= PAGE_SIZE; pages++) {
             HistoryPage page = query.page(filter, cursor, PAGE_SIZE);
             for (Operation operation : page.operations()) {
                 statusOf(operation).ifPresent(status -> listed.add(new HistoryEntry(operation, status)));
             }
-            if (page.next() instanceof HistoryCursor.End) {
+            resume = page.next();
+            if (resume instanceof HistoryCursor.End) {
                 break;
             }
-            cursor = page.next();
+            cursor = resume;
         }
-        return listed;
+        return new Walk(listed, resume);
+    }
+
+    /** What one walk found, and the cursor to continue from when it stopped before the history ended. */
+    private record Walk(List<HistoryEntry> listed, HistoryCursor resume) {
     }
 
     private HistoryCursor continuationAfter(HistoryEntry last) {
