@@ -1,0 +1,104 @@
+name: java-rdp-spike
+
+# Adoption spike for the Devolutions ironrdp-agent 0.1.0 prebuilt binary. Judgement evidence only: no product code.
+# Runs only on pushes to the spike branch; results are in the run artifacts and java/docs/migration/rdp-spike.md.
+on:
+  push:
+    branches: [feature/v300-rdp-spike]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: java-rdp-spike-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_REPO: Devolutions/IronRDP
+  UPSTREAM_TAG: ironrdp-agent-v0.1.0
+  RELEASE_BASE: https://github.com/Devolutions/IronRDP/releases/download/ironrdp-agent-v0.1.0
+  WIN_ASSET: ironrdp-agent-0.1.0-windows-x64.tar.gz
+  WIN_SHA256: f70c3fd2e4dc75b2d34fdff741b3fae04329bf7e8de6d37054c22a5bb46c3737
+  LINUX_ASSET: ironrdp-agent-0.1.0-linux-x64.tar.gz
+  LINUX_SHA256: 3a734831bf777ace6bbc506f9a29ee040b67cb70dadb5c698bbe5e387f7a75d0
+
+jobs:
+  windows:
+    name: windows-latest (NLA=${{ matrix.nla }})
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        nla: [1, 0]
+    steps:
+      # actions/checkout v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Windows spike (items 1-9, 12)
+        shell: pwsh
+        run: |
+          ./java/ci/rdp-spike/windows-spike.ps1 `
+            -Nla ${{ matrix.nla }} `
+            -ArtifactsDir "$env:RUNNER_TEMP\spike-out" `
+            -WorkDir "$env:RUNNER_TEMP\spike-work" `
+            -ReleaseBase $env:RELEASE_BASE `
+            -Asset $env:WIN_ASSET `
+            -PinnedSha256 $env:WIN_SHA256
+      # actions/upload-artifact v7.0.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: rdp-spike-windows-nla${{ matrix.nla }}
+          path: ${{ runner.temp }}/spike-out
+          if-no-files-found: warn
+
+  linux:
+    name: ubuntu-latest (${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [nla, tls]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Linux spike (items 10, 11)
+        env:
+          MODE: ${{ matrix.mode }}
+          ASSET: ${{ env.LINUX_ASSET }}
+          PINNED_SHA256: ${{ env.LINUX_SHA256 }}
+        run: |
+          export ART="$RUNNER_TEMP/spike-out" WORK="$RUNNER_TEMP/spike-work"
+          bash java/ci/rdp-spike/linux-spike.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: rdp-spike-linux-${{ matrix.mode }}
+          path: ${{ runner.temp }}/spike-out
+          if-no-files-found: warn
+
+  provenance:
+    name: release provenance (item 12)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Attestation, SBOM and licence checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export OUT="$RUNNER_TEMP/spike-out"
+          export WIN_ASSET LINUX_ASSET WIN_SHA="$WIN_SHA256" LINUX_SHA="$LINUX_SHA256"
+          bash java/ci/rdp-spike/provenance.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        if: always()
+        with:
+          name: rdp-spike-provenance
+          path: ${{ runner.temp }}/spike-out
+          if-no-files-found: warn
