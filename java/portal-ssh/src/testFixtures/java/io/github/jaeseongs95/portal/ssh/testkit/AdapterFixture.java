@@ -51,7 +51,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.function.UnaryOperator;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
+import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 /**
@@ -122,7 +124,7 @@ public final class AdapterFixture implements AutoCloseable {
         }
     }
 
-    private AdapterFixture(SshSettings settings, SessionReapSettings reap) {
+    private AdapterFixture(SshSettings settings, SessionReapSettings reap, UnaryOperator<TaskExecutor> commandExecutor) {
         scheduler = new ThreadPoolTaskScheduler();
         scheduler.setPoolSize(2);
         scheduler.setThreadNamePrefix("adapter-test-scheduler-");
@@ -139,7 +141,7 @@ public final class AdapterFixture implements AutoCloseable {
         SessionConnector connector = new SessionConnector(new ProxyJumpResolver(profiles, credentials), new MinaClientFactory(settings, algorithms), hostKeys, settings);
         pool = new SshSessionPool(settings, connector, clock, taskExecutor, scheduler, reap);
         pool.afterPropertiesSet();
-        executor = new MinaRemoteExecutor(pool, scheduler, taskExecutor, clock, new ChannelSignals(), settings, new ExecOutcomes());
+        executor = new MinaRemoteExecutor(pool, scheduler, commandExecutor.apply(taskExecutor), clock, new ChannelSignals(), settings, new ExecOutcomes());
         ChannelOpening opening = new ChannelOpening(scheduler, clock);
         forwarder = new MinaRemoteForwarder(pool, opening, scheduler, taskExecutor, clock);
         streams = new MinaRemoteStreamExecutor(pool, opening, scheduler, clock, new ChannelSignals(), settings);
@@ -152,12 +154,20 @@ public final class AdapterFixture implements AutoCloseable {
 
     /** An adapter with the given settings that accepts every host key that is not pinned. */
     public static AdapterFixture start(SshSettings settings) {
-        return new AdapterFixture(settings, SessionReapSettings.defaults());
+        return new AdapterFixture(settings, SessionReapSettings.defaults(), UnaryOperator.identity());
     }
 
     /** An adapter whose pool closes idle sessions by the given settings. */
     public static AdapterFixture start(SshSettings settings, SessionReapSettings reap) {
-        return new AdapterFixture(settings, reap);
+        return new AdapterFixture(settings, reap, UnaryOperator.identity());
+    }
+
+    /**
+     * An adapter whose command executor runs its tasks (the readers of the output and the writer of the input) on the executor that {@code commandExecutor} makes from the
+     * fixture's own, so that a test can make the executor reject a task. The session pool keeps the fixture's executor.
+     */
+    public static AdapterFixture start(SshSettings settings, UnaryOperator<TaskExecutor> commandExecutor) {
+        return new AdapterFixture(settings, SessionReapSettings.defaults(), commandExecutor);
     }
 
     public Profiles profiles() {
