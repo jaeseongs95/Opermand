@@ -120,7 +120,21 @@ public class ExecutionDispatcher {
     public void wake() {
         requested.set(true);
         if (open.get() && draining.compareAndSet(false, true)) {
+            startDrain();
+        }
+    }
+
+    /**
+     * Hands the drain to the executor. {@link #draining} was taken by the caller; when the executor refuses the task (it is shut down, its queue is full) the drain never runs and
+     * nothing would ever give the flag back, so every later wake would find the dispatcher "busy" and the queue would stand still for good (defect D-0158). The flag is given back
+     * here and the failure is logged; the request flag stays set, so the next change of the queue tries again.
+     */
+    private void startDrain() {
+        try {
             executor.execute(this::drain);
+        } catch (RuntimeException e) {
+            draining.set(false);
+            LOG.error("The drain of the queue could not be handed to the executor; the next change of the queue wakes the dispatcher again", e);
         }
     }
 
@@ -137,7 +151,7 @@ public class ExecutionDispatcher {
         } finally {
             draining.set(false);
             if (requested.get() && draining.compareAndSet(false, true)) {
-                executor.execute(this::drain);
+                startDrain();
             }
         }
     }
