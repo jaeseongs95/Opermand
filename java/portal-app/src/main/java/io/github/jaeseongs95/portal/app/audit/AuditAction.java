@@ -18,7 +18,9 @@ public enum AuditAction {
     NOT_STORED("not-stored"),
     CANCELLED("cancelled"),
     UNKNOWN("unknown"),
-    EXPIRED("expired");
+    EXPIRED("expired"),
+    /** The owner compared the target with an unknown operation and settled it (defect D-0153); the note names the evidence and the state it gave. */
+    RECONCILED("reconciled");
 
     private final String wire;
 
