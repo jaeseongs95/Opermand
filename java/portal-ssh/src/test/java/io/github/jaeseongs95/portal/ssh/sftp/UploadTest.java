@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import ch.qos.logback.classic.Level;
+import java.util.concurrent.atomic.AtomicInteger;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
@@ -179,6 +180,44 @@ class UploadTest {
         assertThat(result).as("the replacement was confirmed before the close failed: %s", result).isInstanceOf(UploadResult.Published.class);
         assertThat(Files.readAllBytes(root.resolve("out.bin"))).isEqualTo(content);
         assertThat(leftovers()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("SSH_PORTAL-D-0089 a cancel that closes the channel while the temporary file is being created stays NotDispatched(CANCELLED): the live session is kept and nothing is left")
+    void aCancelWhileTheTemporaryFileIsCreatedKeepsItsCause() throws IOException {
+        CancelSource cancel = new CancelSource();
+        TransferBed testBed = startWith(client -> new SftpDoubles().channelEndingAtTheTemporaryFile(client, cancel::cancel));
+        byte[] content = pattern(1024);
+
+        UploadResult result = testBed.transfer().upload(testBed.upload("/out.bin", content, OverwriteMode.FAIL_IF_EXISTS), TransferBed.source(content), testBed.control(cancel));
+
+        assertThat(result).as("the channel ended because of the cancel: %s", result).isEqualTo(new UploadResult.NotDispatched(TransferFailureCause.CANCELLED));
+        assertThat(testBed.sessions().discards()).as("the connection is fine; only the upload was stopped: the session is kept").isZero();
+        assertThat(entries()).as("no file, no temporary file").isEmpty();
+    }
+
+    @Test
+    @DisplayName("SSH_PORTAL-D-0090 a channel for removing the temporary file of a stopped upload that cannot be opened is logged with its cause, and the result says the clean-up is not confirmed")
+    void aFailedCleanupChannelIsLogged() throws IOException {
+        CancelSource cancel = new CancelSource();
+        AtomicInteger opened = new AtomicInteger();
+        bed = TransferBed.start(root, true, new SftpChannels() {
+            @Override
+            public SftpClient open(org.apache.sshd.client.session.ClientSession session) throws IOException {
+                if (opened.incrementAndGet() > 1) {
+                    throw new IOException("injected: no channel for the clean-up");
+                }
+                return new SftpDoubles().channelEndingAtTheTemporaryFile(super.open(session), cancel::cancel);
+            }
+        }, ScriptedExecutor.everythingSucceeds(), (target, path) -> new PathPolicyDecision.NotApplicable());
+        byte[] content = pattern(1024);
+
+        UploadResult result = bed.transfer().upload(bed.upload("/out.bin", content, OverwriteMode.FAIL_IF_EXISTS), TransferBed.source(content), bed.control(cancel));
+
+        assertThat(result).isInstanceOf(UploadResult.Unconfirmed.class);
+        assertThat(((UploadResult.Unconfirmed) result).cleanup()).isEqualTo(CleanupState.INCOMPLETE);
+        assertThat(appender.list).filteredOn(event -> event.getLevel().isGreaterOrEqual(Level.WARN) && event.getFormattedMessage().contains("removing the temporary file"))
+            .as("the failure to open the channel is logged at WARN with the exception").singleElement().satisfies(event -> assertThat(event.getThrowableProxy()).isNotNull());
     }
 
     @Test

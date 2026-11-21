@@ -189,6 +189,22 @@ final class SftpDoubles {
         });
     }
 
+    /**
+     * A client whose channel ends when the temporary file of an upload is created: the open of a path of the portal's temporary files with the exclusive-create mode runs
+     * {@code atTheOpen} and then fails with a {@link ClosedChannelException}, what a client that was closed from outside (by a cancel or the time limit) answers. Every other
+     * call goes to the real client.
+     */
+    SftpClient channelEndingAtTheTemporaryFile(SftpClient real, Runnable atTheOpen) {
+        return proxy(real, (method, arguments) -> {
+            if ("open".equals(method.getName()) && arguments != null && arguments.length == 2 && arguments[0] instanceof String path && path.contains(".ssh-approval-")
+                && arguments[1] instanceof java.util.Collection<?> modes && modes.contains(SftpClient.OpenMode.Exclusive)) {
+                atTheOpen.run();
+                throw new ClosedChannelException();
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
     /** A handle of the real client whose {@code close()} closes the real handle first and then fails: a close that fails by itself after the answer is known. */
     private static final class ClosingFails extends SftpClient.CloseableHandle {
         private final SftpClient.CloseableHandle real;
