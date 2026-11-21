@@ -27,7 +27,7 @@
 | passkey | 「passkey는 전부 제거 유지」 | 로그인·승인 모두 passkey가 없다. WebAuthn 라이브러리를 들이지 않는다 |
 | 고위험 승인의 추가 확인 | 「로그인 세션만 (추가 확인 없음)」 | 승인·거부·정리 같은 고위험 요청은 허용 계정의 로그인 세션 + CSRF 토큰 + Origin 검사로 받는다. 잔여 위험은 C절 |
 | 라이브러리 | 「Spring Security 스타터, Playwright for Java, Commons Daemon procrun, Spring Boot Actuator」 | D절 「승인 기록」. `/health`는 Actuator `HealthIndicator`로 낸다(개발원칙 3.6) |
-| RFB 클라이언트 | 「후보 조사 후 다시 질문 (Recommended)」 | C절 미결. 데스크톱 단위(이 문서 범위 밖)의 입력이다 |
+| RFB 클라이언트 | 라이브러리 `io.xpipe:vernacular` 1.21 도입(소유자 결정, 2026-11-21) | C.1절 제약과 D.1절 승인 기록. 데스크톱 단위(이 문서 범위 밖)의 입력이다 |
 
 ### 0.4 바로잡은 전제
 이 문서는 아래 전제를 쓰지 않는다. 계획 정본은 저장소 밖 문서라 여기서 고치지 않고, 저장소 안 문서는 이 단위에서 고쳤다.
@@ -91,10 +91,10 @@ U5·U6·U8은 U4 뒤에 병렬로 할 수 있다. 쓰기 범위는 패키지로 
 - `web.security.OwnerSubjectPolicy`: OIDC 로그인 결과의 `iss`가 `BRIDGE_OIDC_ISSUER`와 같고 `sub`가 `BRIDGE_OIDC_OWNER_SUBJECT`와 정확히 같을 때만 소유자 권한을 준다. 다르면 세션을 버리고 403 화면으로 보내며 감사 `ADMIN_LOGIN_REFUSED`(issuer·subject, 비밀 없음)를 남긴다. 설정에 쉼표나 공백이 든 값(여러 계정)은 시작 단계에서 오류로 멈춘다.
 - `web.security.TokenLoginFilter`: `POST /login/token`(폼 필드 `token`)이 `BRIDGE_ADMIN_TOKEN`과 상수 시간 비교로 같으면 세션을 만든다.
 - `web.security.AdminSecurityConfiguration`: `@Order`+`securityMatcher` 다중 `SecurityFilterChain`(계획 정본 공식 문서 반영).
-  1. Bearer 사슬(`Authorization: Bearer` 헤더가 있는 요청): 무상태, CSRF 없음. `BearerTokenIntrospector`(`OpaqueTokenIntrospector` 구현)가 관리자 토큰이면 `OWNER`, 기기 토큰이면 `DEVICE` 권한을 준다. Origin 헤더가 있으면 `BRIDGE_ADMIN_ORIGIN`과 같아야 한다.
+  1. Bearer 사슬(`Authorization: Bearer` 헤더가 있는 요청): 무상태, CSRF 없음. `BearerTokenAuthenticationProvider`(spring-security의 `AuthenticationProvider` 구현, 헤더는 `AuthenticationFilter`+`AuthenticationConverter`가 읽는다. resource-server 스타터는 쓰지 않는다, D.2)가 관리자 토큰이면 `OWNER`, 기기 토큰이면 `DEVICE` 권한을 준다. Origin 헤더가 있으면 `BRIDGE_ADMIN_ORIGIN`과 같아야 한다.
   2. 브라우저 사슬(그 밖): 세션, CSRF(세션 저장, 헤더 `X-CSRF-TOKEN`), 안전하지 않은 메서드는 Origin 일치(`web.security.AdminRequestPolicy`). 로그인은 모드별 `AdminAuthMethod`가 건다.
   3. 경로별 권한은 `admin-routes.json`의 `auth30`(B-1.5) 범주 그대로다. `owner-token` 범주(유지보수 6경로)는 1번 사슬의 관리자 토큰만 통과한다.
-- `web.security.McpSecurityConfiguration`(MCP 자식): `McpTokenIntrospector`가 `BRIDGE_MCP_TOKEN`만 받는다. 관리자 토큰·기기 토큰은 MCP 포트에서 거절된다.
+- `web.security.McpSecurityConfiguration`(MCP 자식): `McpTokenAuthenticationProvider`(같은 구성)가 `BRIDGE_MCP_TOKEN`만 받는다. 관리자 토큰·기기 토큰은 MCP 포트에서 거절된다.
 - `web.security.BrowserSessionAdapter`: B-4.
 - `web.security.UiTicketSigner`: MCP Apps 카드용 HMAC 티켓(2.x `tickets.mjs`, 이름 그대로).
 - 기기 토큰: `domain.device.{DeviceTokenId,DeviceToken,DeviceTokenSecretDigest}`, `app.device.{DeviceTokenService,DeviceTokenStore}`(포트), `store.device.JdbcDeviceTokenStore`, `db/expand/V9__device_token.sql`. B-2.
@@ -172,7 +172,7 @@ U5·U6·U8은 U4 뒤에 병렬로 할 수 있다. 쓰기 범위는 패키지로 
   - 인증 없는 「기기가 먼저 등록을 요청하고 소유자가 승인하는」 흐름은 두지 않는다. 인증 없는 경로·대기 표·폴링을 더 열어야 하고, 개인판(소유자 한 명)에는 화면에서 바로 발급하는 것으로 충분하다.
 - 형식: `pdt1.<id>.<secret>`. `id`는 128비트, `secret`은 256비트 무작위 값을 base64url(패딩 없음)로 쓴다. Bearer의 token68 문자 집합 안이다.
 - 저장: 표 `device_token(id, name, secret_sha256, created_at, created_by)`, 회수는 표 `device_token_revocation(token_id, revoked_at, revoked_by)`에 행을 더한다(물리 삭제·갱신 없음, append-only). 비밀은 SHA-256만 둔다. 256비트 무작위 값이라 느린 해시가 필요 없다. 비교는 `MessageDigest.isEqual`.
-- 검증: 관리자 포트 Bearer 사슬의 `BearerTokenIntrospector`가 형식으로 기기 토큰을 가려 `id`로 찾고, 회수 행이 없고 해시가 같으면 `DEVICE` 권한을 준다. 캐시하지 않으므로 회수는 다음 요청부터 듣는다. MCP 포트에서는 받지 않는다.
+- 검증: 관리자 포트 Bearer 사슬의 `BearerTokenAuthenticationProvider`가 형식으로 기기 토큰을 가려 `id`로 찾고, 회수 행이 없고 해시가 같으면 `DEVICE` 권한을 준다. 캐시하지 않으므로 회수는 다음 요청부터 듣는다. MCP 포트에서는 받지 않는다.
 - 허용 경로(10항목): `auth30: owner-or-device` 8개 = `GET /api/targets`, 업로드 4개(`POST /api/files/uploads`, `GET /api/files/uploads/{id}`, `POST …/chunks`, `POST …/finish`), 작업 읽기 3개(`GET /api/{id}`, `GET /api/{id}?observe=1`, `GET /api/operations/by-key`). `auth30: download-capability` 2개 = 다운로드 받기(`GET`·`HEAD /downloads/{id}/{token}`, 경로의 일회용 토큰도 필요).
   - C2 초안의 「ACK·수신함」은 PC 클라이언트 안의 H2 수신함 동작이라 서버 경로가 없다(`portal-files.mjs`의 `ack`는 로컬 수신함을 고친다).
   - 승인·거부, 환경·정책·용량·데스크톱·에이전트 CLI·유지보수, 다운로드 요청 만들기(`POST /api/files/downloads`)는 받지 않는다. 다운로드 요청은 에이전트가 MCP `submit kind=download`로 한다. 기기 토큰은 에이전트가 도는 PC에 있으므로 승인 권한이 없어야 자기 승인을 막는다. 소유자 CLI 명령(대기 목록·승인·거부)은 관리자 토큰으로 부른다.
@@ -235,12 +235,17 @@ U5·U6·U8은 U4 뒤에 병렬로 할 수 있다. 쓰기 범위는 패키지로 
 - 정리: `POST /api/operations/{id}/reconcile` 본문 `{"outcome":"completed"|"failed"|"never_ran"}`. `completed`는 `ReconciliationEvidence.Completed(new CompletionEvidence.OwnerConfirmed(now))`, `failed`는 `Failed`, `never_ran`은 `NeverRan`. 대상이 `UNKNOWN`이 아니면 409 `INVALID_OPERATION_TRANSITION`. 결과는 감사 `OPERATION_RECONCILED`(id·결과·소유자)에 남는다. 다시 실행하지 않는다(정리는 기록만 바꾼다).
 - 예산 계산은 정리 즉시 줄어 다음 스케줄 판단에 반영된다.
 
-## C. 미결(사용자)와 확정된 보안 판단
+## C. 확정된 결정과 보안 판단
 
-### C.1 미결(사용자)
-| 번호 | 질문 | 상태 | 영향 범위 |
-|---|---|---|---|
-| R1 | RFB 클라이언트를 라이브러리로 할지 직접 구현할지 | 「후보 조사 후 다시 질문」(2026-11-21). 리드가 후보 조사를 맡았다 | 데스크톱 단위. 이 문서의 U2~U9와 기준본 개정에는 영향이 없다 |
+### C.1 확정: RFB(VNC) 클라이언트는 `io.xpipe:vernacular` 1.21(R1)
+소유자 결정(2026-11-21)이다. 이 문서에 미결 항목은 없다. 구현은 데스크톱 단위(이 문서 범위 밖)이며 이 문서의 U2~U9와 기준본 개정에는 영향이 없다. 조사에서 확인된 성질을 그 단위의 제약으로 둔다.
+- MIT 라이선스다.
+- `java.net.Socket`만 받는다. SSH direct-tcpip 채널에 붙이려면 Socket 어댑터나 로컬 포워드가 필요하다.
+- Tight·ZRLE 인코딩을 지원하지 않는다. 서버가 보내는 인코딩 협상은 지원하는 것으로 한정한다.
+- 유지보수자가 한 명이다.
+- Java 25와 Xvnc 조합은 시험된 적이 없다. CI의 실제 접속 시험(Xvnc 대상)으로 확인한다. 통과 전에는 동작을 주장하지 않는다.
+- 라이브러리 타입은 포트 밖으로 새지 않는다. 우리 인터페이스(RFB 클라이언트 포트) 뒤에 두어 교체할 수 있게 한다.
+- 시험 계획(데스크톱 단위가 만든다): RFB 실제 접속 시험, Socket 어댑터 시험, 라이브러리 타입이 포트 밖에 없음을 단정하는 구조 시험.
 
 ### C.2 확정: 고위험 승인의 추가 확인 없음(Q1)과 로그인(Q2)
 - Q2: 로그인은 OIDC + 토큰, OIDC는 계정 하나(`sub`), passkey 없음. A.3절과 B-1.6에 반영했다.
@@ -253,18 +258,19 @@ U5·U6·U8은 U4 뒤에 병렬로 할 수 있다. 쓰기 범위는 패키지로 
 | 이름 | 용도 | 판 | 승인 |
 |---|---|---|---|
 | `spring-boot-starter-security` | 보안 사슬, CSRF, 세션 | Spring Boot BOM 4.1.2 | 2026-11-21 「Spring Security 스타터」 |
+| `spring-boot-starter-oauth2-client` | OIDC 로그인(OAuth2 Login, 발급자 discovery). Spring Security 프로젝트가 제공하는 OAuth2 클라이언트 지원이라 인가 코드 흐름·nonce·ID 토큰 검증을 직접 만들지 않는다(개발원칙 3.6) | Spring Boot BOM 4.1.2 | 2026-11-21 「Spring Security 스타터」와 관리자 로그인 「OIDC + 토큰」(리드 판정) |
+| `io.xpipe:vernacular` | RFB(VNC) 클라이언트(데스크톱 단위, C.1) | 1.21 | 소유자 결정, 2026-11-21 |
 | `spring-boot-starter-actuator` | `/health`, `HealthIndicator` | Spring Boot BOM 4.1.2 | 2026-11-21 「Spring Boot Actuator」 |
 | `com.microsoft.playwright:playwright` | U7 브라우저 사례 시험(시험 의존만) | BOM 밖. 후보 1.65.1(Maven Central 최신 안정판, 2026-11-19 게시). U7 착수 때 그 시점의 최신 안정판으로 고정하고 이유를 빌드 파일에 적는다 | 2026-11-21 「Playwright for Java」 |
 | Apache Commons Daemon procrun | Windows 서비스(7단계 패키징) | 1.6.1(Apache 배포 최신) | 2026-11-21 「Commons Daemon procrun」 |
 | 이전 승인 | Java 25, Spring Boot 4.1.2, Spring AI BOM 2.0.2(MCP Java SDK), MINA sshd 2.20.1, H2, sqlite-jdbc(portal-migrate만) | - | 계획 정본 |
 
 ### D.2 승인 필요
-| 이름 | 용도 | 대안 | 비고 |
-|---|---|---|---|
-| `spring-boot-starter-oauth2-client` | OIDC 로그인(OAuth2 Login, 발급자 discovery) | 없음에 가깝다. 직접 구현하면 인가 코드 흐름·nonce·ID 토큰 검증을 손으로 만들어야 한다(개발원칙 3.6 위반) | 「Spring Security 스타터」 승인에 들어가는지 확인이 필요하다. 판은 Boot BOM |
-| `spring-boot-starter-oauth2-resource-server` | MCP bearer·관리자 토큰·기기 토큰의 `OpaqueTokenIntrospector` 사슬(계획 정본 공식 문서 반영) | `spring-boot-starter-security`만으로 `AuthenticationFilter`+`AuthenticationManager`를 직접 조립(Bearer 헤더 파싱·오류 응답을 손으로 만듦) | 위와 같음. 판은 Boot BOM |
+없다. 이 단계의 새 라이브러리는 D.1절이 모두 승인됐다.
 
-위 두 가지가 승인 범위 밖이면 U4는 대안(직접 조립)으로 진행하고 이 표를 고친다. 다른 새 라이브러리는 이 단계에 없다. 계약 대조 시험은 지금처럼 시험 소스의 손 구현 스키마 검사기를 쓴다(새 JSON Schema 라이브러리를 들이지 않는다).
+`spring-boot-starter-oauth2-resource-server`는 쓰지 않는다. 기기 토큰은 자체 발급 불투명 토큰(`pdt1.<id>.<secret>`, DB에는 SHA-256)이고 관리자·MCP 토큰은 설정의 고정값이라 JWT·introspection 검증이 필요 없다. Bearer 토큰은 `spring-boot-starter-security`가 주는 `AuthenticationFilter`·`AuthenticationManager`·`AuthenticationProvider` 구성요소에 우리 토큰 검증기를 끼워 받는다(A.3절).
+
+다른 새 라이브러리는 이 단계에 없다. 계약 대조 시험은 지금처럼 시험 소스의 손 구현 스키마 검사기를 쓴다(새 JSON Schema 라이브러리를 들이지 않는다).
 
 ## E. 사례표
 
