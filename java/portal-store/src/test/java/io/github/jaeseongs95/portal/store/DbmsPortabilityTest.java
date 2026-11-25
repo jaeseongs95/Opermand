@@ -33,9 +33,11 @@ import io.github.jaeseongs95.portal.store.journal.OperationRow;
  * scripts and the adapters rely on, not what one DBMS happens to do; where DBMSs differ (case folding, padding of CHAR, rounding below a microsecond) the assertion is the part
  * they agree on, and the difference is named in the test.
  *
- * <p>Neighbouring cases that the whole store suite already runs on the external DBMS, by their ids: S2-DB-02 ({@code SchemaChecksTest}: the CASE form of CHECK refuses a value
- * that is in no list, on every enum column), S2-DB-03 ({@code JdbcOperationJournalTest}: the second writer of a version loses, optimistic locking by the version check),
- * S2-DB-05 and S2-DB-06 ({@code JdbcClaimStoreTest}, {@code JdbcClaimStoreConcurrencyTest}: slot and fence collisions between claims).
+ * <p>Neighbouring cases of the store suite, by their ids, that state the same agreement of the DBMSs and run on H2 only like this class (the suite has no external DBMS since
+ * defect D-0103): S2-DB-02 ({@code SchemaChecksTest}: the CASE form of CHECK refuses a value that is in no list, on every enum column), S2-DB-03
+ * ({@code JdbcOperationJournalTest}: the second writer of a version loses, optimistic locking by the version check), S2-DB-05 and S2-DB-06 ({@code JdbcClaimStoreTest},
+ * {@code JdbcClaimStoreConcurrencyTest}: slot and fence collisions between claims). Where a case reads what the driver says about its database (the folding of unquoted names in
+ * {@code unquotedNamesAreFoldedAndFound}), only the branch of H2 is run here; the other branch is written for the user's driver and is not tested (defect D-0148).
  */
 @StoreTest
 class DbmsPortabilityTest {
@@ -200,11 +202,11 @@ class DbmsPortabilityTest {
     // ---- S2-DB-15: migration scripts and schema ----
 
     @Test
-    @DisplayName("S2-DB-15: the migration applied the seven scripts of db/expand once each and in order (one folder for every DBMS), in the schema the connection works in")
+    @DisplayName("S2-DB-15: the migration applied the eight scripts of db/expand once each and in order (one folder for every DBMS), in the schema the connection works in")
     void theMigrationAndTheSchemaAreTheOnesInUse() {
         List<String> scripts = jdbc.queryForList("SELECT script FROM portal_meta.expand_history WHERE outcome = 'SUCCEEDED' ORDER BY version", String.class);
-        assertThat(scripts).hasSize(7);
-        for (int number = 1; number <= 7; number++) {
+        assertThat(scripts).hasSize(8);
+        for (int number = 1; number <= 8; number++) {
             assertThat(scripts.get(number - 1)).startsWith("V" + number + "__").endsWith(".sql");
         }
 

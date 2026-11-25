@@ -6,7 +6,6 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
-import java.sql.Timestamp;
 import java.time.Clock;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
@@ -399,7 +398,7 @@ final class MigrationRunner {
     private void record(Connection connection, SQLExceptionTranslator translator, Phase phase, MigrationScript script, int attempt, Outcome outcome) throws SQLException {
         String sql = "INSERT INTO " + phase.table() + " (version, attempt, script, digest, applied_at, outcome) VALUES (?, ?, ?, ?, ?, ?)";
         try {
-            update(connection, sql, script.version(), attempt, script.file(), script.digest(), Timestamp.valueOf(LocalDateTime.ofInstant(clock.instant(), ZoneOffset.UTC)), outcome.name());
+            update(connection, sql, script.version(), attempt, script.file(), script.digest(), LocalDateTime.ofInstant(clock.instant(), ZoneOffset.UTC), outcome.name());
         } catch (SQLException failure) {
             DataAccessException translated = translator.translate("record the attempt of " + script.file(), sql, failure);
             if (translated instanceof DuplicateKeyException duplicate) {

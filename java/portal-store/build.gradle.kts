@@ -18,3 +18,27 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-data-jdbc-test")
     testImplementation("org.springframework.boot:spring-boot-starter-test")
 }
+
+// The cases tagged "zone" (D-0161: a moment is stored as UTC, whatever the zone of the JVM is) need a JVM whose default zone repeats an hour when daylight saving time ends. A test
+// cannot give itself that zone: the default zone is read when the JVM starts, and H2 keeps what it read. The zoneTest task starts a second test JVM in such a zone (user.timezone is
+// the JVM's own property, the same on every operating system) and runs those cases only; the test task leaves them out and is finalized by zoneTest, so that
+// "./gradlew :portal-store:test" and "check" both run every case once.
+// The source set is read from the project's extension here, outside the task's block: inside it, "extensions" is the task's own and has no JavaPluginExtension.
+val testSourceSet = extensions.getByType<JavaPluginExtension>().sourceSets.named("test")
+val zoneTest by tasks.registering(Test::class) {
+    description = "Runs the cases tagged zone in a JVM whose default time zone has daylight saving time."
+    group = "verification"
+    testClassesDirs = testSourceSet.get().output.classesDirs
+    classpath = testSourceSet.get().runtimeClasspath
+    useJUnitPlatform {
+        includeTags("zone")
+    }
+    systemProperty("user.timezone", "America/Los_Angeles")
+}
+
+tasks.named<Test>("test") {
+    useJUnitPlatform {
+        excludeTags("zone")
+    }
+    finalizedBy(zoneTest)
+}

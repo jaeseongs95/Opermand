@@ -114,6 +114,23 @@ class JsonlAuditLogTest {
         assertThat(mapper.readValue(lines.get(1), Parsed.class)).isEqualTo(new Parsed("2026-11-12T00:00:00Z", "completed", ID.value(), note));
     }
 
+    @Test
+    @DisplayName("S-D0146-01 (D-0146): a link without a target in the place of the audit file is refused as a path that is not a regular file, not as an I/O failure of a missing file")
+    void aLinkWithoutATargetIsNotARegularFile(@TempDir Path directory) {
+        Path path = directory.resolve("audit.jsonl");
+        boolean linked;
+        try {
+            Files.createSymbolicLink(path, directory.resolve("no-such-target.jsonl"));
+            linked = true;
+        } catch (IOException | UnsupportedOperationException e) {
+            linked = false;
+        }
+        TestStorage.requireOrSkip("links", linked, "the file store or the account of the test cannot make a symbolic link");
+
+        assertThatThrownBy(() -> new JsonlAuditLog(new AuditFileLocation(path), CLOCK, mapper, TestStorage.rules())).isInstanceOf(AuditFailedException.class)
+            .hasMessageContaining(path.toString()).cause().hasMessageContaining("not a regular file");
+    }
+
     /** Takes at most {@code chunk} bytes per write (0 takes none) and keeps what it took. */
     private static final class ChunkChannel implements WritableByteChannel {
 

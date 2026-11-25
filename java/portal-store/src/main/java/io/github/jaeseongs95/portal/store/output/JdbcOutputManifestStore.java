@@ -1,5 +1,6 @@
 package io.github.jaeseongs95.portal.store.output;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
@@ -39,8 +40,8 @@ import io.github.jaeseongs95.portal.domain.id.OperationIdGenerator;
  * writer that lost the race is refused with {@link OperationErrorCode#OUTPUT_VERSION_CONFLICT} (stage 3 design D3-13: another writer changed the record first). A write
  * to an output that is missing or in the wrong state, which includes the loser that reads the row after the winner committed, is refused with
  * {@link ExecutionErrorCode#OUTPUT_CAPTURE_FAILED} (the capture of that output failed). The budget check of {@link #reserve} reads the sum of the charges and writes the new row in one
- * transaction; the dispatcher is a single scheduler thread (design 13.2), so two reservations do not race, and an overrun by a concurrent second writer would be one
- * output.
+ * transaction, after the row lock of the output budget gate ({@code budget_gate}, defect D-0058) was taken, so two reservations that run at the same moment are judged one after
+ * the other and the count and the budget are never passed by two reservations that read the same figures.
  */
 @Repository
 public class JdbcOutputManifestStore implements OutputManifestStore {
@@ -66,10 +67,11 @@ public class JdbcOutputManifestStore implements OutputManifestStore {
     private final OutputPayloadStore payloads;
     private final TransactionTemplate transaction;
     private final OutputLimits limits;
+    private final Clock clock;
 
     public JdbcOutputManifestStore(CommandOutputRowRepository outputs, CommandOutputFormatRowRepository formats, CommandOutputPageRowRepository pages,
                                    JdbcAggregateOperations aggregates, OutputMapper mapper, OperationIdGenerator ids, OutputPayloadStore payloads,
-                                   PlatformTransactionManager transactionManager, OutputLimits limits) {
+                                   PlatformTransactionManager transactionManager, OutputLimits limits, Clock clock) {
         this.outputs = outputs;
         this.formats = formats;
         this.pages = pages;
@@ -79,6 +81,7 @@ public class JdbcOutputManifestStore implements OutputManifestStore {
         this.payloads = payloads;
         this.transaction = new TransactionTemplate(transactionManager);
         this.limits = limits;
+        this.clock = clock;
     }
 
     @Override
@@ -118,7 +121,11 @@ public class JdbcOutputManifestStore implements OutputManifestStore {
         return mapper.toManifest(next, List.of(), List.of());
     }
 
-    /** The charge becomes {@code sizeBytes}, the real size of the {@code .out} file (the spool is gone after {@code finish}). The expiry is not renewed. */
+    /**
+     * The charge becomes {@code sizeBytes}, the real size of the {@code .out} file (the spool is gone after {@code finish}). The expiry is set again from now: a ready output
+     * is readable for the retention time from the moment it is ready, not from its reservation, which an execution that ran for a while had mostly used up (2.x
+     * {@code command-output.mjs:275}, D-0162). The time comes from the {@link Clock} and the length from the {@link OutputLimits}, as the reservation takes them.
+     */
     @Override
     @Transactional
     public OutputManifest markReady(OutputId id, OutputFormats formatSpans, long sizeBytes) {
@@ -128,7 +135,7 @@ public class JdbcOutputManifestStore implements OutputManifestStore {
         CommandOutputRow row = requirePending(id);
         List<CommandOutputFormatRow> formatRows = mapper.formatRows(id, formatSpans);
         List<CommandOutputPageRow> pageRows = mapper.pageRows(id, formatSpans);
-        CommandOutputRow next = claimVersion(row).withReady(sizeBytes);
+        CommandOutputRow next = claimVersion(row).withReady(sizeBytes, clock.instant().plus(limits.ttl()));
         aggregates.update(next);
         aggregates.insertAll(formatRows);
         aggregates.insertAll(pageRows);
@@ -155,10 +162,11 @@ public class JdbcOutputManifestStore implements OutputManifestStore {
         return new OutputBudget(limits.budgetBytes(), outputs.totalCharge(), limits.maxCount(), Math.toIntExact(outputs.count()));
     }
 
+    /** The ready and the given-up outputs whose expiry is not after {@code now}. An output that is still being written ({@code PENDING}) is never listed: the cleaner must not delete what is being appended to (D-0162). */
     @Override
     @Transactional(readOnly = true)
     public List<OutputManifest> expired(Instant now) {
-        return outputs.findByExpiresAtLessThanEqual(now).stream().map(this::manifest).toList();
+        return outputs.findByStateNotAndExpiresAtLessThanEqual(OutputState.PENDING, now).stream().map(this::manifest).toList();
     }
 
     @Override
@@ -195,6 +203,10 @@ public class JdbcOutputManifestStore implements OutputManifestStore {
     }
 
     private OutputReservation reserveRow(OutputBinding binding, long expectedBytes, Instant at, DiskSpace disk) {
+        // The gate first: the count and the sum below are read after every reservation that came earlier has committed its row (defect D-0058).
+        if (outputs.takeBudgetGate() != 1) {
+            throw new IllegalStateException("The budget gate of the outputs is missing: the migration V8 was not applied");
+        }
         if (expectedBytes > limits.maxOutputBytes()) {
             return new OutputReservation.TooLarge(limits.maxOutputBytes());
         }

@@ -176,12 +176,16 @@ class TargetTest {
             new ConnectionProfile(writer.host(), 2222, writer.user(), writer.pinnedHostKey(), writer.via(), writer.auth(), writer.keyRef(), writer.workdir(), writer.access(), writer.tty()),
             new ConnectionProfile(writer.host(), writer.port(), "other-user", writer.pinnedHostKey(), writer.via(), writer.auth(), writer.keyRef(), writer.workdir(), writer.access(), writer.tty()),
             new ConnectionProfile(writer.host(), writer.port(), writer.user(), Setting.given("ssh-ed25519 OTHER"), writer.via(), writer.auth(), writer.keyRef(), writer.workdir(), writer.access(), writer.tty()),
-            new ConnectionProfile(writer.host(), writer.port(), writer.user(), writer.pinnedHostKey(), Setting.given(new ProfileAlias("bastion")), writer.auth(), writer.keyRef(), writer.workdir(), writer.access(), writer.tty()),
             new ConnectionProfile(writer.host(), writer.port(), writer.user(), writer.pinnedHostKey(), writer.via(), AuthMethod.AGENT, writer.keyRef(), writer.workdir(), writer.access(), writer.tty()),
             new ConnectionProfile(writer.host(), writer.port(), writer.user(), writer.pinnedHostKey(), writer.via(), writer.auth(), Setting.given("key-ref-2"), writer.workdir(), writer.access(), writer.tty()));
         for (ConnectionProfile variant : variants) {
             assertThat(TargetConnection.of(variant, digester)).as(variant.toString()).isNotEqualTo(original.connection());
         }
+        ConnectionProfile bastion = new ConnectionProfile(writer.host(), writer.port(), writer.user(), writer.pinnedHostKey(), Setting.given(new ProfileAlias("bastion")), writer.auth(),
+            writer.keyRef(), writer.workdir(), writer.access(), writer.tty());
+        ConnectionProfile bastionHost = new ConnectionProfile("bastion.example.test", 22, "jump", Setting.given("ssh-ed25519 BASTION"), Setting.unset(), AuthMethod.KEY,
+            Setting.given("key-ref-1"), Setting.unset(), AccessMode.READ_WRITE, TtyMode.NO_TTY);
+        assertThat(TargetConnection.of(bastion, List.of(bastionHost), digester)).as("a jump host is a change of the connection").isNotEqualTo(original.connection());
     }
 
     @Test

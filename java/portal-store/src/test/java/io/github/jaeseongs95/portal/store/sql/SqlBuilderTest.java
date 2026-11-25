@@ -3,6 +3,8 @@ package io.github.jaeseongs95.portal.store.sql;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.Locale;
+
 import javax.sql.DataSource;
 
 import org.junit.jupiter.api.AfterAll;
@@ -10,6 +12,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.TestInstance;
+import org.junit.jupiter.api.parallel.ResourceLock;
+import org.junit.jupiter.api.parallel.Resources;
 import org.springframework.boot.jdbc.DatabaseDriver;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
@@ -56,6 +60,22 @@ class SqlBuilderTest {
         assertThat(builder.query("SELECT * FROM prompt WHERE ").orGroup("(host = :host%1$d AND session_id = :session%1$d)", 3)
                 .and("text LIKE :pattern").orderBy("received_at DESC").limit(":limit"))
                 .isEqualTo("SELECT * FROM prompt WHERE ((host = :host0 AND session_id = :session0) OR (host = :host1 AND session_id = :session1) OR (host = :host2 AND session_id = :session2)) AND text LIKE :pattern ORDER BY received_at DESC FETCH FIRST :limit ROWS ONLY");
+    }
+
+    /** D-0165: the suffix is a number in a statement, not text for the reader: a locale with other digits (Devanagari here) must not change the bound names. */
+    @Test
+    @ResourceLock(Resources.LOCALE)
+    @DisplayName("S-D0165-01: orGroup numbers its bound names with ASCII digits whatever the default format locale is")
+    void theBoundNamesDoNotDependOnTheLocale() {
+        Locale before = Locale.getDefault(Locale.Category.FORMAT);
+        try {
+            Locale.setDefault(Locale.Category.FORMAT, Locale.forLanguageTag("hi-IN-u-nu-deva"));
+            assertThat(String.format("%d", 1)).as("the premise: this locale writes the digit 1 as another character").isNotEqualTo("1");
+
+            assertThat(h2Builder().query("SELECT 1 WHERE ").orGroup("host = :host%1$d", 2).build()).isEqualTo("SELECT 1 WHERE (host = :host0 OR host = :host1)");
+        } finally {
+            Locale.setDefault(Locale.Category.FORMAT, before);
+        }
     }
 
     /** Closing-event alternatives are positional; an empty group cannot match any event. */

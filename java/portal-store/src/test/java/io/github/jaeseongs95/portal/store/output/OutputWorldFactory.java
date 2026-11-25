@@ -1,6 +1,9 @@
 package io.github.jaeseongs95.portal.store.output;
 
 import java.nio.file.Path;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
 
 import org.springframework.data.jdbc.core.JdbcAggregateOperations;
 import org.springframework.stereotype.Component;
@@ -27,7 +30,12 @@ class OutputWorldFactory {
         this.transactionManager = transactionManager;
     }
 
+    /** A world whose manifest store takes the time from a clock fixed at the start of the cases, 2026-11-12T00:00:00Z, which is the {@code T0} of the output tests. */
     OutputWorld create(Path folder, OutputLimits limits) {
-        return new OutputWorld(folder, limits, rows, formats, pages, aggregates, mapper, transactionManager);
+        return create(folder, limits, Clock.fixed(Instant.parse("2026-11-12T00:00:00Z"), ZoneOffset.UTC));
+    }
+
+    OutputWorld create(Path folder, OutputLimits limits, Clock clock) {
+        return new OutputWorld(folder, limits, clock, rows, formats, pages, aggregates, mapper, transactionManager);
     }
 }

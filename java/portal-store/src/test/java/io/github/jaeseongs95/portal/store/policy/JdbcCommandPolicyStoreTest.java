@@ -29,6 +29,7 @@ import io.github.jaeseongs95.portal.domain.command.SourceContract;
 import io.github.jaeseongs95.portal.domain.command.TargetPolicy;
 import io.github.jaeseongs95.portal.domain.command.TargetRule;
 import io.github.jaeseongs95.portal.domain.command.WindowsPolicyName;
+import io.github.jaeseongs95.portal.domain.error.RequestErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.TargetId;
 import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
@@ -79,8 +80,11 @@ class JdbcCommandPolicyStoreTest {
         CommandPolicyDocument first = new CommandPolicyDocument(List.of(linuxRule("alpha", 'a', List.of("ls"), List.of())));
         store.replace(first, 0);
 
-        assertThatThrownBy(() -> store.replace(CommandPolicyDocument.empty(), 0)).isInstanceOf(RequestRefusedException.class);
-        assertThatThrownBy(() -> store.replace(CommandPolicyDocument.empty(), 5)).isInstanceOf(RequestRefusedException.class);
+        // D-0164: the caller that is told the revision moved reads the policy again and decides again; it must be able to tell that from any other refusal.
+        assertThatThrownBy(() -> store.replace(CommandPolicyDocument.empty(), 0)).isInstanceOfSatisfying(RequestRefusedException.class,
+            e -> assertThat(e.code()).isEqualTo(RequestErrorCode.POLICY_REVISION_CONFLICT));
+        assertThatThrownBy(() -> store.replace(CommandPolicyDocument.empty(), 5)).isInstanceOfSatisfying(RequestRefusedException.class,
+            e -> assertThat(e.code()).isEqualTo(RequestErrorCode.POLICY_REVISION_CONFLICT));
 
         assertThat(store.current()).isEqualTo(new PolicySnapshot(1, first));
     }
@@ -151,7 +155,7 @@ class JdbcCommandPolicyStoreTest {
 
             assertThat(List.of(failureA == null, failureB == null)).containsExactlyInAnyOrder(true, false);
             Throwable loser = failureA == null ? failureB : failureA;
-            assertThat(loser).isInstanceOf(RequestRefusedException.class);
+            assertThat(loser).isInstanceOfSatisfying(RequestRefusedException.class, e -> assertThat(e.code()).isEqualTo(RequestErrorCode.POLICY_REVISION_CONFLICT));
             CommandPolicyDocument winner = failureA == null ? documentA : documentB;
             assertThat(store.current()).isEqualTo(new PolicySnapshot(1, winner));
             assertThat(count("command_policy_rule")).isEqualTo(1);

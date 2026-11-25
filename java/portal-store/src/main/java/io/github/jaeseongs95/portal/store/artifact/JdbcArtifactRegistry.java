@@ -49,9 +49,8 @@ import io.github.jaeseongs95.portal.domain.id.OwnerId;
  * <em>before</em> the transaction opens (Principles 4.4), which is why {@link #reserve} drives a {@link TransactionTemplate} and is not itself {@code @Transactional}.
  *
  * <p>Every change of a row first takes the optimistic lock with one conditional UPDATE of the version (the winner changes one row, a loser none) and then writes
- * the row in the same transaction. The budget is a sum read in the same transaction as the insert; when N reservations are judged at the same moment on different
- * connections, each sees none of the others, so together they can overshoot the budget by up to N - 1 files (the guarantee of "READ COMMITTED"; a hard cap would need a lock on a
- * counter row, which no use case has asked for). The same holds for {@link #sizeDownload}.
+ * the row in the same transaction. The budget is a sum read in the same transaction as the insert, after the row lock of {@code budget_gate} was taken (defect D-0058), so
+ * two reservations that are judged at the same moment on different connections are judged one after the other and the budget is not passed. The same holds for {@link #sizeDownload}.
  * Refusals the use case must tell apart are returned as {@link ArtifactReservation} variants; every other business failure is a {@link RequestRefusedException}.
  */
 @Repository
@@ -105,6 +104,16 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
         return Objects.requireNonNull(transaction.execute(status -> reserveRows(spec, at, disk)), "reservation");
     }
 
+    /**
+     * The row lock of the budget, kept until the transaction ends: a reservation reads the sum of the charges and writes its row only while it holds it, so two reservations that
+     * run at the same moment are judged one after the other and the second reads the sum that includes the first (defect D-0058).
+     */
+    private void takeBudgetGate() {
+        if (artifacts.takeBudgetGate() != 1) {
+            throw new IllegalStateException("The budget gate of the artifacts is missing: the migration V8 was not applied");
+        }
+    }
+
     private DiskReading readDisk() {
         try {
             return new DiskReading.Usable(payloads.usable());
@@ -119,6 +128,7 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
      * them, because they use the disk's space.
      */
     private ArtifactReservation reserveRows(ArtifactSpec spec, Instant at, DiskReading disk) {
+        takeBudgetGate();
         long live = artifacts.chargedBytes();
         if (live > limits.budgetBytes() - Math.max(1L, spec.sizeBytes())) {
             return new ArtifactReservation.BudgetExceeded(spec.sizeBytes(), live, limits.budgetBytes());
@@ -223,6 +233,7 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
     }
 
     private ArtifactReservation sizeRows(ArtifactId id, long sizeBytes, DiskReading disk) {
+        takeBudgetGate();
         ArtifactRow row = require(id);
         if (row.direction() != ArtifactDirection.DOWNLOAD || row.state() != ArtifactState.STAGING || row.receivedBytes() != 0L) {
             throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
@@ -408,7 +419,8 @@ public class JdbcArtifactRegistry implements ArtifactRegistry {
             case DELETING -> true;
             case CONSUMING -> throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_BUSY);
             case CONSUMED -> throw new RequestRefusedException(ArtifactErrorCode.STAGED_FILE_CONSUMED);
-            // STAGING and READY are the states the UPDATE moves: a row seen in one of them after the UPDATE changed none was changed by another caller in between.
+            // STAGING and READY are the states the UPDATE moves, for a row that is RELEASABLE: a row seen in one of them after the UPDATE changed none was changed by another caller in
+            // between, for instance pinned by a submit that came after the reap listed it as expired (defect D-0095), and its bytes stay.
             case STAGING, READY -> throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_CHANGED);
         }).orElse(false);
     }

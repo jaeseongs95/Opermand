@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.regex.Pattern;
@@ -568,6 +569,26 @@ class JdbcArtifactRegistryTest {
         assertRefused(() -> registry.beginDeleteIfPresent(consuming), ArtifactErrorCode.ARTIFACT_BUSY);
         assertRefused(() -> registry.beginDeleteIfPresent(consumed), ArtifactErrorCode.STAGED_FILE_CONSUMED);
         assertThat(registry.find(consuming).orElseThrow().state()).isEqualTo(ArtifactState.CONSUMING);
+    }
+
+    @Test
+    @DisplayName("S-D0095-03 (D-0095): an artifact that the reap listed as expired and that a submit pinned afterwards is not marked for deletion; it stays READY and pinned, and it charges its bytes")
+    void aReapCannotDeleteWhatASubmitPinnedAfterTheList() {
+        ArtifactId listed = fixtures.readyArtifact(registry, fixtures.upload(4), fixtures.bytes(4, 1));
+        Instant afterExpiry = ArtifactFixtures.T0.plus(Duration.ofHours(2));
+        assertThat(registry.expired(afterExpiry)).as("the reap lists it as expired").extracting(ArtifactRecord::id).containsExactly(listed);
+
+        registry.submit(listed, OPERATION_A);
+        long charged = registry.budget().chargedBytes();
+
+        assertRefused(() -> registry.beginDeleteIfPresent(listed), ArtifactErrorCode.ARTIFACT_CHANGED);
+        ArtifactRecord kept = registry.find(listed).orElseThrow();
+        assertThat(kept.state()).as("the submitted operation still has its bytes").isEqualTo(ArtifactState.READY);
+        assertThat(kept.spec().retention()).isEqualTo(ArtifactRetention.PINNED);
+        assertThat(registry.budget().chargedBytes()).isEqualTo(charged);
+
+        registry.unpin(listed, UnpinReason.OPERATION_SETTLED);
+        assertThat(registry.beginDeleteIfPresent(listed)).as("once the operation settled the expiry applies again").isTrue();
     }
 
     /**

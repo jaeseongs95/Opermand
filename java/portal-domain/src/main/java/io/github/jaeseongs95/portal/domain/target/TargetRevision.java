@@ -3,6 +3,7 @@ package io.github.jaeseongs95.portal.domain.target;
 import io.github.jaeseongs95.portal.domain.id.CanonicalForm;
 import io.github.jaeseongs95.portal.domain.id.Digest;
 import io.github.jaeseongs95.portal.domain.id.Digester;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -25,18 +26,33 @@ public record TargetRevision(Digest value) {
     }
 
     /**
-     * The revision of a target with its two profiles: the digest of the fixed-order canonical form of the entry, the read profile and the write profile. The same
+     * The revision of a target with its two profiles and no jump host: the digest of the fixed-order canonical form of the entry, the read profile and the write profile. The same
      * input always gives the same revision, and any changed field gives another.
+     *
+     * @throws IllegalArgumentException when a profile names a jump host, whose profile this form does not have (use {@link #of(Target, ConnectionProfile, ConnectionProfile, List, Digester)})
      */
     public static TargetRevision of(Target target, ConnectionProfile reader, ConnectionProfile writer, Digester digester) {
+        return of(target, reader, writer, List.of(), digester);
+    }
+
+    /**
+     * The revision of a target with its two profiles and the profiles of the jump hosts the connection goes through, nearest first (defect D-0083): a changed jump host, behind
+     * the same alias, gives another revision, so an approval is not carried over to another route.
+     *
+     * @throws IllegalArgumentException when the jump profiles do not fit the {@code via} links of the profiles
+     */
+    public static TargetRevision of(Target target, ConnectionProfile reader, ConnectionProfile writer, List<ConnectionProfile> jumps, Digester digester) {
         Objects.requireNonNull(target, "target");
         Objects.requireNonNull(reader, "reader");
         Objects.requireNonNull(writer, "writer");
+        Objects.requireNonNull(jumps, "jumps");
         Objects.requireNonNull(digester, "digester");
+        JumpChain chain = JumpChain.of(writer, jumps);
         CanonicalForm form = new CanonicalForm();
         target.describeTo(form);
         reader.describeTo(form, "reader");
         writer.describeTo(form, "writer");
+        chain.describeTo(form);
         return new TargetRevision(form.digest(digester));
     }
 

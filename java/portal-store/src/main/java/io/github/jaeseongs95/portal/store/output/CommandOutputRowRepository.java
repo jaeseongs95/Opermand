@@ -21,12 +21,23 @@ interface CommandOutputRowRepository extends CrudRepository<CommandOutputRow, St
     @Query("UPDATE command_output SET version = :next WHERE id = :id AND version = :expected")
     int bumpVersion(@Param("id") String id, @Param("expected") long expected, @Param("next") long next);
 
+    /**
+     * Takes the row lock of the output budget until the transaction ends (defect D-0058): two reservations are judged one after the other, so the count and the sum they read are
+     * those that the earlier one's row left. It changes the one row of the budget, and none when the script of the gate was not applied.
+     */
+    @Modifying
+    @Query("UPDATE budget_gate SET version = version + 1 WHERE scope = 'OUTPUT'")
+    int takeBudgetGate();
+
     /** The sum of the charges of all outputs (2.x {@code coalesce(sum(charge),0)}). */
     @Query("SELECT COALESCE(SUM(charge_bytes), 0) FROM command_output")
     long totalCharge();
 
-    /** The outputs whose expiry is not after {@code now}. */
-    List<CommandOutputRow> findByExpiresAtLessThanEqual(Instant now);
+    /**
+     * The outputs that are not in {@code state} and whose expiry is not after {@code now}. The cleaner asks it with {@code PENDING}: an output that is still being written is
+     * not the cleaner's (2.x {@code command-output.mjs:338}); its expiry is set again when it is ready or given up. The index {@code ix_command_output_expiry} is on (state, expires_at).
+     */
+    List<CommandOutputRow> findByStateNotAndExpiresAtLessThanEqual(OutputState state, Instant now);
 
     List<CommandOutputRow> findByState(OutputState state);
 

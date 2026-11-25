@@ -8,12 +8,14 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
 
 import javax.sql.DataSource;
 
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.context.annotation.Import;
@@ -147,6 +149,54 @@ class JdbcOutputManifestStoreTest {
     }
 
     @Test
+    @Tag("zone")
+    @DisplayName("S-D0161-03: an output that was given up before the hour that daylight saving time repeats is listed as expired when its time is over, not an hour later")
+    void anExpiryIsNotStretchedByTheRepeatedHour(@TempDir Path folder) {
+        assertThat(ZoneId.systemDefault()).as("the zoneTest task starts this JVM in a zone with daylight saving time").isEqualTo(ZoneId.of("America/Los_Angeles"));
+        OutputWorld w = factory.create(folder, OutputLimits.defaults());
+        OutputId id = w.reserve(fixture.unbound(), 100, Instant.parse("2027-11-07T07:45:00Z"));
+        // The expiry is 01:45 PDT. A quarter of an hour past 09:00Z the clock shows 01:15 PST: the same hour again, but after the expiry as a moment.
+        w.manifests.markUnavailable(id, Instant.parse("2027-11-07T08:45:00Z"));
+
+        assertThat(w.manifests.expired(Instant.parse("2027-11-07T08:30:00Z"))).isEmpty();
+        assertThat(w.manifests.expired(Instant.parse("2027-11-07T09:15:00Z"))).extracting(OutputManifest::id).containsExactly(id);
+        assertThat(w.row(id).expiresAt()).isEqualTo(Instant.parse("2027-11-07T08:45:00Z"));
+    }
+
+    @Test
+    @DisplayName("S-D0162-01: the cleaner lists an output that was given up or is ready once its expiry has passed, and never one that is still being written")
+    void theCleanerSkipsAnOutputThatIsBeingWritten(@TempDir Path folder) {
+        OutputWorld w = factory.create(folder, OutputLimits.defaults());
+        OutputId writing = w.reserve(fixture.unbound(), 100, T0);
+        OutputId givenUp = w.reserve(fixture.unbound(), 100, T0);
+        w.manifests.markUnavailable(givenUp, T0.plus(Duration.ofHours(1)));
+        OutputId ready = w.reserve(fixture.unbound(), 100, T0);
+        w.manifests.markReady(ready, w.payloads.finish(ready, utf8("{}"), utf8("done")), 6);
+        Instant afterTheRetention = T0.plus(Duration.ofHours(3));
+
+        assertThat(w.manifests.expired(afterTheRetention)).extracting(OutputManifest::id).containsExactlyInAnyOrder(givenUp, ready);
+        assertThat(w.manifests.inState(OutputState.PENDING)).extracting(OutputManifest::id).containsExactly(writing);
+        assertThat(w.manifests.expired(T0.plus(Duration.ofMinutes(59)))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S-D0162-02: an output that becomes ready is readable for the retention time from that moment, not from its reservation")
+    void aReadyOutputIsRetainedFromTheMomentItIsReady(@TempDir Path folder) {
+        Instant ready = T0.plus(Duration.ofMinutes(50));
+        OutputWorld w = factory.create(folder, OutputLimits.defaults(), Clock.fixed(ready, ZoneOffset.UTC));
+        OutputId id = w.reserve(fixture.unbound(), 100, T0);
+        assertThat(w.row(id).expiresAt()).as("reserved with the retention time counted from the reservation").isEqualTo(T0.plus(Duration.ofHours(1)));
+
+        OutputManifest manifest = w.manifests.markReady(id, w.payloads.finish(id, utf8("{}"), utf8("late")), 6);
+
+        assertThat(manifest.expiresAt()).isEqualTo(ready.plus(Duration.ofHours(1)));
+        assertThat(w.row(id).expiresAt()).isEqualTo(ready.plus(Duration.ofHours(1)));
+        assertThat(w.manifests.find(id, T0.plus(Duration.ofMinutes(70)))).as("ten minutes after the reservation's hour").isInstanceOf(OutputLookup.Ready.class);
+        assertThat(w.manifests.find(id, ready.plus(Duration.ofHours(1)))).isInstanceOf(OutputLookup.Expired.class);
+        assertThat(w.manifests.expired(T0.plus(Duration.ofMinutes(70)))).isEmpty();
+    }
+
+    @Test
     @DisplayName("S2-OUT-03: a change that does not fit the state is refused: ready twice, a stream after ready, a completed stream reopened, a ready output given up, an unknown output")
     void changesThatDoNotFitTheStateAreRefused(@TempDir Path folder) {
         OutputWorld w = factory.create(folder, OutputLimits.defaults());
@@ -199,6 +249,9 @@ class JdbcOutputManifestStoreTest {
 
         assertThat(w.manifests.expired(T0.plus(Duration.ofMinutes(59)))).isEmpty();
         assertThat(w.manifests.expired(T0.plus(Duration.ofHours(1))).stream().map(OutputManifest::id).toList()).containsExactly(first);
+        // The second output is still being written (PENDING): the cleaner leaves it, whatever its expiry is (D-0162); once it is given up it is listed.
+        assertThat(w.manifests.expired(T0.plus(Duration.ofMinutes(70))).stream().map(OutputManifest::id).toList()).containsExactly(first);
+        w.manifests.markUnavailable(second, T0.plus(Duration.ofMinutes(65)));
         assertThat(w.manifests.expired(T0.plus(Duration.ofMinutes(70))).stream().map(OutputManifest::id).toList()).containsExactlyInAnyOrder(first, second);
         List<OutputManifest> expired = w.manifests.expired(T0.plus(Duration.ofHours(1)));
         assertThat(expired.get(0).formats().spans()).hasSize(2);
