@@ -42,6 +42,11 @@ public class OutputReaper {
         int removed = 0;
         int failed = 0;
         for (OutputManifest expired : manifests.expired(clock.instant())) {
+            if (expired.state() == OutputState.PENDING) {
+                // A command still captures into it, or the last run stopped in the middle: its bytes are not the reaper's to delete (defect D-0162). The finish or the give-up
+                // of the run ends the state, and the start-up check gives up what a stop left pending.
+                continue;
+            }
             try {
                 payloads.delete(expired.id());
                 manifests.delete(expired.id());
@@ -49,7 +54,7 @@ public class OutputReaper {
             } catch (RuntimeException e) {
                 // One output that cannot be removed must not stop the others; it is listed again by the next run.
                 failed++;
-                LOG.warn("The expired output " + expired.id().value() + " could not be removed and stays until the next run", e);
+                LOG.warn("The expired output {} could not be removed and stays until the next run", expired.id().value(), e);
             }
         }
         return new ReapReport.Reaped(removed, failed);

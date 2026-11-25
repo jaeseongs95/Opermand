@@ -7,7 +7,12 @@ import org.springframework.stereotype.Component;
 
 import io.github.jaeseongs95.portal.domain.operation.Operation;
 
-/** Tells every {@link TerminalOperationListener} that an operation ended, once, in the order of the listeners. A listener that fails does not stop the others. */
+/**
+ * Tells every {@link TerminalOperationListener} that an operation ended, in the order of the listeners, when the operation ends. A listener that fails does not stop the others.
+ * The call is made in memory, so it is not the only way a listener hears of an end: an application that stops before the call, or a listener that fails, would leave what the
+ * listener settles undone. {@code SettlementRecovery} finds those leftovers in the stored state (a pinned artifact, a submitted action of a staged file, whose operation is in a
+ * final state) at the start and every minute, and tells the listeners again through this class, so a listener has to be idempotent (defect D-0157).
+ */
 @Component
 public class TerminalNotifier {
 

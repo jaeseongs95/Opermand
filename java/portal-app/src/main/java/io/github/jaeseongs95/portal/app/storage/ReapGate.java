@@ -30,7 +30,7 @@ public class ReapGate {
             return new ReapPermission.Suspended(ReapPermission.SuspendReason.MAINTENANCE);
         }
         if (protection.check() instanceof ProtectionCheck.Unprotected unprotected) {
-            LOG.error("The " + unprotected.area() + " folder cannot be used; no expired bytes are deleted", unprotected.cause());
+            LOG.error("The {} folder cannot be used; no expired bytes are deleted", unprotected.area(), unprotected.cause());
             return new ReapPermission.Suspended(ReapPermission.SuspendReason.PROTECTION_FAILED);
         }
         return new ReapPermission.Allowed();

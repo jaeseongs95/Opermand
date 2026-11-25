@@ -90,9 +90,14 @@ public class PrivateStorages {
             + "cannot be made private to its owner");
     }
 
+    /**
+     * The path itself, or the nearest folder above it, that exists <em>and can be asked for its file store</em>. A link whose target is missing counts as not existing: the file
+     * store of a path is that of its target, so asking it for the file store of such a link fails with {@code NoSuchFileException} and the caller would get that, not the answer
+     * "not a regular file" it can give for the link (defect D-0146).
+     */
     private Path nearestExisting(Path path) {
         Path existing = path.toAbsolutePath();
-        while (existing.getParent() != null && !Files.exists(existing, LinkOption.NOFOLLOW_LINKS)) {
+        while (existing.getParent() != null && !Files.exists(existing)) {
             existing = existing.getParent();
         }
         return existing;

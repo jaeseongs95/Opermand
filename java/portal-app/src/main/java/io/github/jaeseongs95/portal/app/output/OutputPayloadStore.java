@@ -22,8 +22,9 @@ public interface OutputPayloadStore {
 
     /**
      * Opens the spool of an output that is still being captured: the bytes of the {@code .stream} file as they are stored (the frames with their headers), read from the
-     * start. The caller closes it. An output without a spool (finished, deleted, never written) throws {@code RequestRefusedException(OUTPUT_CAPTURE_FAILED)}. The
-     * import of a stream into an artifact reads it here and compares what it hashed with {@link #streamDigest} (RC-A-182, RC-A-183).
+     * start. The caller closes it. An output without a spool (finished, deleted, never written) throws {@code RequestRefusedException(OUTPUT_CAPTURE_FAILED)}. No
+     * use case reads it any more: the import of the unredacted spool into an artifact was removed (defect D-0163), because the spool holds raw output and is gone once the
+     * command ended. This method and {@link #streamDigest} stay only until the store drops them.
      */
     PayloadRead openStream(OutputId id);
 

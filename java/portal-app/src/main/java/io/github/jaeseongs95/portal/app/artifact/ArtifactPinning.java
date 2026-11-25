@@ -11,6 +11,9 @@ import io.github.jaeseongs95.portal.domain.operation.OperationState;
  * When a submitted operation lets go of its artifact (S3-AR-07). {@code submit} pins the artifact for as long as the operation depends on it; this class gives it back to
  * the expiry calculation once the operation reached a <em>final</em> state (completed, failed, cancelled, denied, expired). An {@code UNKNOWN} operation keeps its
  * artifact pinned: the owner reconciles it and may need the bytes to compare with the target, and nothing runs again by itself.
+ *
+ * <p>The call comes from the listener of the terminal operations, which is a call in memory; it is not the only way an artifact is given back. {@code SettlementRecovery} finds
+ * the artifacts that are still pinned by an operation that is in a final state, at the start and every minute, and has this class called for them (defect D-0157).
  */
 @Component
 public class ArtifactPinning {

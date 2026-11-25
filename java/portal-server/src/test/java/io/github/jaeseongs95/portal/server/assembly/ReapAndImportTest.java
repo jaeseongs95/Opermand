@@ -7,7 +7,6 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.ReadableByteChannel;
-import java.nio.charset.StandardCharsets;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Arrays;
@@ -31,12 +30,7 @@ import io.github.jaeseongs95.portal.app.artifact.ArtifactRetention;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactSpec;
 import io.github.jaeseongs95.portal.app.artifact.ChunkDigest;
 import io.github.jaeseongs95.portal.app.artifact.ImportResult;
-import io.github.jaeseongs95.portal.app.file.OutputStreamImport;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
-import io.github.jaeseongs95.portal.app.output.OutputId;
-import io.github.jaeseongs95.portal.app.output.OutputPayloadStore;
-import io.github.jaeseongs95.portal.app.output.StreamFrame;
-import io.github.jaeseongs95.portal.app.output.StreamKind;
 import io.github.jaeseongs95.portal.app.remote.PayloadSource;
 import io.github.jaeseongs95.portal.app.storage.PayloadRead;
 import io.github.jaeseongs95.portal.app.storage.ReapPermission;
@@ -53,7 +47,7 @@ import io.github.jaeseongs95.portal.domain.id.OperationId;
 
 /**
  * The reaper of the artifacts on the real store and real files (S3-UC-06: a maintenance reservation holds the reap back, RC-A-173), the release of a pinned artifact when its
- * operation settled (S3-AR-07), and the import of a stream into an artifact (RC-A-182, RC-A-183, S3-AR-06): the capacity is reserved before the source is opened, and a
+ * operation settled (S3-AR-07), and the import of a stream into an artifact (RC-A-182, RC-A-183): the capacity is reserved before the source is opened, and a
  * failure of any kind leaves no file, no row and no charge.
  */
 @AssemblyTest
@@ -64,23 +58,19 @@ class ReapAndImportTest {
     private final ArtifactReaper reaper;
     private final ArtifactPinning pinning;
     private final ArtifactImporter importer;
-    private final OutputStreamImport outputImport;
     private final ArtifactRegistry registry;
     private final ArtifactPayloadStore payloads;
-    private final OutputPayloadStore outputs;
     private final MaintenanceStore maintenance;
     private final JdbcTemplate jdbc;
     private final Clock clock;
 
-    ReapAndImportTest(ArtifactReaper reaper, ArtifactPinning pinning, ArtifactImporter importer, OutputStreamImport outputImport, ArtifactRegistry registry,
-                      ArtifactPayloadStore payloads, OutputPayloadStore outputs, MaintenanceStore maintenance, JdbcTemplate jdbc, Clock clock) {
+    ReapAndImportTest(ArtifactReaper reaper, ArtifactPinning pinning, ArtifactImporter importer, ArtifactRegistry registry,
+                      ArtifactPayloadStore payloads, MaintenanceStore maintenance, JdbcTemplate jdbc, Clock clock) {
         this.reaper = reaper;
         this.pinning = pinning;
         this.importer = importer;
-        this.outputImport = outputImport;
         this.registry = registry;
         this.payloads = payloads;
-        this.outputs = outputs;
         this.maintenance = maintenance;
         this.jdbc = jdbc;
         this.clock = clock;
@@ -191,26 +181,6 @@ class ReapAndImportTest {
 
         assertThat(registry.holding()).isEmpty();
         assertThat(registry.budget().chargedBytes()).isZero();
-    }
-
-    @Test
-    @DisplayName("S3-AR-06 / RC-A-182: the spool of an output is imported through openStream and compared with streamDigest; a declared size that is not the spool's fails the import and leaves nothing")
-    void theSpoolOfAnOutputIsImportedAndCompared() {
-        OutputId output = new OutputId("7".repeat(48));
-        try {
-            outputs.append(output, new StreamFrame(StreamKind.STDOUT, "hello".getBytes(StandardCharsets.UTF_8)));
-            long size = 5 + 5;
-
-            ImportResult wrong = outputImport.importSpool(output, spec(size + 1));
-            assertThat(wrong).isEqualTo(new ImportResult.Failed(ImportResult.Reason.SIZE_MISMATCH));
-            assertThat(registry.holding()).isEmpty();
-
-            ImportResult result = outputImport.importSpool(output, spec(size));
-            assertThat(result).isInstanceOfSatisfying(ImportResult.Imported.class,
-                imported -> assertThat(imported.artifact().content()).isEqualTo(new io.github.jaeseongs95.portal.app.artifact.ContentDigest.Sealed(outputs.streamDigest(output))));
-        } finally {
-            outputs.delete(output);
-        }
     }
 
     // ---- helpers ----

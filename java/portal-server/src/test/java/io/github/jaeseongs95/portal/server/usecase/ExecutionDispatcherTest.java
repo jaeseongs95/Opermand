@@ -8,6 +8,7 @@ import java.nio.channels.Channels;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -24,7 +25,13 @@ import io.github.jaeseongs95.portal.app.output.OutputFormat;
 import io.github.jaeseongs95.portal.app.output.OutputManifest;
 import io.github.jaeseongs95.portal.app.output.OutputManifestStore;
 import io.github.jaeseongs95.portal.app.output.OutputPayloadStore;
+import io.github.jaeseongs95.portal.app.output.StreamFrame;
+import io.github.jaeseongs95.portal.app.output.StreamKind;
+import io.github.jaeseongs95.portal.app.remote.ExecutionLimits;
 import io.github.jaeseongs95.portal.app.remote.ExecutionPhase;
+import io.github.jaeseongs95.portal.app.remote.ExecutionReport;
+import io.github.jaeseongs95.portal.app.remote.ExecutionTimeline;
+import io.github.jaeseongs95.portal.app.remote.OutputSink;
 import io.github.jaeseongs95.portal.app.remote.PhaseMark;
 import io.github.jaeseongs95.portal.app.storage.PayloadRead;
 import io.github.jaeseongs95.portal.domain.error.DispatchFailure;
@@ -32,7 +39,9 @@ import io.github.jaeseongs95.portal.domain.error.DispatchReason;
 import io.github.jaeseongs95.portal.domain.error.DispatchStage;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
 import io.github.jaeseongs95.portal.domain.operation.AuditState;
+import io.github.jaeseongs95.portal.domain.operation.CaptureState;
 import io.github.jaeseongs95.portal.domain.operation.Deadline;
+import io.github.jaeseongs95.portal.domain.operation.ExecutionOutcome;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
 import io.github.jaeseongs95.portal.domain.operation.OperationEvent;
 import io.github.jaeseongs95.portal.domain.operation.OperationState;
@@ -263,6 +272,59 @@ class ExecutionDispatcherTest {
             .filter(m -> m.binding().executionId().equals(submitted.id())).findFirst().orElseThrow();
         String text = readText(manifest);
         assertThat(text).doesNotContain("AKIAABCDEFGHIJKLMNOP").contains("key").contains("end");
+    }
+
+    @Test
+    @DisplayName("S-D0154-01 D-0154 a command whose two streams are both at the cap and whose bytes are the worst for the renderings (control characters, invalid UTF-8) is kept: its output is ready and not a capture failure")
+    void anOutputAtTheCapOnBothStreamsFitsItsReservation() throws Exception {
+        int cap = (int) ExecutionLimits.defaults().outputPerStream().toBytes();
+        byte[] controls = new byte[cap];
+        java.util.Arrays.fill(controls, (byte) 0x01);
+        byte[] invalid = new byte[cap];
+        java.util.Arrays.fill(invalid, (byte) 0xFF);
+        executor.when("worst-output", (request, sink, control) -> {
+            control.guard().beforeDispatch();
+            sendInFrames(sink, StreamKind.STDOUT, controls);
+            sendInFrames(sink, StreamKind.STDERR, invalid);
+            return new ExecutionReport(ExecutionOutcome.exited(0, List.of()), ExecutionTimeline.empty());
+        });
+
+        Operation submitted = submitApproved("worst-output");
+        Operation done = kit.awaitTerminal(submitted.id());
+
+        assertThat(done.state()).isEqualTo(OperationState.COMPLETED);
+        assertThat(((RecordedResult.Executed) resultOf(done)).outcome().capture()).as("the output was kept").isNotEqualTo(CaptureState.FAILED);
+        OutputManifest manifest = manifests.inState(io.github.jaeseongs95.portal.app.output.OutputState.READY).stream()
+            .filter(m -> m.binding().executionId().equals(submitted.id())).findFirst().orElseThrow();
+        assertThat(readText(manifest)).as("one character per control character, one line feed, one replacement character per invalid byte").hasSize(2 * cap + 1);
+    }
+
+    @Test
+    @DisplayName("S-D0154-02 D-0154 both streams made of control characters, the worst case of the JSON rendering, are kept as well")
+    void anOutputOfControlCharactersOnBothStreamsFitsItsReservation() throws Exception {
+        int cap = (int) ExecutionLimits.defaults().outputPerStream().toBytes();
+        byte[] controls = new byte[cap];
+        java.util.Arrays.fill(controls, (byte) 0x01);
+        executor.when("control-output", (request, sink, control) -> {
+            control.guard().beforeDispatch();
+            sendInFrames(sink, StreamKind.STDOUT, controls);
+            sendInFrames(sink, StreamKind.STDERR, controls);
+            return new ExecutionReport(ExecutionOutcome.exited(0, List.of()), ExecutionTimeline.empty());
+        });
+
+        Operation submitted = submitApproved("control-output");
+        Operation done = kit.awaitTerminal(submitted.id());
+
+        assertThat(((RecordedResult.Executed) resultOf(done)).outcome().capture()).as("the output was kept").isNotEqualTo(CaptureState.FAILED);
+        assertThat(manifests.inState(io.github.jaeseongs95.portal.app.output.OutputState.READY).stream().anyMatch(m -> m.binding().executionId().equals(submitted.id())))
+            .isTrue();
+    }
+
+    private static void sendInFrames(OutputSink sink, StreamKind kind, byte[] bytes) {
+        int frame = 64 * 1024;
+        for (int from = 0; from < bytes.length; from += frame) {
+            sink.accept(new StreamFrame(kind, java.util.Arrays.copyOfRange(bytes, from, Math.min(bytes.length, from + frame))));
+        }
     }
 
     private String readText(OutputManifest manifest) throws IOException {

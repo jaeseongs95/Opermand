@@ -466,6 +466,31 @@ class DispatchStartGuardTest {
         }
     }
 
+    @Test
+    @DisplayName("S-D0051-01 D-0051 a refusal before dispatch that loses the version race every time is not dropped: it is logged as OPERATION_DISPATCH_PERSISTENCE_FAILED and the operation stays for the recovery; a race that is won on the third try settles it")
+    void aRefusalThatLosesTheRaceEveryTimeIsNotDroppedInSilence() {
+        OperationId won = journal.enqueueOwnerApproved(spec(WRITE_PROFILE, new CommandInput(new CommandText("id"), new Utf8Text(""), new Utf8Text(""))));
+        journal.conflictOnFailedSaves(2);
+
+        dispatcher(List.of()).open();
+
+        assertThat(journal.require(won).state()).as("the third try wins the race").isEqualTo(OperationState.FAILED);
+        assertThat(dispatcherLogs.list.stream().filter(event -> event.getLevel().isGreaterOrEqual(Level.ERROR)).toList()).isEmpty();
+        audits.clear();
+
+        OperationId lost = journal.enqueueOwnerApproved(spec(WRITE_PROFILE, new CommandInput(new CommandText("id"), new Utf8Text(""), new Utf8Text(""))));
+        journal.conflictOnFailedSaves(3);
+
+        dispatcher(List.of()).open();
+
+        assertThat(journal.require(lost).state()).as("nothing was stored, so the operation is as the journal has it").isEqualTo(OperationState.STARTING);
+        List<ILoggingEvent> errors = dispatcherLogs.list.stream().filter(event -> event.getLevel().isGreaterOrEqual(Level.ERROR)).toList();
+        assertThat(errors).as("the failure is told to the log, not swallowed").hasSize(1);
+        assertThat(errors.get(0).getThrowableProxy()).isNotNull();
+        assertThat(errors.get(0).getThrowableProxy().getMessage()).contains(OperationErrorCode.OPERATION_DISPATCH_PERSISTENCE_FAILED.name());
+        assertThat(audits).as("no outcome was stored, so none is audited").isEmpty();
+    }
+
     private ExecutionDispatcher dispatcher(List<OperationRunner> runners) {
         OperationEvents events = new OperationEvents(event -> { });
         AuditGate auditGate = new AuditGate(audits::add);
@@ -586,6 +611,12 @@ class DispatchStartGuardTest {
         private final Map<OperationId, Long> readyOrder = new LinkedHashMap<>();
         private long idCounter;
         private long readyCounter;
+        private int conflictsOnFailedSaves;
+
+        /** The next {@code count} writes of a failed operation lose the version race, as when another writer changes the row every time it is read. */
+        void conflictOnFailedSaves(int count) {
+            conflictsOnFailedSaves = count;
+        }
 
         OperationId enqueueOwnerApproved(NewOperation spec) {
             OperationId id = new OperationId(String.format("%048d", ++idCounter));
@@ -632,7 +663,7 @@ class DispatchStartGuardTest {
         @Override
         public Operation save(Operation next, long expectedVersion, Runnable beforeWrite) {
             Operation current = operations.get(next.id());
-            if (current == null || current.version() != expectedVersion) {
+            if (current == null || current.version() != expectedVersion || (next.state() == OperationState.FAILED && conflictsOnFailedSaves-- > 0)) {
                 throw new RequestRefusedException(OperationErrorCode.OPERATION_VERSION_CONFLICT);
             }
             beforeWrite.run();

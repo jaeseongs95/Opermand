@@ -274,21 +274,24 @@ class FileOperationsTest {
             OverwriteMode.REPLACE, Elevation.NONE, new FileBinding.Bound(new FileTargetBinding(FixedTargets.ID, targets.current().revision())), UploadProtocol.UNSPECIFIED);
         NewOperation upload = NewOperation.of(digester, kit.newKey(), new OwnerId("owner"), FixedTargets.ID, targets.current().revision(), FixedTargets.WRITE_PROFILE, input,
             new ConflictKey.None(), new Deadline.None());
+        OperationId reserved = new OperationId(UUID.randomUUID().toString().replace("-", "") + "0".repeat(16));
         maintenance.reserve(java.time.Instant.EPOCH);
         try {
-            assertThatThrownBy(() -> admission.admit(upload)).isInstanceOfSatisfying(RequestRefusedException.class,
+            assertThatThrownBy(() -> admission.admit(upload, reserved)).isInstanceOfSatisfying(RequestRefusedException.class,
                 e -> assertThat(e.code()).isEqualTo(RequestErrorCode.MAINTENANCE_ACTIVE));
             assertThat(journal.findByRequestKey(upload.requestKey())).isEmpty();
         } finally {
             maintenance.release();
         }
 
-        OperationId id = admission.admit(upload);
+        OperationId id = admission.admit(upload, reserved);
 
-        assertThat(admission.admit(upload)).as("the same key and contract is the same operation").isEqualTo(id);
+        assertThat(id).as("the operation has the id that the caller made").isEqualTo(reserved);
+        assertThat(admission.admit(upload, new OperationId(UUID.randomUUID().toString().replace("-", "") + "1".repeat(16)))).as("the same key and contract is the same operation")
+            .isEqualTo(id);
         assertThat(kit.find(id).state()).isEqualTo(OperationState.PENDING);
         assertThat(audit.actionsOf(id)).containsExactly(AuditAction.SUBMITTED);
-        assertThatThrownBy(() -> admission.admit(kit.command("touch not-an-upload"))).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> admission.admit(kit.command("touch not-an-upload"), reserved)).isInstanceOf(IllegalArgumentException.class);
         assertThat(transfer.uploadsSent()).isZero();
         intake.deny(id);
     }

@@ -62,7 +62,7 @@ public class ArtifactReaper {
             } catch (RuntimeException e) {
                 // One artifact that cannot be removed (a locked file, a conflicting writer) must not stop the others; it is listed again by the next run.
                 failed++;
-                LOG.warn("The artifact " + artifact.id().value() + " could not be removed and stays until the next run", e);
+                LOG.warn("The artifact {} could not be removed and stays until the next run", artifact.id().value(), e);
             }
         }
         quarantine.log();

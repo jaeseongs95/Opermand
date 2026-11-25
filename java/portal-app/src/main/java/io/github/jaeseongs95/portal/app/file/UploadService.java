@@ -124,7 +124,11 @@ public class UploadService {
         };
     }
 
+    /**
+     * The file guard says no: the stored artifact is not what the owner approved (another digest or size, not ready, another path or target, or gone). The reason is
+     * {@code AUTHORITY}, the approval no longer covers what would be sent, and not {@code UNKNOWN}, which is what a guard says when it cannot tell (defect D-0054).
+     */
     private DispatchRefusedException fileGuardRefusal() {
-        return new DispatchRefusedException(DispatchFailure.refused(DispatchReason.UNKNOWN, DispatchStage.FILE_GUARD));
+        return new DispatchRefusedException(DispatchFailure.refused(DispatchReason.AUTHORITY, DispatchStage.FILE_GUARD));
     }
 }

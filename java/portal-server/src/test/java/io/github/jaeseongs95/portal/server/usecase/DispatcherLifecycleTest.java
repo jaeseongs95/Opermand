@@ -6,11 +6,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.time.Clock;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ApplicationContext;
 import org.springframework.core.task.TaskExecutor;
+import org.springframework.core.task.TaskRejectedException;
 
 import io.github.jaeseongs95.portal.app.event.OperationEvents;
 import io.github.jaeseongs95.portal.app.execution.DispatchChecks;
@@ -27,6 +29,7 @@ import io.github.jaeseongs95.portal.app.operation.OperationWrites;
 import io.github.jaeseongs95.portal.app.operation.OutcomeAudit;
 import io.github.jaeseongs95.portal.app.operation.RunningExecutions;
 import io.github.jaeseongs95.portal.app.operation.TerminalNotifier;
+import io.github.jaeseongs95.portal.app.recovery.SettlementRecovery;
 import io.github.jaeseongs95.portal.app.recovery.StartupRecovery;
 import io.github.jaeseongs95.portal.app.remote.ExecutionControl;
 import io.github.jaeseongs95.portal.app.remote.ExecutionReport;
@@ -71,7 +74,7 @@ class DispatcherLifecycleTest {
         assertThat(order).as("a wake before the recovery drains nothing").isEmpty();
 
         new StartupRecovery(recording, context.getBean(OperationQueueView.class), context.getBean(OperationEvents.class), context.getBean(TerminalNotifier.class),
-            context.getBean(ExpiryTimers.class), dispatcher, context.getBean(ConcurrencyLimits.class), context.getBean(Clock.class)).afterSingletonsInstantiated();
+            context.getBean(SettlementRecovery.class), context.getBean(ExpiryTimers.class), dispatcher, context.getBean(ConcurrencyLimits.class), context.getBean(Clock.class)).run();
 
         assertThat(order).containsExactly("recovered", "dispatch");
     }
@@ -85,12 +88,33 @@ class DispatcherLifecycleTest {
             throw new IllegalStateException("the journal is not writable");
         };
         StartupRecovery startup = new StartupRecovery(failing, context.getBean(OperationQueueView.class), context.getBean(OperationEvents.class),
-            context.getBean(TerminalNotifier.class), context.getBean(ExpiryTimers.class), dispatcher, context.getBean(ConcurrencyLimits.class), context.getBean(Clock.class));
+            context.getBean(TerminalNotifier.class), context.getBean(SettlementRecovery.class), context.getBean(ExpiryTimers.class), dispatcher,
+            context.getBean(ConcurrencyLimits.class), context.getBean(Clock.class));
 
-        assertThatThrownBy(startup::afterSingletonsInstantiated).isInstanceOf(RuntimeException.class);
+        assertThatThrownBy(startup::run).isInstanceOf(RuntimeException.class);
         dispatcher.wake();
 
         assertThat(order).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S-D0158-01 D-0158 an executor that refuses the drain does not leave the dispatcher busy for good: the next wake is handed to the executor again")
+    void aRefusedDrainDoesNotStopTheDispatcherForGood() {
+        List<String> order = new CopyOnWriteArrayList<>();
+        AtomicInteger offers = new AtomicInteger();
+        TaskExecutor refusingOnce = task -> {
+            if (offers.incrementAndGet() == 1) {
+                throw new TaskRejectedException("the pool is shut down");
+            }
+            order.add("dispatch");
+        };
+        ExecutionDispatcher dispatcher = dispatcher(refusingOnce, List.of());
+
+        dispatcher.open();
+        assertThat(offers).as("the open wake was offered and refused").hasValue(1);
+        dispatcher.wake();
+
+        assertThat(order).as("the second wake reached the executor").containsExactly("dispatch");
     }
 
     @Test

@@ -192,7 +192,7 @@ public class DownloadService {
             payloads.delete(id);
             registry.release(id, ReleaseReason.REFUSED);
         } catch (RuntimeException e) {
-            LOG.warn("The download artifact " + id.value() + " could not be discarded; a later reap or the start-up check removes it (at once when the removal had begun, otherwise at the expiry of the artifact)", e);
+            LOG.warn("The download artifact {} could not be discarded; a later reap or the start-up check removes it (at once when the removal had begun, otherwise at the expiry of the artifact)", id.value(), e);
         }
     }
 }
