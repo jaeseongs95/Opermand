@@ -2,18 +2,24 @@ package io.github.jaeseongs95.portal.ssh.session;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import io.github.jaeseongs95.portal.app.remote.HostKeyMode;
 import io.github.jaeseongs95.portal.app.remote.SecretValue;
 import io.github.jaeseongs95.portal.app.remote.SshCredential;
+import io.github.jaeseongs95.portal.app.remote.SshSettings;
 import io.github.jaeseongs95.portal.domain.target.AccessMode;
 import io.github.jaeseongs95.portal.domain.target.AuthMethod;
 import io.github.jaeseongs95.portal.domain.target.ConnectionProfile;
 import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
 import io.github.jaeseongs95.portal.domain.target.Setting;
 import io.github.jaeseongs95.portal.domain.target.TtyMode;
+import io.github.jaeseongs95.portal.ssh.hostkey.HostKeyEvents;
+import io.github.jaeseongs95.portal.ssh.hostkey.HostKeyRefusal;
 import io.github.jaeseongs95.portal.ssh.hostkey.ServerKeyPolicy;
+import io.github.jaeseongs95.portal.ssh.profile.PrivateFiles;
 import java.lang.reflect.Proxy;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
+import java.nio.file.Path;
 import java.util.List;
 import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.common.session.SessionContext;
@@ -60,7 +66,20 @@ class HopRoutingTest {
         HopRouting routing = new HopRouting(List.of(jump, target));
         ConnectAttempt attempt = new ConnectAttempt();
         HopIdentities identities = new HopIdentities(routing, attempt);
-        ServerKeyPolicy alwaysAccept = profile -> (s, a, k) -> true;
+        SshSettings insecureSettings = new SshSettings(
+            SshSettings.DEFAULT_CONNECT_TIMEOUT, SshSettings.DEFAULT_HEARTBEAT_INTERVAL, SshSettings.DEFAULT_HEARTBEAT_NO_REPLY_MAX,
+            SshSettings.DEFAULT_IDLE_PROBE_AFTER, SshSettings.DEFAULT_EXEC_REPLY_TIMEOUT, SshSettings.DEFAULT_CHANNEL_PERMITS,
+            SshSettings.DEFAULT_CONSECUTIVE_OPEN_REJECTIONS, HostKeyMode.INSECURE, Path.of("unused-known-hosts"));
+        HostKeyEvents noOpEvents = new HostKeyEvents() {
+            @Override
+            public void refused(HostKeyRefusal refusal) {
+            }
+
+            @Override
+            public void insecureModeActive() {
+            }
+        };
+        ServerKeyPolicy alwaysAccept = new ServerKeyPolicy(insecureSettings, new PrivateFiles(List.of()), noOpEvents);
         HopHostKeyVerifier verifier = new HopHostKeyVerifier(routing, alwaysAccept, attempt);
 
         ClientSession nullAddress = stubSession(null, "prod-user");

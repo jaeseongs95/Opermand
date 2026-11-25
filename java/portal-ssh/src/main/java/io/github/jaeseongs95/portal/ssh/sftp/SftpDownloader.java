@@ -7,6 +7,7 @@ import io.github.jaeseongs95.portal.app.remote.PayloadSink;
 import io.github.jaeseongs95.portal.app.remote.SinkResult;
 import io.github.jaeseongs95.portal.app.remote.TransferFailureCause;
 import io.github.jaeseongs95.portal.domain.error.TransferErrorCode;
+import io.github.jaeseongs95.portal.domain.path.WindowsRemotePath;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.EnumSet;
@@ -107,7 +108,9 @@ public class SftpDownloader {
                 if (opened.getSize() > limit) {
                     return new DownloadResult.TooLarge(opened.getSize(), limit);
                 }
-                if (!LeafState.of(opened).equals(announced)) {
+                LeafState openedState = LeafState.of(opened);
+                if (!sameFile(announced, openedState, request.path() instanceof WindowsRemotePath)) {
+                    LOG.debug("Download handle fstat disagreed with lstat: announced={}, opened={}", announced, openedState);
                     return changed();
                 }
                 // The size the target announced goes to the sink before the first block, so the use case can hold only that much of its budget (defect D-0012).
@@ -120,7 +123,7 @@ public class SftpDownloader {
                         ended = changed();
                     } else {
                         SftpClient.Attributes afterRead = client.stat(handle);
-                        if (FileKind.of(afterRead) != FileKind.REGULAR || !LeafState.of(afterRead).equals(announced)) {
+                        if (FileKind.of(afterRead) != FileKind.REGULAR || !LeafState.of(afterRead).equals(openedState)) {
                             ended = changed();
                         }
                     }
@@ -196,6 +199,18 @@ public class SftpDownloader {
         LOG.warn("A download was judged a lost connection (TRANSPORT_LOST); the target was only read and the session is discarded", cause);
         lease.discard();
         return new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST);
+    }
+
+    /**
+     * Compares pre-open {@code lstat} metadata with opened-handle {@code fstat} metadata. On POSIX servers every field matches identically on the same inode; on Windows
+     * targets ({@link WindowsRemotePath}), Win32-OpenSSH synthesizes POSIX mode/uid/gid differently between {@code w32_lstat} and {@code w32_fstat}, so size and
+     * modification time are compared across the two calls while same-syscall comparisons ({@code fstat}/{@code fstat} and {@code lstat}/{@code lstat}) still compare all fields.
+     */
+    private static boolean sameFile(LeafState announced, LeafState opened, boolean windowsPath) {
+        if (windowsPath) {
+            return opened.size() == announced.size() && opened.modifiedMillis() == announced.modifiedMillis();
+        }
+        return opened.equals(announced);
     }
 
     private DownloadResult changed() {
