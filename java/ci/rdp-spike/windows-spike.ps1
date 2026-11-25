@@ -50,7 +50,9 @@ function Stop-AllAgents {
 
 $script:EpMain = '\\.\pipe\spike-main'; $script:EpCtl = '\\.\pipe\spike-ctl'; $script:EpIdle = '\\.\pipe\spike-idle'
 $script:EpPp = '\\.\pipe\spike-pp'; $script:EpKill = '\\.\pipe\spike-kill'
+$script:FatalError = $null
 
+try {
 # ============================================================================================
 Invoke-Phase 'P0 download, verify, inspect (item 12)' {
     $archive = Join-Path $WorkDir $Asset
@@ -92,7 +94,7 @@ Invoke-Phase 'P0 download, verify, inspect (item 12)' {
         Rec '12' 'runtime dependencies (dumpbin /dependents)' 'unavailable' 'dumpbin.exe not found on the runner image'
     }
 }
-if (-not $script:AgentExe -or $script:AgentExe -eq 'unset') { Write-Log 'no agent binary; aborting'; exit 1 }
+if (-not $script:AgentExe -or $script:AgentExe -eq 'unset') { Write-Log 'no agent binary; aborting'; throw 'no agent binary; aborting' }
 
 Invoke-Phase 'P0b help output and capability probe (items 4-7, 9, 12)' {
     $dir = Join-Path $ArtifactsDir 'help'
@@ -402,12 +404,43 @@ Invoke-Phase 'P6 acknowledgement semantics, queue pressure (item 5)' {
     $n = 200
     $res = 1..$n | ForEach-Object -ThrottleLimit 50 -Parallel {
         $ch = [string][char](97 + ($_ % 26))
-        $o1 = & $using:exe --endpoint $using:ep key-unicode --char $ch --pressed true 2>&1 | Out-String
-        $c1 = $LASTEXITCODE
-        $o2 = & $using:exe --endpoint $using:ep key-unicode --char $ch --pressed false 2>&1 | Out-String
-        [pscustomobject]@{ Ch = $ch; Exit = $c1; Exit2 = $LASTEXITCODE; Out = ($o1 + $o2).Trim() }
+        $utf8 = [System.Text.UTF8Encoding]::new($false)
+        $runStep = {
+            param([string]$exePath, [string]$endpoint, [string[]]$cliArgs, [int]$timeoutMs)
+            $psi = [System.Diagnostics.ProcessStartInfo]::new($exePath)
+            $psi.ArgumentList.Add('--endpoint'); $psi.ArgumentList.Add($endpoint)
+            foreach ($a in $cliArgs) { $psi.ArgumentList.Add($a) }
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.UseShellExecute = $false
+            $psi.CreateNoWindow = $true
+            $psi.StandardOutputEncoding = $utf8
+            $psi.StandardErrorEncoding = $utf8
+            $p = [System.Diagnostics.Process]::Start($psi)
+            try {
+                $outTask = $p.StandardOutput.ReadToEndAsync()
+                $errTask = $p.StandardError.ReadToEndAsync()
+                $timedOut = -not $p.WaitForExit($timeoutMs)
+                if ($timedOut) {
+                    try { $p.Kill($true) } catch { }
+                }
+                $o = if ($outTask.Wait(3000)) { $outTask.Result } else { '' }
+                $e = if ($errTask.Wait(3000)) { $errTask.Result } else { '' }
+                $code = if ($timedOut) { -999 } else { $p.ExitCode }
+                return [pscustomobject]@{ Exit = $code; TimedOut = $timedOut; Out = (($o + "`n" + $e).Trim()) }
+            } finally {
+                $p.Dispose()
+            }
+        }
+        $r1 = & $runStep $using:exe $using:ep @('key-unicode', '--char', $ch, '--pressed', 'true') 60000
+        $r2 = & $runStep $using:exe $using:ep @('key-unicode', '--char', $ch, '--pressed', 'false') 60000
+        [pscustomobject]@{ Id = $_; Ch = $ch; Exit = $r1.Exit; Exit2 = $r2.Exit; TimedOut = ($r1.TimedOut -or $r2.TimedOut); Out = ("$($r1.Out) $($r2.Out)").Trim() }
     }
+    $timedOut1 = @($res | Where-Object { $_.TimedOut })
     $acc = @($res | Where-Object { $_.Exit -eq 0 -and $_.Exit2 -eq 0 }); $rej = @($res | Where-Object { $_.Exit -ne 0 -or $_.Exit2 -ne 0 })
+    if ($rej.Count -gt 0) {
+        Save-Text 'parallel-flood-key-errors.txt' (($rej | ForEach-Object { "id=$($_.Id) ch=$($_.Ch) exit=$($_.Exit)/$($_.Exit2) timedOut=$($_.TimedOut) out=$($_.Out)" }) -join "`n")
+    }
     $w = Wait-ReceiverStable -User $u -QuietMs 4000 -MaxSec 120
     $got = $script:Utf8.GetString($w.Bytes)
     $diff = @()
@@ -418,15 +451,42 @@ Invoke-Phase 'P6 acknowledgement semantics, queue pressure (item 5)' {
         if ($exp -ne $act) { $diff += "$ch expected=$exp got=$act" }
     }
     $rejMsgs = ($rej | Group-Object { $_.Out } | ForEach-Object { "x$($_.Count): $($_.Name)" }) -join ' || '
-    Rec '5' "parallel flood: $n concurrent key-unicode press+release pairs; accepted=$($acc.Count) rejected=$($rej.Count)" 'info' "rejection messages: $rejMsgs"
-    Rec '5' 'every call reported as success was delivered (per-letter counts equal; nothing extra)' $(if ($diff.Count -eq 0 -and $got.Length -eq $acc.Count) { 'pass' } else { 'fail' }) "accepted=$($acc.Count) receivedLen=$($got.Length) mismatches=[$($diff -join '; ')]"
+    Rec '5' "parallel flood: $n concurrent key-unicode press+release pairs; accepted=$($acc.Count) rejected=$($rej.Count) timedOut=$($timedOut1.Count)" 'info' "rejection messages: $rejMsgs"
+    Rec '5' 'every call reported as success was delivered (per-letter counts equal; nothing extra)' $(if ($timedOut1.Count -eq 0 -and $diff.Count -eq 0 -and $got.Length -eq $acc.Count) { 'pass' } else { 'fail' }) "accepted=$($acc.Count) receivedLen=$($got.Length) timedOut=$($timedOut1.Count) mismatches=[$($diff -join '; ')]"
     Save-Text 'flood-received.txt' $got
     $res2 = 1..300 | ForEach-Object -ThrottleLimit 100 -Parallel {
-        $o = & $using:exe --endpoint $using:ep mouse-move --x ([int]($_ % 1000)) --y 50 2>&1 | Out-String
-        [pscustomobject]@{ Exit = $LASTEXITCODE; Out = $o.Trim() }
+        $utf8 = [System.Text.UTF8Encoding]::new($false)
+        $psi = [System.Diagnostics.ProcessStartInfo]::new($using:exe)
+        $psi.ArgumentList.Add('--endpoint'); $psi.ArgumentList.Add($using:ep)
+        $psi.ArgumentList.Add('mouse-move'); $psi.ArgumentList.Add('--x'); $psi.ArgumentList.Add([string]([int]($_ % 1000))); $psi.ArgumentList.Add('--y'); $psi.ArgumentList.Add('50')
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $psi.UseShellExecute = $false
+        $psi.CreateNoWindow = $true
+        $psi.StandardOutputEncoding = $utf8
+        $psi.StandardErrorEncoding = $utf8
+        $p = [System.Diagnostics.Process]::Start($psi)
+        try {
+            $outTask = $p.StandardOutput.ReadToEndAsync()
+            $errTask = $p.StandardError.ReadToEndAsync()
+            $timedOut = -not $p.WaitForExit(60000)
+            if ($timedOut) {
+                try { $p.Kill($true) } catch { }
+            }
+            $o = if ($outTask.Wait(3000)) { $outTask.Result } else { '' }
+            $e = if ($errTask.Wait(3000)) { $errTask.Result } else { '' }
+            $code = if ($timedOut) { -999 } else { $p.ExitCode }
+            [pscustomobject]@{ Id = $_; Exit = $code; TimedOut = $timedOut; Out = (($o + "`n" + $e).Trim()) }
+        } finally {
+            $p.Dispose()
+        }
     }
     $bad2 = @($res2 | Where-Object { $_.Exit -ne 0 })
-    Rec '5' 'parallel flood: 300 concurrent mouse-move calls' 'info' "failures=$($bad2.Count) messages: $(($bad2 | Group-Object Out | ForEach-Object { "x$($_.Count): $($_.Name)" }) -join ' || ')"
+    $timedOut2 = @($res2 | Where-Object { $_.TimedOut })
+    if ($bad2.Count -gt 0) {
+        Save-Text 'parallel-flood-mouse-errors.txt' (($bad2 | ForEach-Object { "id=$($_.Id) exit=$($_.Exit) timedOut=$($_.TimedOut) out=$($_.Out)" }) -join "`n")
+    }
+    Rec '5' 'parallel flood: 300 concurrent mouse-move calls' $(if ($timedOut2.Count -eq 0) { 'info' } else { 'fail' }) "failures=$($bad2.Count) timedOut=$($timedOut2.Count) messages: $(($bad2 | Group-Object Out | ForEach-Object { "x$($_.Count): $($_.Name)" }) -join ' || ')"
 }
 
 # ============================================================================================
@@ -446,18 +506,57 @@ Invoke-Phase 'P7 concurrency, lifetime (item 9)' {
             $ta = 'session-A ' + [regex]::Unescape('\ud55c'); $tb = 'session-B ' + [regex]::Unescape('\uae00') + ' x'
             $exe = $script:AgentExe
             $pairs = @(@($epA, $ta), @($epB, $tb))
-            $pairs | ForEach-Object -ThrottleLimit 2 -Parallel {
+            $p7Res = $pairs | ForEach-Object -ThrottleLimit 2 -Parallel {
                 $ep = $_[0]; $text = $_[1]
+                $utf8 = [System.Text.UTF8Encoding]::new($false)
+                $errors = [System.Collections.Generic.List[string]]::new()
+                $timedOutCount = 0
                 for ($i = 0; $i -lt $text.Length; $i++) {
                     $ch = [string]$text[$i]
-                    & $using:exe --endpoint $ep key-unicode --char $ch --pressed true | Out-Null
-                    & $using:exe --endpoint $ep key-unicode --char $ch --pressed false | Out-Null
+                    foreach ($pressed in @('true', 'false')) {
+                        $psi = [System.Diagnostics.ProcessStartInfo]::new($using:exe)
+                        $psi.ArgumentList.Add('--endpoint'); $psi.ArgumentList.Add($ep)
+                        $psi.ArgumentList.Add('key-unicode'); $psi.ArgumentList.Add('--char'); $psi.ArgumentList.Add($ch)
+                        $psi.ArgumentList.Add('--pressed'); $psi.ArgumentList.Add($pressed)
+                        $psi.RedirectStandardOutput = $true
+                        $psi.RedirectStandardError = $true
+                        $psi.UseShellExecute = $false
+                        $psi.CreateNoWindow = $true
+                        $psi.StandardOutputEncoding = $utf8
+                        $psi.StandardErrorEncoding = $utf8
+                        $p = [System.Diagnostics.Process]::Start($psi)
+                        try {
+                            $outTask = $p.StandardOutput.ReadToEndAsync()
+                            $errTask = $p.StandardError.ReadToEndAsync()
+                            $timedOut = -not $p.WaitForExit(60000)
+                            if ($timedOut) {
+                                $timedOutCount++
+                                try { $p.Kill($true) } catch { }
+                            }
+                            $o = if ($outTask.Wait(3000)) { $outTask.Result } else { '' }
+                            $e = if ($errTask.Wait(3000)) { $errTask.Result } else { '' }
+                            $code = if ($timedOut) { -999 } else { $p.ExitCode }
+                            if ($code -ne 0) {
+                                $errors.Add("idx=$i pressed=$pressed exit=$code timedOut=$timedOut out=$(($o + ' ' + $e).Trim())")
+                            }
+                        } finally {
+                            $p.Dispose()
+                        }
+                        if ($timedOut) { break }
+                    }
+                    if ($timedOutCount -gt 0) { break }
                 }
+                [pscustomobject]@{ Endpoint = $ep; TimedOut = $timedOutCount; Errors = @($errors) }
             }
-            $wa = Wait-ReceiverStable -User 'rdpspike1' -Expected $script:Utf8.GetBytes($ta)
-            $wb = Wait-ReceiverStable -User 'rdpspike3' -Expected $script:Utf8.GetBytes($tb)
+            $p7Errors = @($p7Res | ForEach-Object { $epName = $_.Endpoint; $_.Errors | ForEach-Object { "$epName : $_" } })
+            $p7TimedOut = (@($p7Res | Measure-Object -Property TimedOut -Sum).Sum)
+            if ($p7Errors.Count -gt 0) {
+                Save-Text 'parallel-p7-errors.txt' ($p7Errors -join "`n")
+            }
+            $wa = Wait-ReceiverStable -User 'rdpspike1' -QuietMs 2500 -MaxSec 40 -Expected $script:Utf8.GetBytes($ta)
+            $wb = Wait-ReceiverStable -User 'rdpspike3' -QuietMs 2500 -MaxSec 40 -Expected $script:Utf8.GetBytes($tb)
             $ca = Compare-Text $ta $wa.Bytes; $cb = Compare-Text $tb $wb.Bytes
-            Rec '9' 'two daemons (--endpoint) drive two RDP sessions at the same time; each target receives only its own text' $(if ($ca.Equal -and $cb.Equal) { 'pass' } else { 'fail' }) "A: $($ca.Detail) | B: $($cb.Detail)"
+            Rec '9' 'two daemons (--endpoint) drive two RDP sessions at the same time; each target receives only its own text' $(if ($p7TimedOut -eq 0 -and $p7Errors.Count -eq 0 -and $ca.Equal -and $cb.Equal) { 'pass' } else { 'fail' }) "p7TimedOut=$p7TimedOut p7Errors=$($p7Errors.Count) | A: $($ca.Detail) | B: $($cb.Detail)"
             $pa = Join-Path $ArtifactsDir 'screenshot-A.png'; $pb = Join-Path $ArtifactsDir 'screenshot-B.png'
             Invoke-Agent -Endpoint $epA -AgentArgs @('screenshot', $pa) | Out-Null; Invoke-Agent -Endpoint $epB -AgentArgs @('screenshot', $pb) | Out-Null
             Rec '9' 'independent screenshots from the two sessions' $(if ((Test-Png $pa).Valid -and (Test-Png $pb).Valid) { 'pass' } else { 'fail' }) "A: $((Test-Png $pa).Text) | B: $((Test-Png $pb).Text)"
@@ -613,11 +712,25 @@ Invoke-Phase 'P10 NLA without the autologon property (design information)' {
     Stop-SpikeSessions
 }
 
-Stop-AllAgents
-Stop-SpikeSessions
-if (Test-Path $script:OverlayDir) { Remove-Item -Recurse -Force $script:OverlayDir -ErrorAction SilentlyContinue }
-Copy-Item -Path 'C:\rdp-spike\recv' -Destination (Join-Path $ArtifactsDir 'receiver-logs') -Recurse -Force -ErrorAction SilentlyContinue
-$summary = $script:Results | Group-Object verdict | ForEach-Object { "$($_.Name)=$($_.Count)" }
-Write-Log "DONE nla=$Nla results: $($summary -join ' ')"
-$script:Results | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $ArtifactsDir 'results.json') -Encoding utf8
+} catch {
+    $script:FatalError = $_
+    Rec 'harness' 'fatal error in windows-spike main loop' 'fail' ($_ | Out-String)
+} finally {
+    try { Stop-AllAgents } catch { Write-Log "finally Stop-AllAgents error: $($_.Exception.Message)" }
+    try { Stop-SpikeSessions } catch { Write-Log "finally Stop-SpikeSessions error: $($_.Exception.Message)" }
+    if (Test-Path $script:OverlayDir) { Remove-Item -Recurse -Force $script:OverlayDir -ErrorAction SilentlyContinue }
+    if (Test-Path 'C:\rdp-spike\recv') {
+        Copy-Item -Path 'C:\rdp-spike\recv' -Destination (Join-Path $ArtifactsDir 'receiver-logs') -Recurse -Force -ErrorAction SilentlyContinue
+    }
+    $summary = $script:Results | Group-Object verdict | ForEach-Object { "$($_.Name)=$($_.Count)" }
+    Write-Log "DONE nla=$Nla results: $($summary -join ' ')"
+    $script:Results | ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $ArtifactsDir 'results.json') -Encoding utf8
+}
+
+$failCount = @($script:Results | Where-Object { $_.verdict -eq 'fail' }).Count
+$passCount = @($script:Results | Where-Object { $_.verdict -eq 'pass' }).Count
+if ($script:FatalError -or $failCount -gt 0 -or $passCount -eq 0) {
+    Write-Log "EXITING NON-ZERO (C2-9 gate): fatal=$([bool]$script:FatalError) pass=$passCount fail=$failCount"
+    exit 1
+}
 exit 0

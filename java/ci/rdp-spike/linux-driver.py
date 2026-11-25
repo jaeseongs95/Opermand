@@ -65,10 +65,17 @@ class R:
         return s
 
 
+def clean_env():
+    """Environment handed to the agent: the harness's own RDP_PW must not leak into it."""
+    e = dict(os.environ)
+    e.pop("RDP_PW", None)
+    return e
+
+
 def agent(args, env=None, timeout=60, endpoint=SOCK):
     """Run the CLI with output going to temp files (a child may inherit pipes and block a pipe-based read)."""
     cmd = [AGENT] + (["--endpoint", endpoint] if endpoint else []) + args
-    e = dict(os.environ)
+    e = clean_env()
     if env:
         e.update(env)
     t0 = time.time()
@@ -108,7 +115,7 @@ def start_daemon(endpoint=SOCK, password=PW, tag="d"):
         argv += ["--overlay", ov.name]
     base = os.path.join(ART, "daemon-%s-%s" % (os.path.basename(endpoint), tag))
     fo, fe = open(base + ".out.txt", "w"), open(base + ".err.txt", "w")
-    p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=fo, stderr=fe, start_new_session=True)
+    p = subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=fo, stderr=fe, start_new_session=True, env=clean_env())
     DAEMONS[endpoint] = (p, ov.name if ov else None, base)
     t0 = time.time()
     while time.time() - t0 < 30 and p.poll() is None:
@@ -410,8 +417,8 @@ def main():
     agent(["key-scancode", "--scancode", "0x1D", "--pressed", "false"])
     key("0x0E")
     s5 = cur()
-    okk = (s1 == "a" and s2 == "aA" and s3 == "aA\nb" and s4 == "aA\n" and s5 == "")
-    result(4, "key-scancode: letter, Shift+letter, Enter, Backspace, Ctrl+A then Backspace observed at target",
+    okk = (s1 == "a" and s2 == "aA" and s3 == "aA\nb" and s4 == "aA\n" and s5 == "aA")  # Tk: Ctrl+A is line-start, so Backspace joins the lines
+    result(4, "key-scancode: letter, Shift+letter, Enter, Backspace, Ctrl+A (Tk: line start) then Backspace observed at target",
            "pass" if okk else "fail", "a=%r Shift+a=%r Enter,b=%r Backspace=%r Ctrl+A,Backspace=%r" % (s1, s2, s3, s4, s5))
     agent(["mouse-move", "--x", "321", "--y", "123"])
     time.sleep(0.5)

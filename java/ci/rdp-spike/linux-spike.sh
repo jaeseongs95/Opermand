@@ -70,7 +70,7 @@ sleep 3
 
 PW="Rs!$(openssl rand -hex 16)aA1"; echo "::add-mask::$PW"
 SAM="$WORK/SAM"
-if [ -n "$HASH" ]; then "$HASH" -u rdpuser -p "$PW" > "$SAM" 2>>"$LOG"; fi
+if [ -n "$HASH" ]; then "$HASH" -u rdpuser -p "$PW" -f sam > "$SAM" 2>>"$LOG"; fi
 say "SAM file: $(wc -c < "$SAM" 2>/dev/null) bytes, fields: $(awk -F: '{print NF}' "$SAM" 2>/dev/null | head -1)"
 if [ "$MODE" = "nla" ]; then
   SHADOW_ARGS=(/port:3389 /sam-file:"$SAM" /sec:nla)
