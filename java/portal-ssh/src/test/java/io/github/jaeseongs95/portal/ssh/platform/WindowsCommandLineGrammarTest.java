@@ -186,12 +186,12 @@ class WindowsCommandLineGrammarTest {
     }
 
     @Test
-    @DisplayName("RC-B-569: a curved quote anywhere gives up the whole name approval: no name, incomplete, no sudo (7 shapes x 4 quotes)")
+    @DisplayName("RC-B-569 S-D0070: a PowerShell Unicode quote anywhere gives up the whole name approval: no name, incomplete, no sudo (7 shapes x 7 quotes)")
     void curvedQuotesGiveUpEverything() {
         CommandLineAnalysis attack = analyze("whoami.exe 'ok\u2019; calc.exe; #'");
         assertThat(attack).isEqualTo(NOTHING_KNOWN);
         int shapes = 0;
-        for (String quote : List.of("\u2018", "\u2019", "\u201c", "\u201d")) {
+        for (String quote : List.of("\u2018", "\u2019", "\u201a", "\u201b", "\u201c", "\u201d", "\u201e")) {
             List<String> lines = List.of(quote + "whoami.exe" + quote, "C:/dir" + quote + "/tool.exe", "& 'C:/dir" + quote + "/tool.exe'", "whoami.exe bare" + quote + "argument",
                 "whoami.exe " + quote + "argument" + quote, "whoami.exe 'mixed" + quote + "; calc.exe; #'", "whoami.exe \"mixed" + quote + "; calc.exe; #\"");
             assertThat(lines).hasSize(7);
@@ -200,13 +200,13 @@ class WindowsCommandLineGrammarTest {
                 shapes++;
             }
         }
-        assertThat(shapes).isEqualTo(28);
+        assertThat(shapes).isEqualTo(49);
     }
 
     @Test
-    @DisplayName("RC-B-569: a name with a curved quote is refused as a policy name (3 shapes x 4 quotes)")
+    @DisplayName("RC-B-569 S-D0070: a name with a PowerShell Unicode quote is refused as a policy name (3 shapes x 7 quotes)")
     void policyNamesWithCurvedQuotesAreRefused() {
-        for (String quote : List.of("\u2018", "\u2019", "\u201c", "\u201d")) {
+        for (String quote : List.of("\u2018", "\u2019", "\u201a", "\u201b", "\u201c", "\u201d", "\u201e")) {
             for (String name : List.of("whoami" + quote + ".exe", "C:/dir" + quote + "/tool.exe", "C:/dir/tool" + quote + ".exe")) {
                 assertThat(grammar.normalize(name)).as(name).isInstanceOf(NormalizedName.Rejected.class);
             }

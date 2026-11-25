@@ -2,7 +2,7 @@
 
 - 대상 소스: 브랜치 `feature/v300-prep` 작업 사본(HEAD `a44c4d145ca1a3b2fa68701a5b7f5cd92ff15967`, package.json version `2.4.2`).
 - 결정: 「계약 유지」 (MCP 도구 이름·입력 스키마·응답 봉투 Contract 2.0, 관리자 HTTP API, 완료 hook 형식, 설정 키).
-- 3.0 개정(2026-11-21): 기준본은 Contract 3.0으로 고쳤다. 2.4.2와 다른 곳은 9절 변경표의 행뿐이고, 1~8절은 2.4.2 기준본을 만든 기록이다. 8.1절과 5.1절의 비교 규칙은 9.3절이 덧붙인 규칙과 함께 읽는다. 같은 날 독립 검토(`cb8ff00` 기준) 반영(U0r)으로 `admin-routes.json`·`settings-contract.json`·`envelope.schema.json`을 다시 고쳤다(9.1절의 해당 행, 설계는 `stage4-design.md` F.1절). 이 개정 뒤 `admin-routes.json`은 60항목, 허용 설정 키는 37개, `ErrorCode` 열거형은 217개(바뀌지 않음), 도구 스키마는 바뀌지 않았다.
+- 3.0 개정(2026-11-21): 기준본은 Contract 3.0으로 고쳤다. 2.4.2와 다른 곳은 9절 변경표의 행뿐이고, 1~8절은 2.4.2 기준본을 만든 기록이다. 8.1절과 5.1절의 비교 규칙은 9.3절이 덧붙인 규칙과 함께 읽는다. 같은 날 독립 검토(`cb8ff00` 기준) 반영(U0r)과 B1 계약 동기화(`BRIDGE_COMMAND_AUTOMATION`·Jev 5키 제거)로 `admin-routes.json`·`settings-contract.json`·`envelope.schema.json`을 고쳤다(9.1절의 해당 행, 설계는 `stage4-design.md` F.1절). 이 개정 뒤 `admin-routes.json`은 60항목, 허용 설정 키는 32개(제거 키 12개), `ErrorCode` 열거형은 217개(바뀌지 않음), 도구 스키마는 바뀌지 않았다.
 - 용도: JUnit 계약 시험이 Java 서버의 실제 출력을 이 기준본과 비교한다. 기준본은 `java/portal-web/src/test/resources/contract/` 아래에 있다.
 - 작성 방식: 소스를 읽어 옮겼다. Node·Gradle·Python은 실행하지 않았다(지시). 설명 문장은 한 글자도 다듬거나 번역하지 않고 소스 문자열 그대로 두었다(아래 4.3의 grep 대조로 확인).
 
@@ -279,15 +279,15 @@ hook에서 `portal-files.mjs`가 받는 하위 명령·인자 (hooks JSON에서 
 | `http/admin-routes.json` `POST /api/files/downloads` `auth30` | `owner` | `owner-or-device` | B-2, 규칙 「굳이 편의기능 있는건 빼지마」 |
 | `http/admin-routes.json` 정적 화면 항목 | 패턴 `/`, `/settings`, `/bridge`, `/preferences`, `/servers`, `/history`, `/app.js` | `/devices`, `/reconciliation`, `/login`을 더함. 서버가 HTML에 값을 끼워 넣지 않음(화면이 `GET /api/session`을 읽음), 본문 CSP의 `form-action`은 `'self'` | A.6, 검토 N12 |
 | `http/admin-routes.json` `GET /assets/**` | 없음 | 정적 항목 하나 추가(UI의 ES 모듈, 59 → 60항목) | A.6, 검토 N12 |
-| `http/admin-routes.json` `GET /api/session` | `{mode}` | `{mode, authenticated, bridgeDisplayName, targetDisplayName}`, 로그인 세션이면 `commandAutomation`·`multiTarget`·`csrfToken`도. 익명에는 세션도 토큰도 주지 않음 | B-4, 검토 N15 |
+| `http/admin-routes.json` `GET /api/session` | `{mode}` | `{mode, authenticated, bridgeDisplayName, targetDisplayName}`, 로그인 세션이면 `multiTarget`·`csrfToken`도(`commandAutomation` 제거). 익명에는 세션도 토큰도 주지 않음 | B-4, 검토 N15, B1(`T4`) |
 | `http/admin-routes.json` 로그인 항목 3개의 요청·응답 | (3.0에서 새로 생긴 항목) | `POST /login/token`은 CSRF 제외·Origin 필수·429 `LOGIN_THROTTLED`, OIDC 시작은 503 `LOGIN_BUSY`·`redirect_uri`는 `BRIDGE_ADMIN_ORIGIN`에서, 콜백은 허용 계정이 아니면 403 HTML·그 밖의 실패는 `/login?error` | B-4a, B-8a, 검토 N5·N9·N15 |
 | `mcp/envelope.schema.json` `x-portal-errorCodes.webLayerCodes` | 없음 | 보안 계층 HTTP 전용 코드 여섯 개(`UNAUTHENTICATED`·`FORBIDDEN`·`CSRF_REJECTED`·`ORIGIN_REJECTED`·`LOGIN_THROTTLED`·`LOGIN_BUSY`)와 상태. `ErrorCode` 217개는 그대로 | B-7, B-4a |
 | `http/admin-routes.json` 모든 항목 `auth30` | 없음 | 3.0 인증 범주(9.2절) | B-1.5, B-2, B-4 |
 | `http/admin-routes.json` `GET /health` `responseShape` | `{healthy:true, version, …}`, 실패 `{error:…}` | 앞에 3.0 모양 `{"status":"UP"}`/503 `{"status":"DOWN"}`을 적고 2.4.2 문장은 뒤에 기록으로 둠 | B-5 |
-| `settings/settings-contract.json` `allowedKeys` | `BRIDGE_AUDIT_PATH`, `BRIDGE_TRANSFER_ROOT`, `BRIDGE_ACCESS_TEAM_DOMAIN`, `BRIDGE_ACCESS_AUD`, `BRIDGE_ACCESS_OWNER_EMAILS`, `BRIDGE_OIDC_JWKS_URL`, `BRIDGE_OIDC_OWNER_EMAILS` 있음 | 위 7개 없음. `BRIDGE_DATA_DIR`, `BRIDGE_OIDC_CLIENT_SECRET`, `BRIDGE_OIDC_OWNER_SUBJECT`, `BRIDGE_SOURCE_URL` 있음 | B-1.6, 2026-11-15 결정 1·5, 2026-11-21 사용자 결정 |
-| `settings/settings-contract.json` `defaults` | `BRIDGE_SOURCE_URL` 없음 | `"BRIDGE_SOURCE_URL": ""` | B-1.6, B-9 |
+| `settings/settings-contract.json` `allowedKeys` | `BRIDGE_AUDIT_PATH`, `BRIDGE_TRANSFER_ROOT`, `BRIDGE_ACCESS_*`(3), `BRIDGE_OIDC_JWKS_URL`, `BRIDGE_OIDC_OWNER_EMAILS`, `BRIDGE_COMMAND_AUTOMATION`, `BRIDGE_JEV_*`(3), `JEV_API_KEY` 있음 | 위 12개 없음. `BRIDGE_DATA_DIR`, `BRIDGE_OIDC_CLIENT_SECRET`, `BRIDGE_OIDC_OWNER_SUBJECT`, `BRIDGE_SOURCE_URL` 있음 | B-1.6, 2026-11-15 결정 1·5, 2026-11-21 사용자 결정, B1(`T4`·`U8`) |
+| `settings/settings-contract.json` `defaults` | `BRIDGE_SOURCE_URL` 없음, `BRIDGE_COMMAND_AUTOMATION`·`BRIDGE_JEV_*`(3) 있음 | `"BRIDGE_SOURCE_URL": ""` 추가, `BRIDGE_COMMAND_AUTOMATION`·`BRIDGE_JEV_*`(3) 제거 | B-1.6, B-9, B1(`T4`·`U8`) |
 | `settings/settings-contract.json` `adminAuthModes` | 없음(2.x 값 token·access·oidc) | `["token","oidc"]` | B-1.6 |
-| `settings/settings-contract.json` `keyPrefix`·`unknownKeyPolicy`·`removedKeys` | 없음 | `BRIDGE_`, 옛 키 가드의 규칙, 뺀 7개 키와 교체 이유(허용 키 40 → 37) | A.1(`LegacyKeyGuard`), 검토 N16 |
+| `settings/settings-contract.json` `keyPrefix`·`unknownKeyPolicy`·`removedKeys` | 없음 | `BRIDGE_`, 옛 키 가드의 규칙, 뺀 12개 키와 교체 이유(허용 키 40 → 32) | A.1(`LegacyKeyGuard`), 검토 N16, B1(`T4`·`U8`) |
 | hooks 비교 규칙 | 플러그인 매니페스트 전 필드 비교 | 매니페스트 `version` 제외(JSON은 그대로) | B-1.7 |
 
 ### 9.2 `auth30` 범주

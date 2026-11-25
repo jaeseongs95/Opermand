@@ -35,8 +35,8 @@ import org.springframework.stereotype.Component;
 @Component
 public final class WindowsCommandLineGrammar implements CommandLineGrammar {
 
-    /** PowerShell reads ASCII and curved quotes as string delimiters, mixed. The text is not normalised; a line that has one goes to the full evaluation. */
-    private static final Pattern CURVED_QUOTE = Pattern.compile("[\\u2018\\u2019\\u201c\\u201d]");
+    /** PowerShell 5.1 reads ASCII and Unicode quotes (U+2018..U+201E) as string delimiters, mixed (D-0070). A line that has one goes to the full evaluation. */
+    private static final Pattern CURVED_QUOTE = Pattern.compile("[\\u2018\\u2019\\u201a\\u201b\\u201c\\u201d\\u201e]");
     /** The control characters of the C0 and C1 ranges; a TAB or a line break in the line is one of them (2.x windows-command-line.mjs). */
     private static final Pattern CONTROL = Pattern.compile("[\\u0000-\\u001f\\u007f-\\u009f]");
     /** The characters that end a word. */

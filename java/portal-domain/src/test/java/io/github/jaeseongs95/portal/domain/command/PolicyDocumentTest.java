@@ -65,7 +65,7 @@ class PolicyDocumentTest {
         assertThat(new WindowsPolicyName("C:/Windows/System32/whoami.exe").key()).isEqualTo("c:\\windows\\system32\\whoami.exe");
         assertThat(new WindowsPolicyName("c:\\scripts\\run.ps1").key()).isEqualTo("c:\\scripts\\run.ps1");
         for (String bad : List.of("Get-Date", "whoami", " tool.exe", "tool.exe ", "C:\\a\\..\\b.exe", "C:\\a\\.\\b.exe", "C:\\a \\b.exe", "C:\\a.\\b.exe", "C:\\a|b.exe",
-            "C:\\a$b.exe", "C:\\a:b.exe", "x\u2018y.exe", "tool\u200b.exe", "C:\\run.sh", "a".repeat(513) + ".exe")) {
+            "C:\\a$b.exe", "C:\\a:b.exe", "x\u2018y.exe", "x\u201ay.exe", "x\u201by.exe", "x\u201ey.exe", "tool\u200b.exe", "C:\\run.sh", "a".repeat(513) + ".exe")) {
             assertThatThrownBy(() -> new WindowsPolicyName(bad)).as(bad).isInstanceOf(IllegalArgumentException.class);
             assertThat(WindowsPolicyName.parse(bad)).as(bad).isInstanceOf(NormalizedName.Rejected.class);
         }

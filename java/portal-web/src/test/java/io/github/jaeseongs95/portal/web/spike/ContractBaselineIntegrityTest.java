@@ -91,14 +91,14 @@ class ContractBaselineIntegrityTest {
     }
 
     @Test
-    @DisplayName("S4-CB-22 the settings contract: 37 allowed keys, every default is allowed, the seven removed 2.x keys are not allowed and are listed with a reason")
+    @DisplayName("S4-CB-22 the settings contract: 32 allowed keys, every default is allowed, the twelve removed 2.x keys are not allowed and are listed with a reason")
     void settingsContractIsConsistent() {
         JsonNode settings = read("contract/settings/settings-contract.json");
         List<String> allowed = new ArrayList<>();
         settings.path("allowedKeys").forEach(key -> allowed.add(key.asString()));
-        assertThat(allowed).hasSize(37).doesNotHaveDuplicates().contains("BRIDGE_DATA_DIR", "BRIDGE_OIDC_OWNER_SUBJECT", "BRIDGE_OIDC_CLIENT_SECRET", "BRIDGE_SOURCE_URL");
+        assertThat(allowed).hasSize(32).doesNotHaveDuplicates().contains("BRIDGE_DATA_DIR", "BRIDGE_OIDC_OWNER_SUBJECT", "BRIDGE_OIDC_CLIENT_SECRET", "BRIDGE_SOURCE_URL");
         for (String key : allowed) {
-            assertThat(key.startsWith(settings.path("keyPrefix").asString()) || key.equals("JEV_API_KEY")).as(key).isTrue();
+            assertThat(key.startsWith(settings.path("keyPrefix").asString())).as(key).isTrue();
         }
         for (String key : settings.path("defaults").propertyNames()) {
             assertThat(allowed).as("default %s is an allowed key", key).contains(key);
@@ -109,7 +109,8 @@ class ContractBaselineIntegrityTest {
             assertThat(entry.path("reason").asString()).as(entry.path("key").asString()).isNotBlank();
         }
         assertThat(removed).containsExactlyInAnyOrder("BRIDGE_ACCESS_TEAM_DOMAIN", "BRIDGE_ACCESS_AUD", "BRIDGE_ACCESS_OWNER_EMAILS", "BRIDGE_OIDC_OWNER_EMAILS",
-            "BRIDGE_OIDC_JWKS_URL", "BRIDGE_AUDIT_PATH", "BRIDGE_TRANSFER_ROOT");
+            "BRIDGE_OIDC_JWKS_URL", "BRIDGE_AUDIT_PATH", "BRIDGE_TRANSFER_ROOT", "BRIDGE_COMMAND_AUTOMATION", "BRIDGE_JEV_ENABLED", "BRIDGE_JEV_MAX_CALLS",
+            "BRIDGE_JEV_KEY_REF", "JEV_API_KEY");
         assertThat(allowed).doesNotContainAnyElementsOf(removed);
         assertThat(settings.path("adminAuthModes").toString()).isEqualTo("[\"token\",\"oidc\"]");
     }

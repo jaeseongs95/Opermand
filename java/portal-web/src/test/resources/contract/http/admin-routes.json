@@ -97,7 +97,7 @@
     "auth": "routeKind session (admin-policy.mjs:14): mode token => no authentication; mode access|oidc => verified identity required, no browser session.",
     "auth30": "session-probe",
     "requestShape": "none; sends no cookie requirement. Never creates a session (stage4-design.md B-4, review N15).",
-    "responseShape": "3.0: 200 {mode, authenticated:false, bridgeDisplayName, targetDisplayName} without a session or with an expired one; for a valid session 200 {mode, authenticated:true, bridgeDisplayName, targetDisplayName, commandAutomation, multiTarget, csrfToken}. The CSRF token is only ever given to an authenticated session. 2.4.2: 200 {mode: adminAccess.mode} (mode values seen in source: token, access, oidc); the display names and flags were injected into the HTML as data-* attributes (protocol.mjs:243-245), which 3.0 does not do."
+    "responseShape": "3.0: 200 {mode, authenticated:false, bridgeDisplayName, targetDisplayName} without a session or with an expired one; for a valid session 200 {mode, authenticated:true, bridgeDisplayName, targetDisplayName, multiTarget, csrfToken}. The CSRF token is only ever given to an authenticated session. 2.4.2: 200 {mode: adminAccess.mode} (mode values seen in source: token, access, oidc); the display names and flags were injected into the HTML as data-* attributes (protocol.mjs:243-245), which 3.0 does not do."
   },
   {
     "port": "admin", "method": "GET", "pathPattern": "^/api/version$", "source": "src/adapters/http/protocol.mjs:170-175",

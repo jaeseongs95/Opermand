@@ -19,8 +19,8 @@ public record WindowsPolicyName(@JsonValue String text) implements PolicyName {
     private static final Pattern MODULE_COMMAND = Pattern.compile("[a-z0-9_][a-z0-9_.-]*\\\\[a-z][a-z0-9]*-[a-z][a-z0-9]*", Pattern.CASE_INSENSITIVE);
     private static final Pattern EXECUTABLE = Pattern.compile("[a-z0-9_][a-z0-9_.+-]*\\.(?:exe|com|cmd|bat)", Pattern.CASE_INSENSITIVE);
     private static final Pattern ABSOLUTE_EXECUTABLE = Pattern.compile("[a-z]:[\\\\/].+\\.(?:exe|com|cmd|bat|ps1)", Pattern.CASE_INSENSITIVE);
-    /** PowerShell reads curved quotes as string delimiters, mixed with ASCII ones. The text is not normalised; a name that has one goes to a full evaluation. */
-    private static final Pattern CURVED_QUOTE = Pattern.compile("[\\u2018\\u2019\\u201c\\u201d]");
+    /** PowerShell 5.1 reads curved and low/reversed Unicode quotes (U+2018..U+201E) as string delimiters, mixed with ASCII ones (D-0070). A name that has one goes to a full evaluation. */
+    private static final Pattern CURVED_QUOTE = Pattern.compile("[\\u2018\\u2019\\u201a\\u201b\\u201c\\u201d\\u201e]");
     private static final Pattern FORBIDDEN_IN_PATH = Pattern.compile("[<>\"|?*`$]");
     private static final Pattern PATH_SEPARATOR = Pattern.compile("[\\\\/]");
 

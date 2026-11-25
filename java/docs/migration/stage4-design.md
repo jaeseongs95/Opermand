@@ -81,7 +81,7 @@
 | U5 | MCP 도구 24개·SOURCE 실행기·desktop 키·lease 기록·files 키 멱등 기록 | U4 |
 | U6 | 관리자 HTTP API(기기 토큰 관리·staged UUID·소유자 정리와 OwnerConfirmed 증거 저장 포함) | U4 |
 | U7 | 정적 관리 UI·MCP Apps 카드·AGPL 소스 안내 | U6(화면이 부르는 API) |
-| U8 | 위험 평가(Jev)·명령 자동화·비밀 해석기 | U3 |
+| U8 | 명령 정책(결정적 규칙 전용)·비밀 해석기 (Jev 3.0 제외) | U3 |
 | U9 | 릴리스 카탈로그·환경 편집·선택 어댑터 | U4(환경 편집 API의 인증), U19(재시작 계약) |
 | U18 | 작업 본문을 첨부 메타 표 + 파일로 옮김(B-15) | U5·U6(마이그레이션 `V11`~`V13` 뒤, F.2절. 같은 `operation_*` 표를 바꾸기 때문) |
 | U19 | 재시작·정지 계약과 서비스 진입점(systemd, procrun)(B-11) | U3 |
@@ -98,18 +98,18 @@ U5·U6·U8은 U4 뒤에 병렬로 할 수 있다. U18~U21은 이 개정(U0r)이 
 목표: `server.assembly.AssemblyDefaults`의 시험용 기본값을 3.0 설정 계약(B-1.6)의 바인딩으로 바꾼다. S3 11.4 「설정 바인딩」 항목을 닫는다.
 
 - `server.config.BridgeProperties` `[결정]`: `@ConfigurationProperties(prefix = "bridge")` `@Validated` record. 환경 변수 이름의 밑줄마다 점이 되도록 중첩한다(`BRIDGE_MCP_TOKEN` → `bridge.mcp.token`, `BRIDGE_ADMIN_AUTH_MODE` → `bridge.admin.auth.mode`). 근거: 계획 정본 「env 이름」(Boot relaxed binding은 대시를 지우므로 중첩으로 맞춘다).
-  - 하위 record 예: `Mcp(port, token)`, `Admin(port, token, origin, Auth(mode))`, `Oidc(issuer, Client(id, secret), Owner(subject))`, `Ui(enabled, Tool(prefix), Ticket(key))`, `Data(dir)`, `Config(path)`, `Transfer(maxBytes→max.bytes …)`, `Source(url)`, `Jev(…)`, `Vault(…)`.
+  - 하위 record 예: `Mcp(port, token)`, `Admin(port, token, origin, Auth(mode))`, `Oidc(issuer, Client(id, secret), Owner(subject))`, `Ui(enabled, Tool(prefix), Ticket(key))`, `Data(dir)`, `Config(path)`, `Transfer(maxBytes→max.bytes …)`, `Source(url)`, `Vault(…)`.
   - 비밀 값(`*_TOKEN`, `*_KEY`, `*_SECRET`)은 문자열이 아니라 기존 `SecretValue`로 받는다(로그·`toString`에 값이 나오지 않음).
 - `server.config.BridgeTargetsConverter`: `BRIDGE_TARGETS`(JSON)를 받는 `@ConfigurationPropertiesBinding` 변환기 하나. Windows 대상의 Python 해석기 경로(`pythonExecutable`)도 여기서 받는다(B-3).
 - `server.config.SecretEnvFileLoader`(`EnvironmentPostProcessor`): 비밀 env 파일을 읽는다(feature-map 이름 그대로).
-- `server.config.LegacyKeyGuard`(`EnvironmentPostProcessor`, `SecretEnvFileLoader` 뒤에 실행) `[결정]`(검토 N16, 사례 S4-ST-04): 환경과 읽어 들인 env 파일에서 접두 `BRIDGE_`를 가진 키를 모두 모아 기준본 `settings-contract.json`의 `allowedKeys`와 `removedKeys`로 가른다. 허용 키 밖이면 시작을 멈추고, `removedKeys`에 있으면 그 이유(교체할 키)와 업그레이드 안내의 절 이름을 메시지에 넣는다. 값은 메시지에 넣지 않는다.
+- `server.config.LegacyKeyGuard`(`EnvironmentPostProcessor`, `SecretEnvFileLoader` 뒤에 실행) `[결정]`(검토 N16, 사례 S4-ST-04): 환경과 읽어 들인 env 파일에서 접두 `BRIDGE_`를 가진 키 및 `removedKeys`의 모든 키를 모아 기준본 `settings-contract.json`의 `allowedKeys`와 `removedKeys`로 가른다. 허용 키 밖이면 시작을 멈추고, `removedKeys`에 있으면 그 이유(교체할 키)와 업그레이드 안내의 절 이름을 메시지에 넣는다. 값은 메시지에 넣지 않는다.
   - 왜 `@ConfigurationProperties(ignoreUnknownFields = false)`로 하지 않는가: 환경 변수 이름은 `BRIDGE_FOO`처럼 점 표기와 1대1이 아니어서 Boot의 바인더는 환경 변수 쪽 알 수 없는 키를 알려 주지 않는다(`ignoreUnknownFields`는 `bridge.*` 속성 소스의 키에만 닿는다). 그래서 허용 목록 대조를 명시적인 가드가 맡는다(S4-ST-04가 두 경로 모두 고정한다).
   - 허용·제거 목록의 정본은 제품의 main 자원 `settings/settings-keys.json`(기준본 `allowedKeys`·`removedKeys`와 같은 내용)이고, S4-CB-05가 기준본과의 차이 0을 단정한다. 가드는 이 자원만 읽는다.
-  - `JEV_API_KEY`는 `BRIDGE_` 접두가 없는 비밀 파일 키라 가드의 대상이 아니다(비밀 파일 키로 따로 대조).
+  - `JEV_API_KEY`·`BRIDGE_JEV_*`·`BRIDGE_COMMAND_AUTOMATION`은 3.0.0에서 제외되어 `removedKeys`에 들어가며 기동 시 명시적 이유로 거절한다(`S-D0119-03`, `S-D0119-07`).
 - `server.assembly.SettingsAssembly`: `BridgeProperties`를 `SshSettings`, `ConcurrencyLimits`, `AdmissionLimits`, `ApprovalPolicy`, `ExecutionLimits`, `StorageSettings`, `ConnectionFiles`, `TargetSource`, `ConfiguredTargets`로 옮기는 `@Bean` 모음. `AssemblyDefaults`는 지운다(시험용 값은 시험 소스로 옮긴다).
-  - 데이터 폴더 `[결정]`: `BRIDGE_DATA_DIR` 하나 아래에 H2 파일(`portal`), `artifacts/`, `outputs/`, `attachments/`(작업 본문, B-15), `known_hosts`를 둔다. 2.x의 `BRIDGE_AUDIT_PATH`·`BRIDGE_TRANSFER_ROOT`는 없앤다(B-1.6). 근거: 감사는 DB 표(2026-11-15 결정 5)라 파일 경로가 필요 없고, 저장 위치를 한 곳으로 모으면 백업·이전·권한 검사가 한 폴더로 끝난다(S3 D3-10 「기본은 데이터 디렉터리 아래」와 같은 방향). 기본값은 없다(설치 명령이 쓴다, `StorageSettings` 주석과 같은 원칙).
+  - 데이터 폴더 `[결정]`: `BRIDGE_DATA_DIR` 하나 아래에 H2 파일(`portal`), `artifacts/`, `outputs/`, `attachments/`(작업 본문, B-15), `keyring/`(첨부 암호화 키링), `known_hosts`를 둔다. 2.x의 `BRIDGE_AUDIT_PATH`·`BRIDGE_TRANSFER_ROOT`는 없앤다(B-1.6). 근거: 감사는 DB 표(2026-11-15 결정 5)라 파일 경로가 필요 없고, 저장 위치를 한 곳으로 모으면 백업·이전·권한 검사가 한 폴더로 끝난다(S3 D3-10 「기본은 데이터 디렉터리 아래」와 같은 방향). 기본값은 없다(설치 명령이 쓴다, `StorageSettings` 주석과 같은 원칙).
   - DB: `spring.datasource.url`이 비어 있으면 `jdbc:h2:file:<dataDir>/portal`. 다른 DBMS는 Boot 표준 키(`SPRING_DATASOURCE_*`)로 준다(새 `BRIDGE_*` 키를 만들지 않는다).
-- 감사 DB 표 `[결정]`: `store.audit.JdbcAuditLog`(`AuditLog` 구현)와 `db/expand/V9__audit_record.sql`(번호는 F.2절. `origin/feature/v300-fix-store-domain`이 `V8__budget_gate.sql`을 이미 쓰므로 V8이 아니다). 추가만 하고, 커밋 뒤 반환하며, 읽기·수정·삭제 경로가 없고, 고정 한도가 없다. 비밀·명령 원문·본문은 열에 넣지 않는다(본문은 DB 열 금지 기준). `JsonlAuditLog`·`AuditFile`·`AuditFileLocation`은 지운다. 작업 id가 없는 사건(`ADMIN_LOGIN_REFUSED`, `DEVICE_TOKEN_*`, `files stat`의 상관 키)을 담도록 `AuditEvent`·`AuditAction`을 일반화한다(B-12). 같은 출처의 연속 로그인 실패를 한 행으로 묶는 표 `audit_refusal_streak`도 같은 마이그레이션에 둔다(B-12, U-2).
+- 감사 DB 표 `[결정]`: `store.audit.JdbcAuditLog`(`AuditLog` 구현)와 `db/expand/V9__audit_record.sql`(번호는 F.2절. `V8__storage_budget.sql` 다음 번호). 추가만 하고, 커밋 뒤 반환하며, 읽기·수정·삭제 경로가 없고, 고정 한도가 없다. 비밀·명령 원문·본문은 열에 넣지 않는다(본문은 DB 열 금지 기준). `JsonlAuditLog`·`AuditFile`·`AuditFileLocation`은 지운다. 작업 id가 없는 사건(`ADMIN_LOGIN_REFUSED`, `DEVICE_TOKEN_*`, `files stat`의 상관 키)을 담도록 `AuditEvent`·`AuditAction`을 일반화한다(B-12). 같은 출처의 연속 로그인 실패를 한 행으로 묶는 표 `audit_refusal_streak`도 같은 마이그레이션에 둔다(B-12, U-2).
 - 저장 위치 검사 `[결정]`(지원 파일 시스템, B-17): `StorageSettings`를 만들 때 데이터 폴더의 파일 저장소가 `posix` 또는 `acl` 보기를 지원하는지(`PrivateStorages`, 이미 있음) 확인하고, 지원하지 않으면 시작을 멈추며 저장소 종류·부족한 보기·허용되는 종류를 메시지에 적는다.
 - 쓰기 범위: `portal-server/src/**/server/{config,assembly}/**`, `portal-server/src/main/resources/settings/**`, `portal-app/src/**/app/audit/**`(검토 N8: 어느 단위의 범위에도 없던 패키지), `portal-store/src/**/store/audit/**`, `portal-store/src/main/resources/db/expand/V9__audit_record.sql`.
 - 완료 사례: S4-ST-01~06, S4-AS-01~06, S4-CB-05.
@@ -174,11 +174,11 @@ U5·U6·U8은 U4 뒤에 병렬로 할 수 있다. U18~U21은 이 개정(U0r)이 
 - 쓰기 범위: `portal-web/src/main/resources/static/**`, `portal-web/src/**/web/ui/**`, `portal-web/src/test/**/web/ui/**`.
 - 완료 사례: S4-UI-01~08.
 
-### A.7 U8 위험 평가·명령 자동화·비밀
-- `web.jev.JevRiskEvaluator`(`app.risk.RiskEvaluator` 구현, `RestClient`), 호출 상한 `BRIDGE_JEV_MAX_CALLS`.
-- 명령 자동화: 기존 `app.policy`의 정책 저장과 `BRIDGE_COMMAND_AUTOMATION` 스위치를 잇는다. 자동 승인은 정책·위험 평가 둘 다 허용일 때만이다(2.x 의미 유지).
+### A.7 U8 명령 정책(결정적 규칙 전용)·비밀 해석기
+- 모델 기반 위험 평가(Jev, `JevRiskEvaluator`, `BRIDGE_JEV_*`, `JEV_API_KEY`)와 전역 자동화 스위치(`BRIDGE_COMMAND_AUTOMATION`)는 3.0.0에서 제외한다(`S-D0119-03`, `S-D0119-07`).
+- 명령 정책: 기존 `app.policy`의 결정적 규칙 판정(`RuleApprovalPolicy`)이 항상 동작하며 기본 자동승인을 구현한다.
 - 비밀: `app.secret.SecretResolver` 포트, `server.secret.LocalFileSecretStore`(`BRIDGE_SECRET_STORE_DIR`), `server.secret.VaultSecretStore`(`RestClient`, `BRIDGE_VAULT_*`). `*_REF` 키는 이 해석기를 거친다.
-- 쓰기 범위: `portal-web/src/**/web/jev/**`, `portal-app/src/**/app/{risk,policy,secret}/**`, `portal-server/src/**/server/secret/**`.
+- 쓰기 범위: `portal-app/src/**/app/{policy,secret}/**`, `portal-server/src/**/server/secret/**`.
 - 완료 사례: S4-RK-01~06.
 
 ### A.8 U9 릴리스 카탈로그·환경 편집·선택 어댑터
@@ -230,7 +230,7 @@ U5·U6·U8은 U4 뒤에 병렬로 할 수 있다. U18~U21은 이 개정(U0r)이 
    - 항목 수: 51 → 49(지움 2) → 58(더함 9: 로그인 4, 기기 토큰 3, 정리 2) → 59(`/assets/**` 1) → 60(나눔 1: `download`가 별도 항목). 범주별: `owner` 29, `owner-or-device` 14, `owner-token` 6, `static` 3(화면, `/assets/**`, `/signed-out`), `login` 3, `download-capability` 2, `public` 1, `mcp-bearer` 1, `session-probe` 1.
    - `GET /health`: 응답을 Actuator 모양(`{"status":"UP"}`, 실패 503 `{"status":"DOWN"}`)으로 바꾼다(B-5). 2.x가 인증 없이 내던 판·인증 모드·수용 상태는 내지 않는다. 2.4.2 응답 문장은 같은 필드 뒤에 기록으로 남긴다.
    - 오류 본문: 관리자 HTTP의 4xx·5xx 본문은 RFC 9457 `application/problem+json`이다(B-7). 2.x의 `{error:'…'}`는 `auth`·`responseShape`의 2.4.2 기록으로만 남는다.
-6. **설정(`settings-contract.json`)**: 허용 키에서 `BRIDGE_ACCESS_TEAM_DOMAIN`, `BRIDGE_ACCESS_AUD`, `BRIDGE_ACCESS_OWNER_EMAILS`(access 모드), `BRIDGE_OIDC_OWNER_EMAILS`(이메일 대신 계정 식별자), `BRIDGE_OIDC_JWKS_URL`(OAuth2 Login은 발급자 discovery로 키를 찾음), `BRIDGE_AUDIT_PATH`(감사는 DB 표), `BRIDGE_TRANSFER_ROOT`(데이터 폴더 하나)를 뺀다. `BRIDGE_DATA_DIR`, `BRIDGE_OIDC_OWNER_SUBJECT`, `BRIDGE_OIDC_CLIENT_SECRET`, `BRIDGE_SOURCE_URL`을 더한다. 기본값에 `BRIDGE_SOURCE_URL: ""`(빈 값 = 이 판의 공개 저장소 태그)를 더한다. `BRIDGE_ADMIN_AUTH_MODE`가 받는 값은 `token`·`oidc`다(기본 `token`). 이 값 목록을 새 최상위 키 `adminAuthModes: ["token","oidc"]`로 적는다(2.4.2 기준본에는 값 목록이 없었다). 허용 키는 40 → 37(뺀 7, 더한 4). 뺀 7개는 새 최상위 키 `removedKeys`(키와 교체 이유)로 옮겨 적고, `keyPrefix: "BRIDGE_"`와 `unknownKeyPolicy`(가드의 규칙, A.1)를 더한다. 이는 S4-ST-04가 읽는 입력이다(검토 N16). TLS·바인딩 주소 설정 키는 더하지 않는다(B-8a).
+6. **설정(`settings-contract.json`)**: 허용 키에서 `BRIDGE_ACCESS_TEAM_DOMAIN`, `BRIDGE_ACCESS_AUD`, `BRIDGE_ACCESS_OWNER_EMAILS`(access 모드), `BRIDGE_OIDC_OWNER_EMAILS`(이메일 대신 계정 식별자), `BRIDGE_OIDC_JWKS_URL`(OAuth2 Login은 발급자 discovery로 키를 찾음), `BRIDGE_AUDIT_PATH`(감사는 DB 표), `BRIDGE_TRANSFER_ROOT`(데이터 폴더 하나), `BRIDGE_COMMAND_AUTOMATION`(결정적 규칙 상시 적용), `BRIDGE_JEV_ENABLED`·`BRIDGE_JEV_MAX_CALLS`·`BRIDGE_JEV_KEY_REF`·`JEV_API_KEY`(Jev 3.0 제외) 등 12개 키를 뺀다. `BRIDGE_DATA_DIR`, `BRIDGE_OIDC_OWNER_SUBJECT`, `BRIDGE_OIDC_CLIENT_SECRET`, `BRIDGE_SOURCE_URL`을 더한다. 기본값에 `BRIDGE_SOURCE_URL: ""`(빈 값 = 이 판의 공개 저장소 태그)를 더하고 제거된 4개 키의 기본값을 뺀다. `BRIDGE_ADMIN_AUTH_MODE`가 받는 값은 `token`·`oidc`다(기본 `token`). 이 값 목록을 새 최상위 키 `adminAuthModes: ["token","oidc"]`로 적는다(2.4.2 기준본에는 값 목록이 없었다). 허용 키는 40 → 32(뺀 12, 더한 4). 뺀 12개는 새 최상위 키 `removedKeys`(키와 교체 이유)로 옮겨 적고, `keyPrefix: "BRIDGE_"`와 `unknownKeyPolicy`(가드의 규칙, A.1)를 더한다. 이는 S4-ST-04가 읽는 입력이다(검토 N16, B1 `T4`·`U8`). TLS·바인딩 주소 설정 키는 더하지 않는다(B-8a).
    - **`envelope.schema.json`**: `x-portal-errorCodes.webLayerCodes`를 더한다(보안 계층이 컨트롤러 앞에서 내는 HTTP 전용 코드 여섯 개, 상태 포함). `ErrorCode` 열거형 여덟 개와 217개 합계는 바뀌지 않는다(B-7).
 7. **hooks**: JSON은 바꾸지 않는다. 대조 규칙만 바꾼다: 플러그인 매니페스트의 `version`은 제품 판을 따르므로 `serverInfo.version`처럼 대조에서 뺀다(`contract-baseline.md` 9.3절).
 8. **바꾸지 않는 것**(확인 목록): 도구 이름·개수(24), 나머지 도구의 입력(도구 스키마는 이 개정에서 한 글자도 바뀌지 않았다), 하위 쓰기 도구(`cancel`, `artifact-chunk`, `artifact-finish`, `desktop-input`, `desktop-close`)에 키를 더하지 않음(2026-11-15 결정 1), `desktop-input`의 요청 단위 `requestKey`, 봉투 구조와 `error.code` 형식, 위 6번 밖의 설정 키와 기본값, 포트 기본값, hook 이벤트·필드, 클라이언트 명령 이름 `portal-files`(설명 문장에 나옴), `server.json`(MCP `instructions`가 말하는 「portal-files가 UUID를 돌려준다」는 `/api/artifacts` 복원으로 그대로 맞다, B-2a).
@@ -828,6 +828,6 @@ U5·U6·U8은 U4 뒤에 병렬로 할 수 있다. U18~U21은 이 개정(U0r)이 
 | 4. 3.0 OIDC 모드의 다운로드 링크가 로그인 세션을 요구하지 않음(2.x oidc 모드와 다름) | (가) 티켓만(2.x token 모드와 같음) (나) oidc 모드에서만 세션 요구(MCP 카드의 링크가 열리지 않음) | (가) | B-2b에 (가)로 적음(리드 판정 L-3). 사용자에게 알림용 |
 | 5. 앱 안 TLS를 3.0.0에 넣을지 | (가) 넣지 않음(2.x와 같음, 후속 minor) (나) PEM만(Spring Boot SSL 번들, 새 라이브러리 없음, 포트별 설정 키가 늘어 기준본 변경) (다) PEM+ACME(RFC 8555 라이브러리 승인 필요) | (가) | B-8a·F.4에 미정. 2.x에 없던 기능이므로 삭제가 아님. feature-map 230행에 선택 TLS 설계가 적혀 있어 사용자 확인이 필요 |
 | 6. procrun에서 재시작이 안 될 때의 대비 | (가) 「직접 재시작」 안내(`NO_SUPERVISOR`)로 내림 (나) procrun을 `Java` 모드(자식 프로세스)로 바꿔 부모가 재시작 (다) 다른 서비스 래퍼 도입(새 도구, 승인 필요) | (가), S4-RS-05 결과를 본 뒤 | B-11에 (가)가 설계 |
-| 7. 작업 본문 이전 방식(U18) | (가) 앞으로만 가는 `V14`·`V15`(표가 비어 있어야 함, 설계) (나) 배포 전이므로 `V1`을 직접 고침(번호는 줄지만 다른 브랜치가 가진 `V1`과 충돌, 개발 DB는 어차피 새로 만들어야 함) | (가) | B-15에 (가) |
+| 7. 작업 본문 이전 방식(U18) | (가) 앞으로만 가는 `V14`·`V15` (나) 배포 전이므로 `V1`을 직접 고쳐 `${long_text}` 10열 제거 + `PAT1` AES-GCM 암호화 파일(`B5-Crypto1`) | (나) 확정 | 3.0.0 통합 계획 v2에서 (나)로 확정 |
 | 8. 감사 묶음·속도 제한의 상수(연속 5회, 15분, 분당 60, 인증 전 세션 256, 5분) | (가) 코드 상수 (나) 설정 키 | (가) | B-4a·B-12에 (가). (나)로 바꾸면 설정 키가 늘어 기준본을 고침 |
 | 9. Linux 설치의 Java 25 런타임 확보 방식 | 배포판 패키지 / JRE 묶음 동봉 | 확인 뒤 | B-17 미확인, U21이 조사 |
