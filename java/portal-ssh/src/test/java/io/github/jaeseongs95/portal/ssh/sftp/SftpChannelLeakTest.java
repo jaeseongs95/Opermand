@@ -8,11 +8,22 @@ import io.github.jaeseongs95.portal.app.remote.TransferFailureCause;
 import io.github.jaeseongs95.portal.ssh.testkit.EmbeddedSshServer;
 import io.github.jaeseongs95.portal.ssh.testkit.SshTestClient;
 import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import org.apache.sshd.client.session.ClientSession;
+import org.apache.sshd.common.channel.Channel;
+import org.apache.sshd.common.channel.ChannelListener;
+import org.apache.sshd.server.Environment;
+import org.apache.sshd.server.ExitCallback;
+import org.apache.sshd.server.channel.ChannelSession;
+import org.apache.sshd.server.command.Command;
+import org.apache.sshd.server.subsystem.SubsystemFactory;
 import org.apache.sshd.sftp.SftpModuleProperties;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.junit.jupiter.api.AfterEach;
@@ -94,6 +105,104 @@ class SftpChannelLeakTest {
             release.complete(null);
             assertThat(server.closedChannels().await(1, WAIT)).as("the channel that the server confirms late is closed").hasSize(1);
         } finally {
+            scheduler.shutdown();
+        }
+    }
+
+    @Test
+    @DisplayName("SSH_PORTAL-D-0107 a cancel that arrives after channel open while DefaultSftpClient.init() awaits SSH_FXP_VERSION closes the channel immediately instead of waiting 20s")
+    void aCancelDuringInitEndsWaitImmediatelyAndClosesChannel() throws Exception {
+        SftpModuleProperties.SFTP_CHANNEL_OPEN_TIMEOUT.set(client.sshClient(), Duration.ofSeconds(20));
+        CompletableFuture<Void> initStarted = new CompletableFuture<>();
+        SubsystemFactory silentSftp = new SubsystemFactory() {
+            @Override
+            public String getName() {
+                return "sftp";
+            }
+
+            @Override
+            public Command createSubsystem(ChannelSession channel) {
+                return new Command() {
+                    @Override
+                    public void setInputStream(InputStream in) {
+                    }
+
+                    @Override
+                    public void setOutputStream(OutputStream out) {
+                    }
+
+                    @Override
+                    public void setErrorStream(OutputStream err) {
+                    }
+
+                    @Override
+                    public void setExitCallback(ExitCallback callback) {
+                    }
+
+                    @Override
+                    public void start(ChannelSession sessionChannel, Environment env) {
+                        initStarted.complete(null);
+                    }
+
+                    @Override
+                    public void destroy(ChannelSession sessionChannel) {
+                    }
+                };
+            }
+        };
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setDaemon(true);
+        scheduler.initialize();
+        try (EmbeddedSshServer silentServer = EmbeddedSshServer.builder()
+                .password(TestSessions.USER, TestSessions.PASSWORD)
+                .customize(sshd -> sshd.setSubsystemFactories(List.of(silentSftp)))
+                .start();
+             ClientSession silentSession = client.open(silentServer, TestSessions.USER, TestSessions.PASSWORD)) {
+            CancelSource cancel = new CancelSource();
+            try (TransferWatch watch = new TransferWatch(scheduler, Clock.systemUTC(), Duration.ofSeconds(120), cancel)) {
+                initStarted.thenRun(cancel::cancel);
+                long started = System.nanoTime();
+
+                assertThatThrownBy(() -> new SftpChannels(Duration.ofMillis(400)).open(silentSession, watch)).isInstanceOf(IOException.class);
+
+                assertThat(Duration.ofNanos(System.nanoTime() - started)).as("the init wait ended promptly on cancel rather than waiting 20 seconds").isLessThan(Duration.ofSeconds(5));
+                assertThat(watch.fired()).contains(TransferFailureCause.CANCELLED);
+                assertThat(silentServer.closedChannels().await(1, WAIT)).hasSize(1);
+            }
+        } finally {
+            scheduler.shutdown();
+        }
+    }
+
+    @Test
+    @DisplayName("SSH_PORTAL-D-0107 an abandoned SFTP channel whose server never replies to open or close is force-closed locally after stop grace")
+    void anUnresponsiveServerCloseIsForcedAfterGrace() throws Exception {
+        SftpModuleProperties.SFTP_CHANNEL_OPEN_TIMEOUT.set(client.sshClient(), Duration.ofSeconds(20));
+        CompletableFuture<Channel> created = new CompletableFuture<>();
+        session.addChannelListener(new ChannelListener() {
+            @Override
+            public void channelInitialized(Channel channel) {
+                created.complete(channel);
+            }
+        });
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setDaemon(true);
+        scheduler.initialize();
+        CompletableFuture<Void> release = server.holdChannelOpens();
+        try {
+            CancelSource cancel = new CancelSource();
+            try (TransferWatch watch = new TransferWatch(scheduler, Clock.systemUTC(), Duration.ofSeconds(120), cancel)) {
+                server.channelOpenRequests().whenAtLeast(1).thenAccept(requests -> cancel.cancel());
+
+                assertThatThrownBy(() -> new SftpChannels(Duration.ofMillis(300)).open(session, watch)).isInstanceOf(IOException.class);
+
+                Channel clientChannel = created.get(WAIT.toSeconds(), TimeUnit.SECONDS);
+                assertThat(clientChannel.getCloseFuture().await(Duration.ofSeconds(5)))
+                    .as("forceCloseAfterGrace closes the local channel after grace even while the server stays silent")
+                    .isTrue();
+            }
+        } finally {
+            release.complete(null);
             scheduler.shutdown();
         }
     }

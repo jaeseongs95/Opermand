@@ -364,21 +364,43 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
     private Attempt attempt(SessionLease lease, RemoteTarget target, boolean elevated, TransferWatch watch) {
         if (elevated) {
             return switch (sudoChannels.open(lease.session(), target, watch)) {
-                case SudoSftpChannels.Opening.Opened opened -> new Attempt.Ready(opened.client());
-                case SudoSftpChannels.Opening.NoServer noServer -> new Attempt.Refused(TransferErrorCode.INVALID_REQUEST);
-                case SudoSftpChannels.Opening.NotStarted notStarted -> new Attempt.Refused(TransferErrorCode.PERMISSION_DENIED);
-                case SudoSftpChannels.Opening.LookRefused denied -> new Attempt.Refused(denied.code());
+                case SudoSftpChannels.Opening.Opened opened -> {
+                    lease.openAccepted();
+                    yield new Attempt.Ready(opened.client());
+                }
+                case SudoSftpChannels.Opening.NoServer noServer -> {
+                    lease.openAccepted();
+                    yield new Attempt.Refused(TransferErrorCode.INVALID_REQUEST);
+                }
+                case SudoSftpChannels.Opening.NotStarted notStarted -> {
+                    lease.openAccepted();
+                    yield new Attempt.Refused(TransferErrorCode.PERMISSION_DENIED);
+                }
+                case SudoSftpChannels.Opening.LookRefused denied -> {
+                    lease.openAccepted();
+                    yield new Attempt.Refused(denied.code());
+                }
                 // The session lives and there is no elevated channel without a refusal of the request (the server refused a channel, the program did not answer in time, the
                 // wait was interrupted): the same cause as the plain path gives, the session is kept; a stop that fired meanwhile is the cause (S-D0013-13, 14, 18 to 21).
-                case SudoSftpChannels.Opening.ChannelFailed failed -> new Attempt.Unreachable(watch.fired().orElse(TransferFailureCause.CHANNEL_OPEN_FAILED));
+                case SudoSftpChannels.Opening.ChannelFailed failed -> {
+                    if (failed.openRejected() && watch.fired().isEmpty()) {
+                        lease.openRejected();
+                    }
+                    yield new Attempt.Unreachable(watch.fired().orElse(TransferFailureCause.CHANNEL_OPEN_FAILED));
+                }
                 case SudoSftpChannels.Opening.Lost lost -> lostBeforeWork(lease, watch, lost.cause());
             };
         }
         try {
-            return new Attempt.Ready(channels.open(lease.session(), watch));
+            SftpClient client = channels.open(lease.session(), watch);
+            lease.openAccepted();
+            return new Attempt.Ready(client);
         } catch (IOException e) {
             if (!lease.session().isOpen()) {
                 return lostBeforeWork(lease, watch, e);
+            }
+            if (watch.fired().isEmpty() && SudoSftpChannels.isChannelOpenRefusal(e)) {
+                lease.openRejected();
             }
             LOG.debug("The SFTP channel could not be opened", e);
             return new Attempt.Unreachable(watch.fired().orElse(TransferFailureCause.CHANNEL_OPEN_FAILED));

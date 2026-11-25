@@ -4,10 +4,14 @@ import io.github.jaeseongs95.portal.app.remote.RemoteTarget;
 import io.github.jaeseongs95.portal.domain.error.TransferErrorCode;
 import java.io.EOFException;
 import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import org.apache.sshd.client.channel.ClientChannel;
 import org.apache.sshd.client.session.ClientSession;
+import org.apache.sshd.common.channel.exception.SshChannelOpenException;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.common.SftpException;
 import org.slf4j.Logger;
@@ -69,8 +73,13 @@ public class SudoSftpChannels {
          * The session lives and there is no elevated channel, without a refusal of the request: the server refused to open a channel (the one that looks for the program
          * or the one that runs it), or the program was found and its SFTP initialization ended without an answer or was interrupted, so whether it started is not known.
          * Neither is a refusal nor a start; the caller treats both as a channel that could not be opened.
+         *
+         * @param openRejected true when the failure carried {@link SshChannelOpenException} from the server (counted by the session pool against consecutive rejections)
          */
-        record ChannelFailed() implements Opening {
+        record ChannelFailed(boolean openRejected) implements Opening {
+            public ChannelFailed() {
+                this(false);
+            }
         }
 
         /**
@@ -132,8 +141,10 @@ public class SudoSftpChannels {
      * @return the open client, or why there is none
      */
     public Opening open(ClientSession session, RemoteTarget target, TransferWatch watch) {
+        Objects.requireNonNull(watch, "watch");
         try {
-            return GuardedSftpClient.whenOpening(opening -> watch.interruptWith(() -> opening.cancel()), () -> open(session, target));
+            return GuardedSftpClient.whenOpening(opening -> watch.interruptWith(() -> GuardedSftpClient.giveUp(opening, watch, plain.stopGrace())),
+                () -> openInternal(session, target, watch));
         } catch (IOException e) {
             throw new IllegalStateException("The opening of an elevated channel reports its failures as a result, not as an exception", e);
         }
@@ -147,35 +158,94 @@ public class SudoSftpChannels {
      * @return the open client, or why there is none
      */
     public Opening open(ClientSession session, RemoteTarget target) {
+        return openInternal(session, target, null);
+    }
+
+    private Opening openInternal(ClientSession session, RemoteTarget target, TransferWatch watch) {
         Objects.requireNonNull(target, "target");
         SftpClient look;
         try {
             look = plain.open(session);
         } catch (IOException e) {
             LOG.debug("The SFTP channel that looks for the server program could not be opened", e);
-            return session.isOpen() ? new Opening.ChannelFailed() : new Opening.Lost(e);
+            if (!session.isOpen()) {
+                return new Opening.Lost(e);
+            }
+            boolean rejected = (watch == null || watch.fired().isEmpty()) && isChannelOpenRefusal(e);
+            return new Opening.ChannelFailed(rejected);
         }
         Optional<String> server;
         try {
             server = serverProgram(look, serverPaths.candidates(target));
         } catch (IOException e) {
             LOG.debug("The look for the SFTP server program failed", e);
+            if (watch != null && watch.fired().isPresent() && session.isOpen()) {
+                return new Opening.ChannelFailed(false);
+            }
             return switch (classifier.verdict(e, SftpFailureClassifier.Site.TARGET_FILE)) {
                 case SftpFailureClassifier.Verdict.Refusal refusal -> new Opening.LookRefused(refusal.code());
                 case SftpFailureClassifier.Verdict.Lost lost -> new Opening.Lost(e);
             };
         } finally {
             plain.closeQuietly(look);
+            awaitCloseQuietly(look, watch);
         }
         if (server.isEmpty()) {
             return new Opening.NoServer();
+        }
+        if (watch != null && watch.stopRequested().isPresent()) {
+            return new Opening.ChannelFailed(false);
         }
         try {
             return new Opening.Opened(ExecSftpClient.open(session, "sudo -n " + new ShellWord(server.orElseThrow()).quoted()));
         } catch (IOException e) {
             LOG.debug("The SFTP server program did not start under sudo -n", e);
-            return failedStart(session, e);
+            return failedStart(session, e, watch);
         }
+    }
+
+    /**
+     * Waits boundedly for the server to confirm the close of the plain lookup channel before opening the elevated {@code exec} channel, so a server configured with
+     * {@code MaxSessions=1} has freed the lookup slot before the second channel-open arrives.
+     */
+    private void awaitCloseQuietly(SftpClient look, TransferWatch watch) {
+        ClientChannel channel = look.getClientChannel();
+        if (channel == null || channel.isClosed() || !channel.isClosing()) {
+            return;
+        }
+        if (watch != null && watch.stopRequested().isPresent()) {
+            return;
+        }
+        Duration wait = plain.stopGrace();
+        if (watch != null) {
+            Duration remaining = watch.remaining();
+            if (remaining.compareTo(wait) < 0) {
+                wait = remaining;
+            }
+        }
+        if (wait.isZero() || wait.isNegative()) {
+            return;
+        }
+        if (watch != null) {
+            watch.interruptWith(() -> channel.close(true));
+        }
+        try {
+            channel.getCloseFuture().await(wait);
+        } catch (InterruptedIOException e) {
+            Thread.currentThread().interrupt();
+            LOG.debug("Interrupted while waiting for the SFTP lookup channel to finish closing", e);
+        } catch (IOException e) {
+            LOG.debug("Waiting for the SFTP lookup channel to finish closing failed; continuing", e);
+        }
+    }
+
+    static boolean isChannelOpenRefusal(Throwable failure) {
+        for (Throwable current = failure; current != null; current = current.getCause()) {
+            if (current instanceof SshChannelOpenException) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /**
@@ -183,6 +253,7 @@ public class SudoSftpChannels {
      * request (the wait is {@code SftpModuleProperties.SFTP_CHANNEL_OPEN_TIMEOUT}, 15 seconds by default), and ends the opening in one of these ways:
      * <ul>
      *   <li>the session is gone: {@link Opening.Lost};</li>
+     *   <li>the transfer was stopped from outside (cancel or deadline closed the channel): {@link Opening.ChannelFailed};</li>
      *   <li>the channel closed before the version answer ({@code EOFException}, "Closing while await init message"): the program ended without speaking SFTP, which is
      *       what {@code sudo -n} does when it needs a password or the account may not use it: {@link Opening.NotStarted}, the only case that is a refusal;</li>
      *   <li>anything else with a live session: the server answered the request to open the channel with an open failure ({@code SshChannelOpenException}), the wait
@@ -191,7 +262,7 @@ public class SudoSftpChannels {
      *       apart: {@link Opening.ChannelFailed}.</li>
      * </ul>
      */
-    private Opening failedStart(ClientSession session, IOException failure) {
+    private Opening failedStart(ClientSession session, IOException failure, TransferWatch watch) {
         // MINA's exceptions wrap what happened, so the most specific cause of the chain is the one to ask. Spring's NestedExceptionUtils is the standard tool for a chain
         // of causes (org.springframework.core.NestedExceptionUtils#getMostSpecificCause); Commons Lang's ExceptionUtils is not a dependency of the portal.
         Throwable cause = NestedExceptionUtils.getMostSpecificCause(failure);
@@ -203,10 +274,13 @@ public class SudoSftpChannels {
         if (!session.isOpen()) {
             return new Opening.Lost(failure);
         }
+        if (watch != null && watch.fired().isPresent()) {
+            return new Opening.ChannelFailed(false);
+        }
         if (failure instanceof EOFException) {
             return new Opening.NotStarted();
         }
-        return new Opening.ChannelFailed();
+        return new Opening.ChannelFailed(isChannelOpenRefusal(failure));
     }
 
     /**

@@ -19,9 +19,12 @@ import io.github.jaeseongs95.portal.ssh.testkit.AdapterFixture;
 import io.github.jaeseongs95.portal.ssh.testkit.EchoTarget;
 import io.github.jaeseongs95.portal.ssh.testkit.EmbeddedSshServer;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.net.ConnectException;
 import java.net.InetAddress;
+import java.net.ServerSocket;
 import java.net.Socket;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -368,5 +371,39 @@ class ForwardTest {
         assertThat(handle.release()).isEqualTo(CleanupState.COMPLETE);
         assertThat(open(EchoTarget.refusedPort())).isEqualTo(new ForwardOpenResult.Refused(TransferFailureCause.CHANNEL_OPEN_FAILED));
         assertThat(opened(open(target.port())).release()).as("a refused open gave its permit back too").isEqualTo(CleanupState.COMPLETE);
+    }
+
+    @Test
+    @DisplayName("LocalForward preserves TCP half-close: client shutdownOutput forwards EOF to the target while keeping the return direction open for the target's response")
+    void halfClosePreservesReturnDirection() throws Exception {
+        startAll(1);
+        try (ServerSocket halfCloseTarget = new ServerSocket(0, 1, InetAddress.getByAddress(LOOPBACK))) {
+            CompletableFuture<String> serverObserved = CompletableFuture.supplyAsync(() -> {
+                try (Socket accepted = halfCloseTarget.accept()) {
+                    accepted.setSoTimeout((int) WAIT.toMillis());
+                    String received = new String(accepted.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                    accepted.getOutputStream().write("response-after-half-close".getBytes(StandardCharsets.UTF_8));
+                    accepted.getOutputStream().flush();
+                    return received;
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+            }, adapter.async());
+
+            ForwardHandle handle = opened(open(halfCloseTarget.getLocalPort()));
+            String response;
+            try (Socket client = connectTo(handle.localPort())) {
+                client.getOutputStream().write("request-before-eof".getBytes(StandardCharsets.UTF_8));
+                client.getOutputStream().flush();
+                client.shutdownOutput();
+                response = new String(client.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            }
+
+            assertThat(serverObserved.get(WAIT.toSeconds(), TimeUnit.SECONDS)).isEqualTo("request-before-eof");
+            assertThat(response).isEqualTo("response-after-half-close");
+            assertThat(handle.release()).isEqualTo(CleanupState.COMPLETE);
+            server.closedChannels().await(1, WAIT);
+            assertThat(server.openForwardChannelCount()).isZero();
+        }
     }
 }

@@ -50,6 +50,16 @@ public final class PoolSessionSource implements SessionSource {
         }
 
         @Override
+        public void openAccepted() {
+            lease.openAccepted();
+        }
+
+        @Override
+        public void openRejected() {
+            lease.openRejected();
+        }
+
+        @Override
         public void discard() {
             lease.sessionLost();
         }

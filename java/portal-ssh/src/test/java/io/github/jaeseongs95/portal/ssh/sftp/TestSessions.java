@@ -25,6 +25,8 @@ final class TestSessions implements SessionSource, AutoCloseable {
     private final EmbeddedSshServer server;
     private final AtomicInteger leases = new AtomicInteger();
     private final AtomicInteger discards = new AtomicInteger();
+    private final AtomicInteger openAccepts = new AtomicInteger();
+    private final AtomicInteger openRejections = new AtomicInteger();
 
     TestSessions(EmbeddedSshServer server) {
         this.server = server;
@@ -46,6 +48,14 @@ final class TestSessions implements SessionSource, AutoCloseable {
         return discards.get();
     }
 
+    int openAccepts() {
+        return openAccepts.get();
+    }
+
+    int openRejections() {
+        return openRejections.get();
+    }
+
     @Override
     public SessionAcquisition lease(RemoteTarget target, CancelToken cancel) {
         ClientSession session;
@@ -59,6 +69,16 @@ final class TestSessions implements SessionSource, AutoCloseable {
             @Override
             public ClientSession session() {
                 return session;
+            }
+
+            @Override
+            public void openAccepted() {
+                openAccepts.incrementAndGet();
+            }
+
+            @Override
+            public void openRejected() {
+                openRejections.incrementAndGet();
             }
 
             @Override

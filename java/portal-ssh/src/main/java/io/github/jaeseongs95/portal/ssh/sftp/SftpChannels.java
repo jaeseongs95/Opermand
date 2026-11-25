@@ -1,11 +1,15 @@
 package io.github.jaeseongs95.portal.ssh.sftp;
 
+import io.github.jaeseongs95.portal.app.remote.ExecutionLimits;
 import java.io.Closeable;
 import java.io.IOException;
+import java.time.Duration;
+import java.util.Objects;
 import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -18,6 +22,21 @@ import org.springframework.stereotype.Component;
 public class SftpChannels {
 
     private static final Logger LOG = LoggerFactory.getLogger(SftpChannels.class);
+
+    private final Duration stopGrace;
+
+    @Autowired
+    public SftpChannels() {
+        this(ExecutionLimits.DEFAULT_STOP_GRACE);
+    }
+
+    SftpChannels(Duration stopGrace) {
+        this.stopGrace = Objects.requireNonNull(stopGrace, "stopGrace");
+    }
+
+    Duration stopGrace() {
+        return stopGrace;
+    }
 
     /**
      * Opens the subsystem channel on the session; the caller closes the returned client.
@@ -41,7 +60,7 @@ public class SftpChannels {
      * @throws IOException when the server refuses the subsystem, the open was cancelled or ran out of time, or the connection fails
      */
     public SftpClient open(ClientSession session, TransferWatch watch) throws IOException {
-        return GuardedSftpClient.whenOpening(opening -> watch.interruptWith(() -> opening.cancel()), () -> open(session));
+        return GuardedSftpClient.whenOpening(opening -> watch.interruptWith(() -> GuardedSftpClient.giveUp(opening, watch, stopGrace)), () -> open(session));
     }
 
     /**

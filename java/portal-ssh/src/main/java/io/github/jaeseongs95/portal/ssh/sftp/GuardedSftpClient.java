@@ -1,6 +1,7 @@
 package io.github.jaeseongs95.portal.ssh.sftp;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.function.Consumer;
 import org.apache.sshd.client.channel.ChannelSubsystem;
 import org.apache.sshd.client.channel.ClientChannel;
@@ -26,12 +27,12 @@ import org.apache.sshd.sftp.client.impl.DefaultSftpClient;
 class GuardedSftpClient extends DefaultSftpClient {
 
     /** What the constructor of this thread opened: the channel and the future of its open. */
-    private record Opening(ClientChannel channel, OpenFuture future) {
+    record Opening(ClientChannel channel, OpenFuture future) {
     }
 
     private static final ThreadLocal<Opening> CURRENT = new ThreadLocal<>();
-    /** What the caller of this thread wants done with the future of the open of the client's channel (for example: cancel it when the transfer is stopped). */
-    private static final ThreadLocal<Consumer<OpenFuture>> WHEN_OPENING = new ThreadLocal<>();
+    /** What the caller of this thread wants done with the channel and open future of every client opened on this thread. */
+    private static final ThreadLocal<Consumer<Opening>> WHEN_OPENING = new ThreadLocal<>();
 
     /** Work that opens SFTP channels and may throw. */
     @FunctionalInterface
@@ -50,18 +51,19 @@ class GuardedSftpClient extends DefaultSftpClient {
     }
 
     /**
-     * Runs the work with a hook that is handed the future of the open of every client channel the work opens on this thread, as soon as the open request is written and
-     * before the constructor waits for the answer. A transfer uses it to cancel the open when the owner cancels or the time limit passes, so that the wait does not run its
-     * whole {@code SFTP_CHANNEL_OPEN_TIMEOUT} after the stop (defect SSH_PORTAL-D-0107).
+     * Runs the work with a hook that is handed the channel and open future of every client channel the work opens on this thread, as soon as the open request is written and
+     * before the constructor waits for the answer or runs the SFTP version handshake. A transfer uses it to cancel the open (or close the already-opened channel during
+     * {@code init()}) when the owner cancels or the time limit passes, so that neither wait runs its whole {@code SFTP_CHANNEL_OPEN_TIMEOUT} after the stop (defect
+     * SSH_PORTAL-D-0107).
      *
-     * @param hook what to do with the future of an open
+     * @param hook what to do with the opening channel and future
      * @param work opens the clients
      * @param <T> what the work returns
      * @return what the work returned
      * @throws IOException what the work threw
      */
-    static <T> T whenOpening(Consumer<OpenFuture> hook, Work<T> work) throws IOException {
-        Consumer<OpenFuture> outer = WHEN_OPENING.get();
+    static <T> T whenOpening(Consumer<Opening> hook, Work<T> work) throws IOException {
+        Consumer<Opening> outer = WHEN_OPENING.get();
         WHEN_OPENING.set(hook);
         try {
             return work.run();
@@ -108,10 +110,20 @@ class GuardedSftpClient extends DefaultSftpClient {
         }
     }
 
+    /**
+     * Gives up an opening channel when the transfer stops (cancel or deadline): cancels a pending open, closes a channel that was already confirmed (for example while
+     * {@code DefaultSftpClient.init()} awaits {@code SSH_FXP_VERSION}), and schedules a local forced close after {@code grace} if the peer never finishes closing it.
+     */
+    static void giveUp(Opening opening, TransferWatch watch, Duration grace) {
+        giveUp(opening);
+        watch.forceCloseAfterGrace(opening.channel(), grace);
+    }
+
     private static void giveUp(Opening opening) {
         opening.future().cancel();
         if (opening.future().isOpened()) {
-            // The confirmation was handled before the cancel took effect: the channel is open and nobody holds it.
+            // The confirmation was handled before the cancel took effect (or we are already inside DefaultSftpClient.init()): close gracefully so the peer releases it and
+            // unblocks any in-flight version wait.
             opening.channel().close(false);
         }
     }
@@ -127,10 +139,11 @@ class GuardedSftpClient extends DefaultSftpClient {
         @Override
         public synchronized OpenFuture open() throws IOException {
             OpenFuture opening = super.open();
-            CURRENT.set(new Opening(this, opening));
-            Consumer<OpenFuture> hook = WHEN_OPENING.get();
+            Opening noted = new Opening(this, opening);
+            CURRENT.set(noted);
+            Consumer<Opening> hook = WHEN_OPENING.get();
             if (hook != null) {
-                hook.accept(opening);
+                hook.accept(noted);
             }
             return opening;
         }

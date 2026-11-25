@@ -31,8 +31,10 @@ import org.springframework.core.task.TaskExecutor;
  * One open local forward (stage 3 design 2.2, defect D-0021): a loopback listener, the {@code direct-tcpip} channel that was opened before the forward was answered, and the
  * two pumps that carry the bytes of the first client between them. It owns everything it started, and {@link #release()} closes all of it and says whether that is confirmed.
  *
- * <p><b>One connection.</b> The listener accepts the first client and closes itself, so no other process of this machine can connect to the forward afterwards. When either
- * end of the connection closes, both are closed. The forward then stays until the owner releases it: the permit of the session lease is held until then.
+ * <p><b>One connection.</b> The listener accepts the first client and closes itself, so no other process of this machine can connect to the forward afterwards. An EOF from
+ * one end is forwarded to the other (half-close: client EOF closes the channel's input so the server receives {@code SSH_MSG_CHANNEL_EOF}, target EOF shuts down the client
+ * socket's output); the connection is closed once both directions have reached EOF or either direction encounters an I/O failure. The forward then stays until the owner
+ * releases it: the permit of the session lease is held until then.
  *
  * <p><b>What a close confirms.</b> The channel is closed with the close of the SSH protocol and the close is awaited for the stop grace; a close that the server did not
  * answer in that time is forced locally and reported as {@link CleanupState#INCOMPLETE}, because the server may still hold its side of the connection. The listener and the
@@ -69,6 +71,7 @@ final class LocalForward implements ForwardHandle {
     // guarded by lock
     private boolean closing;
     private Socket client;
+    private int remainingPumps;
 
     /**
      * @param lease the permit on the session; closed when the forward is released
@@ -143,11 +146,12 @@ final class LocalForward implements ForwardHandle {
                 return;
             }
             client = accepted;
+            remainingPumps = 2;
             try {
                 InputStream fromClient = accepted.getInputStream();
                 OutputStream toClient = accepted.getOutputStream();
-                spawn(() -> pump(fromClient, channel.getInvertedIn(), "client to target"));
-                spawn(() -> pump(channel.getInvertedOut(), toClient, "target to client"));
+                spawn(() -> pump(fromClient, channel.getInvertedIn(), () -> closeQuietly(channel.getInvertedIn()), "client to target"));
+                spawn(() -> pump(channel.getInvertedOut(), toClient, () -> shutdownOutputQuietly(accepted), "target to client"));
             } catch (IOException | RuntimeException e) {
                 LOG.warn("The connection of a forward could not be started; it is closed", e);
                 endConnection();
@@ -155,18 +159,41 @@ final class LocalForward implements ForwardHandle {
         }
     }
 
-    /** Copies bytes until one end ends; then both ends are closed, so the other pump ends too. */
-    private void pump(InputStream from, OutputStream to, String direction) {
+    /** Copies bytes until EOF or I/O error. A clean EOF forwards half-close to the peer; the whole connection closes once both pumps reach EOF or on any I/O failure. */
+    private void pump(InputStream from, OutputStream to, Runnable halfClose, String direction) {
         byte[] buffer = new byte[BUFFER_BYTES];
+        boolean failed = false;
         try {
             for (int read = from.read(buffer); read >= 0; read = from.read(buffer)) {
                 to.write(buffer, 0, read);
                 to.flush();
             }
+            halfClose.run();
         } catch (IOException e) {
+            failed = true;
             LOG.debug("The pump {} of a forward ended with an I/O failure; the connection is closed", direction, e);
         } finally {
-            endConnection();
+            boolean closeBoth = failed;
+            if (!closeBoth) {
+                synchronized (lock) {
+                    remainingPumps--;
+                    closeBoth = remainingPumps <= 0;
+                }
+            }
+            if (closeBoth) {
+                endConnection();
+            }
+        }
+    }
+
+    private static void shutdownOutputQuietly(Socket socket) {
+        if (socket == null || socket.isClosed() || socket.isOutputShutdown()) {
+            return;
+        }
+        try {
+            socket.shutdownOutput();
+        } catch (IOException e) {
+            LOG.debug("The write side of a forward's client socket did not shut down cleanly; the close goes on", e);
         }
     }
 
