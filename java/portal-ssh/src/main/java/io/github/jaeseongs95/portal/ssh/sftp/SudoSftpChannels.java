@@ -230,7 +230,7 @@ public class SudoSftpChannels {
             watch.interruptWith(() -> channel.close(true));
         }
         try {
-            channel.getCloseFuture().await(wait);
+            channel.close(false).await(wait);
         } catch (InterruptedIOException e) {
             Thread.currentThread().interrupt();
             LOG.debug("Interrupted while waiting for the SFTP lookup channel to finish closing", e);

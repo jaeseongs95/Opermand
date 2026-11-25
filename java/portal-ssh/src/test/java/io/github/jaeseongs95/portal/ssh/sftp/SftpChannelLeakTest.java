@@ -178,11 +178,11 @@ class SftpChannelLeakTest {
     @DisplayName("SSH_PORTAL-D-0107 an abandoned SFTP channel whose server never replies to open or close is force-closed locally after stop grace")
     void anUnresponsiveServerCloseIsForcedAfterGrace() throws Exception {
         SftpModuleProperties.SFTP_CHANNEL_OPEN_TIMEOUT.set(client.sshClient(), Duration.ofSeconds(20));
-        CompletableFuture<Channel> created = new CompletableFuture<>();
+        CompletableFuture<Void> closed = new CompletableFuture<>();
         session.addChannelListener(new ChannelListener() {
             @Override
             public void channelInitialized(Channel channel) {
-                created.complete(channel);
+                channel.addCloseFutureListener(future -> closed.complete(null));
             }
         });
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
@@ -196,10 +196,10 @@ class SftpChannelLeakTest {
 
                 assertThatThrownBy(() -> new SftpChannels(Duration.ofMillis(300)).open(session, watch)).isInstanceOf(IOException.class);
 
-                Channel clientChannel = created.get(WAIT.toSeconds(), TimeUnit.SECONDS);
-                assertThat(clientChannel.getCloseFuture().await(Duration.ofSeconds(5)))
+                closed.get(5, TimeUnit.SECONDS);
+                assertThat(closed)
                     .as("forceCloseAfterGrace closes the local channel after grace even while the server stays silent")
-                    .isTrue();
+                    .isCompleted();
             }
         } finally {
             release.complete(null);
