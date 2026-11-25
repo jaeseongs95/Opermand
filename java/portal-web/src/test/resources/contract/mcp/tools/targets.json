@@ -13,7 +13,7 @@
     "additionalProperties": false,
     "required": ["contractVersion", "ok", "data", "error"],
     "properties": {
-      "contractVersion": { "const": "2.0" },
+      "contractVersion": { "const": "3.0" },
       "ok": { "type": "boolean" },
       "data": { "anyOf": [{ "$ref": "#/$defs/targetData" }, { "type": "null" }] },
       "error": { "anyOf": [{ "$ref": "#/$defs/errorData" }, { "type": "null" }] }
@@ -59,16 +59,7 @@
           "status": { "enum": ["disabled", "configured", "backend_unavailable"] },
           "reason": { "type": ["string", "null"], "maxLength": 256 },
           "actions": { "type": "array", "maxItems": 4, "items": { "enum": ["observe", "pointer", "key", "text"] } },
-          "requiresUserClient": { "const": false },
-          "openRequest": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["requestKey", "expiresAt"],
-            "properties": {
-              "requestKey": { "type": "string", "pattern": "^[a-f0-9]{32}_[0-9]{1,16}_[a-f0-9]{32}_[A-Za-z0-9_-]{43}(?![\\s\\S])" },
-              "expiresAt": { "$ref": "#/$defs/nint" }
-            }
-          }
+          "requiresUserClient": { "const": false }
         }
       },
       "targetData": {

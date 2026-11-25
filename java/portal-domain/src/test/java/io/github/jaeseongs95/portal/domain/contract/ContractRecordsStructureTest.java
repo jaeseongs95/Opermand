@@ -38,7 +38,6 @@ class ContractRecordsStructureTest {
     private static final String KEY = "operation-key-0001";
     private static final String TARGET = "linux-1";
     private static final String UUID_TEXT = "123e4567-e89b-42d3-a456-426614174000";
-    private static final String OPEN_KEY = "c".repeat(32) + "_12_" + "d".repeat(32) + "_" + "E".repeat(43);
 
     private final JsonMapper mapper = JsonMapper.builder().build();
 
@@ -47,7 +46,7 @@ class ContractRecordsStructureTest {
     // ---------------------------------------------------------------------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("S2-CO-02 targets: TargetsData has the baseline keys, required keys and vocabularies; an absent gui and openRequest are left out")
+    @DisplayName("S2-CO-02 S4-CB-11 targets: TargetsData has the baseline keys, required keys and vocabularies; an absent gui is left out and gui has no openRequest")
     void targetsDataMatchesTheBaseline() {
         assertToolConforms("targets", fullTargets(), true);
 
@@ -62,9 +61,12 @@ class ContractRecordsStructureTest {
         assertThat(target.path("revision").isNull()).isTrue();
         assertThat(wire(minimal).path("defaultTarget").isNull()).isTrue();
 
-        GuiDescriptor withoutOpenRequest = new GuiDescriptor(false, null, null, GuiStatusWire.DISABLED, null, List.of(), false, null);
-        JsonNode descriptor = wire(withoutOpenRequest);
-        assertThat(descriptor.has("openRequest")).as("a null openRequest is left out").isFalse();
+        GuiDescriptor disabled = new GuiDescriptor(false, null, null, GuiStatusWire.DISABLED, null, List.of(), false);
+        JsonNode descriptor = wire(disabled);
+        assertThat(descriptor.has("openRequest")).as("contract 3.0 has no openRequest").isFalse();
+        assertThat(schemaAt(outputSchema("targets"), "targetData", "targets", "[]", "gui").path("properties").has("openRequest"))
+            .as("the 3.0 baseline has no openRequest").isFalse();
+        assertThat(wire(fullTargets()).path("targets").get(0).path("gui").has("openRequest")).isFalse();
         assertThat(descriptor.path("backend").isNull()).isTrue();
         assertThat(descriptor.path("reason").isNull()).isTrue();
     }
@@ -231,8 +233,15 @@ class ContractRecordsStructureTest {
         assertThat(WireFormat.KEY.pattern()).isEqualTo(submit.path("$defs").path("key").path("pattern").stringValue());
         assertThat(WireFormat.SIGNAL.pattern()).isEqualTo(schemaAt(submit, "executionData", "signal").path("pattern").stringValue());
         assertThat(WireFormat.UUID.pattern()).isEqualTo(outputSchema("files").path("$defs").path("uuid").path("pattern").stringValue());
-        assertThat(WireFormat.OPEN_REQUEST_KEY.pattern())
-            .isEqualTo(schemaAt(outputSchema("targets"), "targetData", "targets", "[]", "gui", "openRequest", "requestKey").path("pattern").stringValue());
+        assertThat(WireFormat.KEY.pattern()).as("desktop-open takes the common operation key")
+            .isEqualTo(inputSchemaOf("desktop-open").path("properties").path("operationKey").path("pattern").stringValue());
+        assertThat(WireFormat.KEY.pattern()).isEqualTo(inputSchemaOf("files").path("properties").path("operationKey").path("pattern").stringValue());
+        for (String tool : List.of("files", "desktop-open")) {
+            List<String> required = new ArrayList<>();
+            inputSchemaOf(tool).path("required").forEach(name -> required.add(name.stringValue()));
+            assertThat(required).as("%s requires operationKey in contract 3.0", tool).contains("operationKey");
+        }
+        assertThat(inputSchemaOf("desktop-open").path("properties").has("requestKey")).as("desktop-open has no server-issued requestKey").isFalse();
         JsonNode desktop = outputSchema("desktop-open");
         assertThat(WireFormat.SESSION_ID.pattern()).isEqualTo(desktop.path("$defs").path("sessionId").path("pattern").stringValue());
         assertThat(WireFormat.SESSION_REF.pattern()).isEqualTo(schemaAt(desktop, "desktopReadiness", "sessionRef").path("pattern").stringValue());
@@ -270,11 +279,11 @@ class ContractRecordsStructureTest {
         assertThatThrownBy(() -> new ExecutionData(null, null, null, null, "sigterm", null, null, null, null, null, null, null, null, null))
             .as("signal pattern").isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new GuiDescriptor(true, null, null, GuiStatusWire.CONFIGURED, null,
-            List.of(GuiActionWire.OBSERVE, GuiActionWire.POINTER, GuiActionWire.KEY, GuiActionWire.TEXT, GuiActionWire.OBSERVE), false, null))
+            List.of(GuiActionWire.OBSERVE, GuiActionWire.POINTER, GuiActionWire.KEY, GuiActionWire.TEXT, GuiActionWire.OBSERVE), false))
             .as("at most 4 actions").isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new GuiDescriptor(true, null, null, GuiStatusWire.CONFIGURED, "r".repeat(257), List.of(), false, null))
+        assertThatThrownBy(() -> new GuiDescriptor(true, null, null, GuiStatusWire.CONFIGURED, "r".repeat(257), List.of(), false))
             .as("reason at most 256").isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new GuiDescriptor(true, null, null, GuiStatusWire.CONFIGURED, null, List.of(), true, null))
+        assertThatThrownBy(() -> new GuiDescriptor(true, null, null, GuiStatusWire.CONFIGURED, null, List.of(), true))
             .as("requiresUserClient is false").isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new FilePolicyData(false, false, FileAccessModeWire.CONFIGURED_ROOT, null, null, true, false, true))
             .isInstanceOf(IllegalArgumentException.class);
@@ -307,7 +316,7 @@ class ContractRecordsStructureTest {
     @DisplayName("S2-CO-02 a list component is copied: a change of the caller's list or of the record's list cannot change the record")
     void listComponentsAreCopied() {
         List<GuiActionWire> actions = new ArrayList<>(List.of(GuiActionWire.OBSERVE));
-        GuiDescriptor descriptor = new GuiDescriptor(true, null, null, GuiStatusWire.CONFIGURED, null, actions, false, null);
+        GuiDescriptor descriptor = new GuiDescriptor(true, null, null, GuiStatusWire.CONFIGURED, null, actions, false);
         actions.add(GuiActionWire.POINTER);
         assertThat(descriptor.actions()).containsExactly(GuiActionWire.OBSERVE);
         assertThatThrownBy(() -> descriptor.actions().add(GuiActionWire.KEY)).isInstanceOf(UnsupportedOperationException.class);
@@ -326,11 +335,11 @@ class ContractRecordsStructureTest {
     // ---------------------------------------------------------------------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("S2-CO-03 Envelope.success writes contractVersion, ok, data and error, with error null written")
+    @DisplayName("S2-CO-03 S4-CB-10 Envelope.success writes contractVersion, ok, data and error, with error null written")
     void successEnvelopeWritesFourFields() {
         JsonNode wire = wire(Envelope.success(new ChunkData(0L, 5L)));
         assertThat(wire.propertyNames()).containsExactlyInAnyOrder("contractVersion", "ok", "data", "error");
-        assertThat(wire.path("contractVersion").stringValue()).isEqualTo("2.0");
+        assertThat(wire.path("contractVersion").stringValue()).isEqualTo("3.0");
         assertThat(wire.path("ok").booleanValue()).isTrue();
         assertThat(wire.path("data").isObject()).isTrue();
         assertThat(wire.has("error")).isTrue();
@@ -340,13 +349,13 @@ class ContractRecordsStructureTest {
     }
 
     @Test
-    @DisplayName("S2-CO-03 Envelope.failure writes contractVersion, ok, data and error, with data null written, for every ExecutionAttempt")
+    @DisplayName("S2-CO-03 S4-CB-10 Envelope.failure writes contractVersion, ok, data and error, with data null written, for every ExecutionAttempt")
     void failureEnvelopeWritesFourFields() {
         JsonNode envelope = readResource("contract/mcp/envelope.schema.json");
         for (ExecutionAttempt attempt : ExecutionAttempt.values()) {
             JsonNode wire = wire(Envelope.failure(new ErrorData(RequestErrorCode.REQUEST_REFUSED, attempt == ExecutionAttempt.NOT_ATTEMPTED, attempt)));
             assertThat(wire.propertyNames()).containsExactlyInAnyOrder("contractVersion", "ok", "data", "error");
-            assertThat(wire.path("contractVersion").stringValue()).isEqualTo("2.0");
+            assertThat(wire.path("contractVersion").stringValue()).isEqualTo("3.0");
             assertThat(wire.path("ok").booleanValue()).isFalse();
             assertThat(wire.has("data")).isTrue();
             assertThat(wire.path("data").isNull()).isTrue();
@@ -370,19 +379,19 @@ class ContractRecordsStructureTest {
         ErrorData error = new ErrorData(RequestErrorCode.REQUEST_REFUSED, false, ExecutionAttempt.NOT_ATTEMPTED);
         ChunkData data = new ChunkData(0L, 0L);
         // ok=true with an error
-        assertThatThrownBy(() -> new Envelope.Success<>(ContractVersion.V2_0, true, data, error)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new Envelope.Success<>(ContractVersion.V3_0, true, data, error)).isInstanceOf(IllegalArgumentException.class);
         // ok=false with data (a Failure has no data slot at all: Void; the Success variant is what could carry it)
-        assertThatThrownBy(() -> new Envelope.Success<>(ContractVersion.V2_0, false, data, null)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new Envelope.Success<>(ContractVersion.V2_0, false, data, error)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new Envelope.Success<>(ContractVersion.V3_0, false, data, null)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new Envelope.Success<>(ContractVersion.V3_0, false, data, error)).isInstanceOf(IllegalArgumentException.class);
         // ok=true without data
-        assertThatThrownBy(() -> new Envelope.Success<ChunkData>(ContractVersion.V2_0, true, null, null)).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new Envelope.Success<ChunkData>(ContractVersion.V3_0, true, null, null)).isInstanceOf(NullPointerException.class);
         // a failure with ok=true, and a failure without an error
-        assertThatThrownBy(() -> new Envelope.Failure<ChunkData>(ContractVersion.V2_0, true, null, error)).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new Envelope.Failure<ChunkData>(ContractVersion.V2_0, false, null, null)).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> new Envelope.Failure<ChunkData>(ContractVersion.V3_0, true, null, error)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new Envelope.Failure<ChunkData>(ContractVersion.V3_0, false, null, null)).isInstanceOf(NullPointerException.class);
         // the factories build the two legal shapes
         assertThat(Envelope.success(data).ok()).isTrue();
         assertThat(Envelope.<ChunkData>failure(error).ok()).isFalse();
-        assertThat(Envelope.success(data).contractVersion()).isEqualTo(ContractVersion.V2_0);
+        assertThat(Envelope.success(data).contractVersion()).isEqualTo(ContractVersion.V3_0);
     }
 
     // ---------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -391,7 +400,7 @@ class ContractRecordsStructureTest {
 
     private TargetsData fullTargets() {
         GuiDescriptor gui = new GuiDescriptor(true, GuiBackendWire.RDP, GuiLifecycleWire.MANAGED, GuiStatusWire.CONFIGURED, "ready",
-            List.of(GuiActionWire.OBSERVE, GuiActionWire.POINTER, GuiActionWire.KEY, GuiActionWire.TEXT), false, new GuiOpenRequest(OPEN_KEY, NOW + 300_000L));
+            List.of(GuiActionWire.OBSERVE, GuiActionWire.POINTER, GuiActionWire.KEY, GuiActionWire.TEXT), false);
         TargetData linux = new TargetData(TARGET, "Linux one", true, true, DIGEST, PlatformWire.LINUX,
             new TargetCapabilitiesData(CommandShellWire.POSIX, true, true, true, true, true, true), gui,
             FilePolicyData.of(false, false, FileAccessModeWire.CONFIGURED_ROOT, "/srv/app", NOW));
@@ -459,6 +468,10 @@ class ContractRecordsStructureTest {
 
     private JsonNode outputSchema(String tool) {
         return readResource("contract/mcp/tools/" + tool + ".json").path("outputSchema");
+    }
+
+    private JsonNode inputSchemaOf(String tool) {
+        return readResource("contract/mcp/tools/" + tool + ".json").path("inputSchema");
     }
 
     /** The envelope of a successful answer with this data must satisfy the tool's baseline outputSchema; {@code exact} also demands every declared key. */

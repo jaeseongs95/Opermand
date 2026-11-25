@@ -1,6 +1,6 @@
 {
-  "contractVersion": "2.0",
-  "contractVersionSource": "src/adapters/mcp/public-contract.mjs:5 export const CONTRACT_VERSION = '2.0'",
+  "contractVersion": "3.0",
+  "contractVersionSource": "java/docs/migration/stage4-design.md B-1.1 (contract 3.0: SSH_PORTAL-D-0112, no backward compatibility). 2.4.2 value: src/adapters/mcp/public-contract.mjs:5 export const CONTRACT_VERSION = '2.0'",
   "provenance": {
     "inputSchemaAndDescription": "public tools (15) and show-* (3): compared with the live ssh-test exposure, identical (key order ignored); ui-* (6): source only, not exposed",
     "outputSchemaAnnotationsMeta": "source basis, not comparable with the live exposure (the live tool list does not show them)",
@@ -12,8 +12,8 @@
     "version": "2.4.2",
     "versionSource": "src/adapters/mcp/server.mjs:1,17 metadata.version = package.json \"version\" (value 2.4.2 at HEAD a44c4d1). The Java server must report its own project version here; the 2.4.2 literal documents the 2.x baseline only. Contract tests must not require version equality."
   },
-  "instructions": "Contract 2.0. Start with targets; use stable operationKey and exact target revision. submit accepts work; observe defaults to immediate status. A configured native completion hook automatically observes the same operation after submit/observe; continue independent work without starting another watcher. On the hook body, handle its same operation ID and ACK the exact receipt/claim. Installed/registered, watcher started and wake requested are not receipt evidence. Without native hook support, immediate observe and the packaged background watch remain explicit fallback paths. The packaged portal-files client reads and transmits bytes outside the model and returns a UUID. One remote MCP connection is sufficient; a second local MCP server is optional. The remote server cannot read a path on the caller computer. Do not transcribe large file bytes into model tool arguments. Preserve IDs after uncertainty; never replay unknown outcomes, expose credentials or self-approve. show-* is optional owner UI; private ui-* is not for agents. GUI leases support agent interaction within advertised capabilities.",
-  "instructionsSource": "src/adapters/mcp/server.mjs:20",
+  "instructions": "Contract 3.0. Start with targets; use stable operationKey and exact target revision. submit accepts work; observe defaults to immediate status. A configured native completion hook automatically observes the same operation after submit/observe; continue independent work without starting another watcher. On the hook body, handle its same operation ID and ACK the exact receipt/claim. Installed/registered, watcher started and wake requested are not receipt evidence. Without native hook support, immediate observe and the packaged background watch remain explicit fallback paths. The packaged portal-files client reads and transmits bytes outside the model and returns a UUID. One remote MCP connection is sufficient; a second local MCP server is optional. The remote server cannot read a path on the caller computer. Do not transcribe large file bytes into model tool arguments. Preserve IDs after uncertainty; never replay unknown outcomes, expose credentials or self-approve. show-* is optional owner UI; private ui-* is not for agents. GUI leases support agent interaction within advertised capabilities. Corresponding source (AGPL-3.0-or-later): {sourceUrl}",
+  "instructionsSource": "src/adapters/mcp/server.mjs:20 (2.4.2 text). 3.0 changes (stage4-design.md B-1.1, B-1.4): the first sentence says Contract 3.0 and the last sentence is the AGPL source offer; replace {sourceUrl} with the effective BRIDGE_SOURCE_URL value before comparing.",
   "serverOptions": {
     "maxToolInputElements": 647,
     "source": "src/adapters/mcp/server.mjs:19 maxToolInputElements: 7 + 128 * 5"

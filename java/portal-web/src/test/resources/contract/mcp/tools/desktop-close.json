@@ -1,6 +1,6 @@
 {
   "name": "desktop-close",
-  "description": "Close the sessionId/epoch lease and release keys/buttons. Check releaseSent, cleanupError and sessionState (terminated/preserved/unknown); logout=false alone does not confirm cleanup. The original open requestKey cannot create another lease.",
+  "description": "Close the sessionId/epoch lease and release keys/buttons. Check releaseSent, cleanupError and sessionState (terminated/preserved/unknown); logout=false alone does not confirm cleanup. The original open operationKey cannot create another lease.",
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object",
@@ -17,7 +17,7 @@
     "additionalProperties": false,
     "required": ["contractVersion", "ok", "data", "error"],
     "properties": {
-      "contractVersion": { "const": "2.0" },
+      "contractVersion": { "const": "3.0" },
       "ok": { "type": "boolean" },
       "data": { "anyOf": [{ "$ref": "#/$defs/closeData" }, { "type": "null" }] },
       "error": { "anyOf": [{ "$ref": "#/$defs/errorData" }, { "type": "null" }] }

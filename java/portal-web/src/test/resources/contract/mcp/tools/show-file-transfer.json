@@ -15,7 +15,7 @@
     "additionalProperties": false
   },
   "portalRules": {
-    "outputSchema": "server.mjs:48-49 transferOutput = z.object({ transfer, uiEnabled, maxBytes }).strict() with transfer strict. Not the Contract 2.0 envelope. Result-level _meta.sshApproval keys (server.mjs:54-59): bridgeDisplayName, targetDisplayName, [targetId, targetRevision, targets], uiEnabled, namespace, maxBytes, chunkBytes, webUrl, [bootstrapTicket when uiEnabled].",
+    "outputSchema": "server.mjs:48-49 transferOutput = z.object({ transfer, uiEnabled, maxBytes }).strict() with transfer strict. Not the Contract 3.0 envelope. Result-level _meta.sshApproval keys (server.mjs:54-59): bridgeDisplayName, targetDisplayName, [targetId, targetRevision, targets], uiEnabled, namespace, maxBytes, chunkBytes, webUrl, [bootstrapTicket when uiEnabled].",
     "_meta": "_meta.ui.resourceUri is computed at runtime: `ui://ssh-approval/card-${hash(uiHtml)}.html`, hash = SHA-256 hex (server.mjs:15, validation.mjs:5). The literal above is a template, not a fixed value.",
     "inputSchema": "server.mjs:51 handler validates remotePath with remotePath() (POSIX targets) or windowsRemotePath() (Windows targets) from domain/validation.mjs; the exact path grammar is not transcribed here (see baseline: unverified). Failure => thrown error => generic refused() text."
   },

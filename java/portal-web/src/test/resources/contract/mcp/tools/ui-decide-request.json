@@ -67,7 +67,7 @@
   "annotations": { "readOnlyHint": false, "destructiveHint": true },
   "_meta": { "ui": { "visibility": ["app"] } },
   "portalRules": {
-    "outputSchema": "results.mjs:36-41,45 outputSchemas.job = jobSchema = z.object(jobFields).passthrough() (extra keys allowed). Not the Contract 2.0 envelope. Result: structuredContent presentJob(job) + _meta.sshApproval capabilities.view(job) (server.mjs:61-65). Handler: capabilities.guard(); capabilities.verifyJob(id, ticket, 'decision'); approve => queue.start(id), deny => queue.deny(id)."
+    "outputSchema": "results.mjs:36-41,45 outputSchemas.job = jobSchema = z.object(jobFields).passthrough() (extra keys allowed). Not the Contract 3.0 envelope. Result: structuredContent presentJob(job) + _meta.sshApproval capabilities.view(job) (server.mjs:61-65). Handler: capabilities.guard(); capabilities.verifyJob(id, ticket, 'decision'); approve => queue.start(id), deny => queue.deny(id)."
   },
   "visibility": "appOnly"
 }

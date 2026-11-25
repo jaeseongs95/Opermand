@@ -24,7 +24,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Spike (a), cases P-01 .. P-09 of docs/migration/foundation-cases.md: can the Spring AI MCP server (webmvc, Streamable HTTP, /mcp) present the tools, the
- * input schemas, the tool _meta, the ui:// resource and the result shape of Contract 2.0? Real HTTP to the started server; JSON-RPC by hand so that the test
+ * input schemas, the tool _meta, the ui:// resource and the result shape of Contract 3.0? Real HTTP to the started server; JSON-RPC by hand so that the test
  * sees the raw wire JSON, not a client library's model of it.
  */
 @SpringBootTest(classes = SpikeApplication.class, webEnvironment = WebEnvironment.RANDOM_PORT)
@@ -145,7 +145,7 @@ class McpContractSpikeTest {
         assertThat(structured.isObject()).as("structuredContent present").isTrue();
         assertThat(text.path("type").asString()).isEqualTo("text");
         assertThat(json.readTree(text.path("text").asString())).as("content[0].text parsed equals structuredContent").isEqualTo(structured);
-        assertThat(structured.path("contractVersion").asString()).isEqualTo("2.0");
+        assertThat(structured.path("contractVersion").asString()).isEqualTo("3.0");
         assertThat(structured.path("ok").asBoolean()).isTrue();
         assertThat(structured.path("error").isNull()).as("error is an explicit null in the envelope").isTrue();
     }

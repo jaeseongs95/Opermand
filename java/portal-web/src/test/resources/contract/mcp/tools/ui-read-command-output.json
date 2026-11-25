@@ -17,7 +17,7 @@
     "additionalProperties": false
   },
   "portalRules": {
-    "outputSchema": "server.mjs:86 pageSchema = z.object({ outputId: id, bytes: z.number(), nextOffset: z.number(), eof: z.boolean() }).passthrough(). Not the Contract 2.0 envelope. Result (server.mjs:92): { content: [], structuredContent: metadata (commandOutputs.read(args) result without text), _meta: { sshOutput: { text } } }; the output body is delivered only in _meta.sshOutput.text.",
+    "outputSchema": "server.mjs:86 pageSchema = z.object({ outputId: id, bytes: z.number(), nextOffset: z.number(), eof: z.boolean() }).passthrough(). Not the Contract 3.0 envelope. Result (server.mjs:92): { content: [], structuredContent: metadata (commandOutputs.read(args) result without text), _meta: { sshOutput: { text } } }; the output body is delivered only in _meta.sshOutput.text.",
     "inputSchema": "server.mjs:90 handler rule: the job named by id must be kind 'command' and job.result.output.id must equal outputId, otherwise Error('Original request output required') => generic refused() text."
   },
   "outputSchema": {

@@ -66,17 +66,17 @@ class ErrorCodeBaselineTest {
     }
 
     @Test
-    @DisplayName("S2-CO-01 S3-UC-07 the categories hold the counted number of codes: 31, 24, 45, 9, 13, 72, 18 and 8 (D-0124 removed MAINTENANCE_OWNER_USED)")
+    @DisplayName("S2-CO-01 S3-UC-07 S4-CB-12 the categories hold the counted number of codes: 31, 24, 45, 9, 13, 69, 18 and 8 (D-0124 removed MAINTENANCE_OWNER_USED, contract 3.0 removed the three open request codes)")
     void categoriesHoldTheCountedCodes() {
         assertThat(RequestErrorCode.values()).hasSize(31);
         assertThat(OperationErrorCode.values()).hasSize(24);
         assertThat(ArtifactErrorCode.values()).hasSize(45);
         assertThat(HistoryErrorCode.values()).hasSize(9);
         assertThat(CapacityErrorCode.values()).hasSize(13);
-        assertThat(DesktopErrorCode.values()).hasSize(72);
+        assertThat(DesktopErrorCode.values()).hasSize(69);
         assertThat(TransferErrorCode.values()).hasSize(18);
         assertThat(ExecutionErrorCode.values()).hasSize(8);
-        assertThat(allNames()).hasSize(220);
+        assertThat(allNames()).hasSize(217);
     }
 
     @Test
@@ -97,16 +97,37 @@ class ErrorCodeBaselineTest {
     }
 
     @Test
-    @DisplayName("S2-CO-01 the union of the eight enums is the baseline codes, less the four groups that are not public codes, plus REQUEST_CAPACITY_EXCEEDED (D-07)")
+    @DisplayName("S2-CO-01 S4-CB-12 the union of the eight enums is the baseline codes, less the four groups that are not public codes and the contract 3.0 removals, plus REQUEST_CAPACITY_EXCEEDED (D-07)")
     void unionIsTheBaselineMinusNonCodesPlusTheNewCode() {
         Set<String> expected = new TreeSet<>(baselineCodes());
         expected.removeAll(GONE);
         expected.removeAll(FRAGMENTS);
         expected.removeAll(MIGRATION);
         expected.removeAll(DESKTOP_WIRE);
+        expected.removeAll(contract30Removals());
         expected.add("REQUEST_CAPACITY_EXCEEDED");
         assertThat(new TreeSet<>(allNames())).isEqualTo(expected);
         assertThat(baselineCodes()).doesNotContain("REQUEST_CAPACITY_EXCEEDED");
+    }
+
+    @Test
+    @DisplayName("S4-CB-12 the contract 3.0 removals are the three desktop open request codes: listed in the baseline with a 2.x source and a reason, and in no enum")
+    void theContractThreeRemovalsAreInNoEnum() {
+        JsonNode entries = readBaseline().path("x-portal-errorCodes").path("contract30Removals").path("entries");
+        for (JsonNode entry : entries) {
+            assertThat(entry.get(1).stringValue()).startsWith("src/");
+            assertThat(entry.get(2).stringValue()).isNotBlank();
+        }
+        assertThat(contract30Removals()).containsExactlyInAnyOrder("DESKTOP_OPEN_REQUEST_CAPACITY", "DESKTOP_OPEN_REQUEST_GENERATION",
+            "DESKTOP_OPEN_REQUEST_EXPIRED");
+        assertThat(baselineCodes()).containsAll(contract30Removals());
+        assertThat(allNames()).doesNotContainAnyElementsOf(contract30Removals());
+    }
+
+    private Set<String> contract30Removals() {
+        Set<String> codes = new TreeSet<>();
+        collectFirst(readBaseline().path("x-portal-errorCodes").path("contract30Removals").path("entries"), codes);
+        return codes;
     }
 
     @Test

@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * The Contract 2.0 envelope {contractVersion, ok, data, error} and the data of the {@code targets} tool, as records that guard their own invariants in the compact
+ * The Contract 3.0 envelope {contractVersion, ok, data, error} and the data of the {@code targets} tool, as records that guard their own invariants in the compact
  * constructor (Principles 3.0): the rule of public-contract.mjs {@code responseSchema} (ok means data and no error, not ok means error and no data) is a property
  * of the type, so no caller can build an envelope that breaks it.
  *
@@ -15,7 +15,7 @@ import java.util.Objects;
 @JsonInclude(JsonInclude.Include.ALWAYS)
 record ContractEnvelope<T>(String contractVersion, boolean ok, T data, ErrorData error) {
 
-    static final String CONTRACT_VERSION = "2.0";
+    static final String CONTRACT_VERSION = "3.0";
 
     ContractEnvelope {
         Objects.requireNonNull(contractVersion, "contractVersion");

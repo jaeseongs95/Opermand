@@ -1,14 +1,14 @@
 # 3.0.0 Java 전환 3단계 설계 초안 (portal-ssh · portal-app 유스케이스와 포트)
 
 상태: 초안(설계 조사 담당 산출물, 메인 판정 전). 이 문서는 제품 코드·빌드·시험을 하지 않고 쓴 설계다. 사실은 2.x 소스와 현재 Java 코드, 공식 문서에서 직접 읽은 것만 `[사실]`로 적었다.
-기준 작업 사본: `D:/codex/build/ssh-portal-v300-ssh` (브랜치 `feature/v300-ssh`, HEAD `c14a6eb` = develop).
-계획 정본: `C:\Users\Lenovo\.claude\plans\inherited-marinating-island.md`(「3. SSH·파일·실행 감독」, 미종결 결함 표, 제품 설계 기준).
+기준 작업 사본: 브랜치 `feature/v300-ssh`(HEAD `c14a6eb` = develop).
+계획 정본: 저장소 밖 계획 문서(「3. SSH·파일·실행 감독」, 미종결 결함 표, 제품 설계 기준).
 형식 본보기: `stage2-design.md`(이 문서에서 `S2`로 줄여 부른다).
 
 ## 0. 읽는 법
 
 ### 0.1 표기
-- `[사실]` 직접 읽은 것. 근거는 `파일:줄`이다. 2.x 경로는 저장소 루트 기준(`D:/claude/ssh-mcp/ssh-approval-portal`, `a44c4d1`), Java 경로는 `java/` 기준이다. 줄은 LF 기준이다.
+- `[사실]` 직접 읽은 것. 근거는 `파일:줄`이다. 2.x 경로는 저장소 루트 기준(`a44c4d1`), Java 경로는 `java/` 기준이다. 줄은 LF 기준이다.
 - `[제안]` 이 문서의 설계 선택이다. 메인이 10.2절에서 판정한다.
 - `[미확인]` 공식 문서·소스로 확인하지 못한 것이다. 시범(6절)이나 실제 OpenSSH CI(7절)로 확인한다.
 - 코드·식별자·경로는 원문이다. 패키지 접두는 `io.github.jaeseongs95.portal`이고 본문에서는 `ssh.…`·`app.…`·`domain.…`로 줄인다.

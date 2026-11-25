@@ -1,6 +1,6 @@
 {
   "name": "files",
-  "description": "Use a staged UUID from portal-files upload: stat reads metadata; copy retains it; move consumes it after confirmed publication; remove deletes staged bytes only. Copy/move require operationKey, target, expectedTargetRevision and remotePath. Observe data.request.id; pending/queued is not publication. If request is null, inspect file.operations on the same UUID. Policy and SSH permissions apply; no PC or internal staging paths are exposed.",
+  "description": "Use a staged UUID from portal-files upload: stat reads metadata; copy retains it; move consumes it after confirmed publication; remove deletes staged bytes only. Every action requires a stable operationKey; copy/move also require target, expectedTargetRevision and remotePath. Observe data.request.id; pending/queued is not publication. If request is null, inspect file.operations on the same UUID. Policy and SSH permissions apply; no PC or internal staging paths are exposed.",
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "type": "object",
@@ -14,13 +14,13 @@
       "overwrite": { "type": "boolean" },
       "elevate": { "type": "boolean" }
     },
-    "required": ["action", "uuid"],
+    "required": ["action", "uuid", "operationKey"],
     "additionalProperties": false
   },
   "portalRules": {
     "outputSchema": "public-contract.mjs:74-75 responseSchema(): .refine(value => value.ok ? value.data !== null && value.error === null : value.data === null && value.error !== null, 'Expected data or error'). Not expressed in the outputSchema (a Zod .refine is absent from the SDK-published JSON Schema); recorded here only.",
     "outputSchema.$defs.executionData": "public-contract.mjs:34-40 presentExecution(): each field is parsed with its own schema and replaced by null when it fails; the whole execution object is null when the source value is not a plain object.",
-    "inputSchema": "public-contract.mjs:208-213 handler rules, run after schema validation: for action copy|move the allowed fields are [action,uuid,operationKey,target,expectedTargetRevision,remotePath,overwrite,elevate] and operationKey, target, expectedTargetRevision and remotePath are all required; for stat|remove only [action,uuid] are allowed. Violations: any extra field => error code FILE_ACTION_INPUT_CONFLICT; missing required placement field => error code FILE_ACTION_INPUT_REQUIRED. Returned as an ok=false envelope."
+    "inputSchema": "public-contract.mjs:208-213 handler rules, run after schema validation: for action copy|move the allowed fields are [action,uuid,operationKey,target,expectedTargetRevision,remotePath,overwrite,elevate] and operationKey, target, expectedTargetRevision and remotePath are all required; for stat|remove only [action,uuid,operationKey] are allowed (3.0, stage4-design.md B-1.2: operationKey is required for every action; stat uses it only as a correlation key, remove is idempotent by it; 2.4.2 allowed only [action,uuid]). Violations: any extra field => error code FILE_ACTION_INPUT_CONFLICT; missing required placement field => error code FILE_ACTION_INPUT_REQUIRED. Returned as an ok=false envelope."
   },
   "outputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
@@ -28,7 +28,7 @@
     "additionalProperties": false,
     "required": ["contractVersion", "ok", "data", "error"],
     "properties": {
-      "contractVersion": { "const": "2.0" },
+      "contractVersion": { "const": "3.0" },
       "ok": { "type": "boolean" },
       "data": { "anyOf": [{ "$ref": "#/$defs/filesData" }, { "type": "null" }] },
       "error": { "anyOf": [{ "$ref": "#/$defs/errorData" }, { "type": "null" }] }

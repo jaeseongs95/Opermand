@@ -121,7 +121,7 @@
 
 ## 6. 실행 결과
 
-명령: `./gradlew --no-daemon --console=plain --max-workers=1 -Pportal.test.forks=1 build` → `BUILD SUCCESSFUL`, 종료 코드 0. 로그 `D:/codex/build/tools/runs/ssh-portal-v300-found.log`.
+명령: `./gradlew --no-daemon --console=plain --max-workers=1 -Pportal.test.forks=1 build` → `BUILD SUCCESSFUL`, 종료 코드 0. 로그는 실행한 PC에만 남겼다.
 시험 72건(8321134·2a06896), skipped 0, failures 0, errors 0(`*/build/test-results/test/*.xml`: ArchitectureRulesTest 21, RuleFixturesTest 23, TestIsolationTest 3, McpContractSpikeTest 9, NullInclusionSpikeTest 1, PortsSpikeTest 5, ConnectorsSpikeTest 1, SshSpikeTest 9).
 보정 뒤(생성자 주입·PER_CLASS·`Objects.equals`·`ConnectorsSpikeTest` 삭제·A-OPTIONAL-SLOT/GET·A-CHARSET·A-SLEEP 추가): `BUILD SUCCESSFUL in 41s`, 종료 코드 0, 시험 79건, skipped 0, failures 0, errors 0, 출력의 warning·deprecat 0줄(메인 실행). 클래스별 `@Test` 수: ArchitectureRulesTest 25(+4), RuleFixturesTest 27(+4), TestIsolationTest 3, McpContractSpikeTest 9, NullInclusionSpikeTest 1, PortsSpikeTest 5, SshSpikeTest 9, ConnectorsSpikeTest 삭제(−1). 72 − 1 + 8 = 79. javac 경고: `compileJava`·`compileTestJava` 20개 작업을 `--rerun-tasks`로 다시 돌려 `warning:` 0줄(`…-recompile.log`).
 

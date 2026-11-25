@@ -22,8 +22,6 @@ enum WireFormat {
     KEY("^[A-Za-z0-9_.:-]{16,128}(?![\\s\\S])"),
     /** A version 4 UUID of a staged file ({@code uuid}). */
     UUID("^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}(?![\\s\\S])"),
-    /** The key of a desktop open request ({@code openRequestKey}). */
-    OPEN_REQUEST_KEY("^[a-f0-9]{32}_[0-9]{1,16}_[a-f0-9]{32}_[A-Za-z0-9_-]{43}(?![\\s\\S])"),
     /** A desktop session id: the baseline's {@code sessionId} (a UUID of version 1 to 8, or the nil and max UUIDs). */
     SESSION_ID("^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}"
         + "|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"),

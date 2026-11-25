@@ -12,7 +12,7 @@ import org.springframework.context.annotation.Configuration;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Wiring of what the web module will do for Contract 2.0, reduced to two tools and one resource: low-level {@code SyncToolSpecification} beans whose inputSchema is
+ * Wiring of what the web module will do for Contract 3.0, reduced to two tools and one resource: low-level {@code SyncToolSpecification} beans whose inputSchema is
  * the JSON Schema text moved from the Zod definitions of src/adapters/mcp/public-contract.mjs, a tool {@code _meta}, a {@code ui://} resource with mimeType
  * text/html;profile=mcp-app, and results that carry structuredContent and the same JSON as text. The logic lives in the components (ToolResults, ContractSchemas,
  * ContractEnvelope); this class only assembles library objects.
