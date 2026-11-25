@@ -483,6 +483,28 @@ class DownloadTest {
     }
 
     @Test
+    @DisplayName("SSH_PORTAL-D-0082 a file swapped between lstat and open is caught by fstat before sink.expect or any byte is read")
+    void fileSwappedBetweenLstatAndOpenIsRejectedBeforeReadingAByte() throws IOException {
+        Path target = root.resolve("target.bin");
+        Files.write(target, pattern(512));
+        TransferBed testBed = startWith(client -> new SftpDoubles().runningBeforeReadOpen(client, "/target.bin", () -> {
+            try {
+                // Simulate a TOCTOU swap right after checker.inspect() lstat and immediately before open(Read).
+                Files.write(target, "secret-replacement-bytes-that-must-not-leak".getBytes(StandardCharsets.UTF_8));
+            } catch (IOException e) {
+                throw new IllegalStateException(e);
+            }
+        }));
+        TransferBed.Collecting sink = new TransferBed.Collecting();
+
+        DownloadResult result = testBed.transfer().download(testBed.download("/target.bin"), sink, testBed.control());
+
+        assertThat(result).isEqualTo(new DownloadResult.Refused(TransferErrorCode.FILE_CHANGED, new FileDiagnostic.None()));
+        assertThat(sink.announcements()).as("sink.expect must not be called for a swapped descriptor").isZero();
+        assertThat(sink.bytes()).as("not a single byte of the swapped file may be read").isEmpty();
+    }
+
+    @Test
     @DisplayName("S3-SF-14 a file that changes while it is read is FILE_CHANGED; what the sink took is the caller's to delete")
     void changedWhileReading() throws IOException {
         TransferBed testBed = start();

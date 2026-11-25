@@ -56,7 +56,7 @@ public final class SessionConnector {
             @Override
             public void sessionEvent(Session session, SessionListener.Event event) {
                 if (event == SessionListener.Event.Authenticated) {
-                    attempt.authenticated(routing.find(session));
+                    routing.find(session).ifPresent(attempt::authenticated);
                 }
             }
         });

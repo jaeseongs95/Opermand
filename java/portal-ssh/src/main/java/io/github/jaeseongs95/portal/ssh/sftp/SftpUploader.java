@@ -13,8 +13,6 @@ import io.github.jaeseongs95.portal.domain.operation.CleanupState;
 import io.github.jaeseongs95.portal.domain.operation.OverwriteMode;
 import io.github.jaeseongs95.portal.domain.path.WindowsRemotePath;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.util.EnumSet;
 import java.util.Objects;
@@ -45,7 +43,8 @@ import org.springframework.stereotype.Component;
 public class SftpUploader {
 
     private static final Logger LOG = LoggerFactory.getLogger(SftpUploader.class);
-    private static final int BLOCK_BYTES = 64 * 1024;
+    /** 32 KiB per SFTP packet: fits every SFTP v3 server's maximum packet payload while streaming directly over an open handle. */
+    private static final int BLOCK_BYTES = 32 * 1024;
     /** {@code 0600}: read and write for the owner, nothing for anybody else. */
     private static final int OWNER_ONLY = 0600;
 
@@ -123,6 +122,18 @@ public class SftpUploader {
         };
     }
 
+    /** Outcome of staging the temporary file over a single pinned handle (SSH_PORTAL-D-0082), evaluated after the handle is closed. */
+    private sealed interface Staging permits Staging.Ready, Staging.CopyIssue, Staging.RemoteError {
+        record Ready() implements Staging {
+        }
+
+        record CopyIssue(Copy copy) implements Staging {
+        }
+
+        record RemoteError(IOException cause, SftpFailureClassifier.Site site) implements Staging {
+        }
+    }
+
     private UploadResult write(SftpClient client, SessionLease lease, TransferWatch watch, UploadRequest request, PayloadSource source, SftpLocation location,
                                PathInspection original) {
         Optional<TransferFailureCause> stopped = watch.stopRequested();
@@ -131,21 +142,18 @@ public class SftpUploader {
         }
         String tempName = replacer.newTempName();
         String tempPath = location.sibling(tempName);
-        Optional<UploadResult> created = createTemporaryFile(client, lease, watch, request, location, tempName, tempPath);
-        if (created.isPresent()) {
-            return created.orElseThrow();
-        }
-        Optional<UploadResult> written = check(client, lease, watch, location, tempName, tempPath, request, copy(client, watch, source, tempPath, request));
-        if (written.isPresent()) {
-            return written.orElseThrow();
-        }
-        Optional<UploadResult> verified = check(client, lease, watch, location, tempName, tempPath, request, readBack(client, watch, tempPath));
-        if (verified.isPresent()) {
-            return verified.orElseThrow();
-        }
-        Optional<UploadResult> moded = inheritMode(client, lease, watch, location, tempName, tempPath, request, original);
-        if (moded.isPresent()) {
-            return moded.orElseThrow();
+        Staging staged = stageOverSingleHandle(client, watch, request, source, tempPath, original);
+        switch (staged) {
+            case Staging.Ready ready -> {
+                // Handle is closed (required before rename on Windows) and every temporary-file step ran on that one FD.
+            }
+            case Staging.CopyIssue issue -> {
+                return check(client, lease, watch, location, tempName, tempPath, request, issue.copy())
+                    .orElseThrow(() -> new IllegalStateException("Expected staging copy issue to produce an upload result"));
+            }
+            case Staging.RemoteError error -> {
+                return failedRemotely(client, lease, watch, location, tempName, tempPath, error.cause(), error.site());
+            }
         }
         // From here the replacement runs to its end: a cancel or the time limit no longer stops it half way.
         watch.disarm();
@@ -154,16 +162,47 @@ public class SftpUploader {
 
     // ---- the temporary file ----
 
-    private Optional<UploadResult> createTemporaryFile(SftpClient client, SessionLease lease, TransferWatch watch, UploadRequest request, SftpLocation location,
-                                                       String tempName, String tempPath) {
-        try (SftpClient.CloseableHandle handle = client.open(tempPath, EnumSet.of(SftpClient.OpenMode.Write, SftpClient.OpenMode.Create, SftpClient.OpenMode.Exclusive))) {
-            if (!(request.path() instanceof WindowsRemotePath)) {
-                protect(client, handle);
-            }
-            return Optional.empty();
+    /**
+     * Creates, protects ({@code 0600}), writes, reads back, and applies inherited mode/owner on one exclusively created SFTP handle ({@code O_RDWR|O_CREAT|O_EXCL}),
+     * closing the handle before returning. Never re-opens {@code tempPath} by path and never invokes path-based {@code chown}/{@code chmod} (defect SSH_PORTAL-D-0082).
+     */
+    private Staging stageOverSingleHandle(SftpClient client, TransferWatch watch, UploadRequest request, PayloadSource source, String tempPath,
+                                          PathInspection original) {
+        SftpClient.CloseableHandle handle;
+        try {
+            handle = client.open(tempPath,
+                EnumSet.of(SftpClient.OpenMode.Read, SftpClient.OpenMode.Write, SftpClient.OpenMode.Create, SftpClient.OpenMode.Exclusive));
         } catch (IOException e) {
-            return Optional.of(failedRemotely(client, lease, watch, location, tempName, tempPath, e, SftpFailureClassifier.Site.NEW_FILE));
+            return new Staging.RemoteError(e, SftpFailureClassifier.Site.NEW_FILE);
         }
+        try {
+            if (!(request.path() instanceof WindowsRemotePath)) {
+                try {
+                    protect(client, handle);
+                } catch (IOException e) {
+                    return new Staging.RemoteError(e, SftpFailureClassifier.Site.NEW_FILE);
+                }
+            }
+            Copy written = copy(client, handle, watch, source, request);
+            if (!matchesExpected(written, request)) {
+                return new Staging.CopyIssue(written);
+            }
+            Copy verified = readBack(client, handle, watch);
+            if (!matchesExpected(verified, request)) {
+                return new Staging.CopyIssue(verified);
+            }
+            Optional<IOException> modeFailure = inheritMode(client, handle, request, original);
+            if (modeFailure.isPresent()) {
+                return new Staging.RemoteError(modeFailure.orElseThrow(), SftpFailureClassifier.Site.OWN_FILE);
+            }
+            return new Staging.Ready();
+        } finally {
+            channels.closeQuietly(handle);
+        }
+    }
+
+    private boolean matchesExpected(Copy copy, UploadRequest request) {
+        return copy instanceof Copy.Copied copied && copied.bytes() == request.sizeBytes() && copied.sha256().equals(request.sha256());
     }
 
     /**
@@ -177,21 +216,20 @@ public class SftpUploader {
     }
 
     /**
-     * A file that is replaced keeps the permission bits it had (2.x kept the mode of an overwritten file): the temporary file gets them before it goes in place. The
-     * same tolerance as for the first mode applies, and a path in Windows syntax has no mode.
+     * A file that is replaced keeps the permission bits (and under elevation, numeric owner/group) it had: applied on the pinned temporary handle via {@code SSH_FXP_FSETSTAT}
+     * before the file goes in place (defect SSH_PORTAL-D-0082). A path in Windows syntax has no POSIX mode.
      */
-    private Optional<UploadResult> inheritMode(SftpClient client, SessionLease lease, TransferWatch watch, SftpLocation location, String tempName, String tempPath,
-                                               UploadRequest request, PathInspection original) {
+    private Optional<IOException> inheritMode(SftpClient client, SftpClient.Handle handle, UploadRequest request, PathInspection original) {
         if (!(original instanceof PathInspection.Present present) || request.path() instanceof WindowsRemotePath) {
             return Optional.empty();
         }
         try {
             SftpClient.Attributes attributes = new SftpClient.Attributes().perms(present.state().permissions() & 0777);
             if (request.access() instanceof io.github.jaeseongs95.portal.app.remote.FileAccess.Elevated) {
-                // An elevated server (sudo sftp-server) is root, whose new file belongs to root: the owner and group the file had are given back (only root may).
+                // An elevated server (sudo sftp-server) is root, whose new file belongs to root: the owner and group the file had are given back on the handle (only root may).
                 attributes.owner(present.state().userId(), present.state().groupId());
             }
-            client.setStat(tempPath, attributes);
+            client.setStat(handle, attributes);
             return Optional.empty();
         } catch (IOException e) {
             SftpFailure.Kind kind = classifier.classify(e).kind();
@@ -200,21 +238,16 @@ public class SftpUploader {
                 LOG.warn("The server did not give the mode (and owner) of the replaced file to the new file; the new file keeps the private mode it was made with", e);
                 return Optional.empty();
             }
-            return Optional.of(failedRemotely(client, lease, watch, location, tempName, tempPath, e, SftpFailureClassifier.Site.OWN_FILE));
+            return Optional.of(e);
         }
     }
 
     // ---- copying ----
 
-    private Copy copy(SftpClient client, TransferWatch watch, PayloadSource source, String tempPath, UploadRequest request) {
+    private Copy copy(SftpClient client, SftpClient.Handle handle, TransferWatch watch, PayloadSource source, UploadRequest request) {
         StreamDigest digest = StreamDigest.sha256();
         byte[] block = new byte[BLOCK_BYTES];
-        OutputStream out;
-        try {
-            out = client.write(tempPath, EnumSet.of(SftpClient.OpenMode.Write));
-        } catch (IOException e) {
-            return new Copy.RemoteFailure(e);
-        }
+        long offset = 0;
         try (PayloadRead payload = source.open()) {
             if (payload.size() != request.sizeBytes()) {
                 return new Copy.Mismatch();
@@ -240,29 +273,31 @@ public class SftpUploader {
                 if (digest.count() > request.sizeBytes()) {
                     return new Copy.Mismatch();
                 }
-                out.write(block, 0, read);
+                client.write(handle, offset, block, 0, read);
+                offset += read;
             }
-            out.close();
-            out = null;
             return new Copy.Copied(digest.finishSha256(), digest.count());
         } catch (IOException e) {
             return new Copy.RemoteFailure(e);
-        } finally {
-            channels.closeQuietly(out);
         }
     }
 
-    private Copy readBack(SftpClient client, TransferWatch watch, String tempPath) {
+    private Copy readBack(SftpClient client, SftpClient.Handle handle, TransferWatch watch) {
         StreamDigest digest = StreamDigest.sha256();
         byte[] block = new byte[BLOCK_BYTES];
-        try (InputStream in = client.read(tempPath)) {
-            int read;
-            while ((read = in.read(block)) >= 0) {
+        long offset = 0;
+        try {
+            while (true) {
+                int read = client.read(handle, offset, block, 0, block.length);
+                if (read < 0) {
+                    break;
+                }
                 Optional<TransferFailureCause> stopped = watch.stopRequested();
                 if (stopped.isPresent()) {
                     return new Copy.Stopped(stopped.orElseThrow());
                 }
                 digest.update(block, 0, read);
+                offset += read;
             }
             return new Copy.Copied(digest.finishSha256(), digest.count());
         } catch (IOException e) {

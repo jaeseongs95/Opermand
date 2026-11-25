@@ -231,6 +231,20 @@ class UploadTest {
         assertThat(Files.size(root.resolve("empty.bin"))).isZero();
     }
 
+    @Test
+    @DisplayName("SSH_PORTAL-D-0082 replacing an existing file stages the temporary file exclusively over its pinned handle without path-based write, read, or setStat")
+    void stagingNeverUsesPathBasedWriteReadOrSetStatOnTemporaryFile() throws IOException {
+        TransferBed testBed = startWith(client -> new SftpDoubles().forbiddingPathOperationsOn(client, ".part"));
+        Files.write(root.resolve("existing.bin"), OLD);
+        byte[] content = pattern(4096);
+
+        UploadResult result = testBed.transfer().upload(testBed.upload("/existing.bin", content, OverwriteMode.REPLACE), TransferBed.source(content), testBed.control());
+
+        assertThat(result).isInstanceOf(UploadResult.Published.class);
+        assertThat(Files.readAllBytes(root.resolve("existing.bin"))).isEqualTo(content);
+        assertThat(leftovers()).isEmpty();
+    }
+
     // ---- S3-SF-02, S3-SF-03: replacing ----
 
     @Test

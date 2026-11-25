@@ -26,6 +26,7 @@ import io.github.jaeseongs95.portal.domain.operation.CleanupState;
 import io.github.jaeseongs95.portal.domain.path.RemotePath;
 import java.io.IOException;
 import java.time.Clock;
+import java.util.EnumSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -258,12 +259,13 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
     private PermissionResult permissionsOver(PermissionRequest request, ExecutionControl control, boolean elevated) {
         return withSftp(request.target(), request.limits(), control, elevated, PermissionResult.NotDispatched::new,
             code -> new PermissionResult.Refused(code, new FileDiagnostic.None()),
-            (client, lease, watch) -> setPermissions(client, lease, watch, request));
+            (client, lease, watch) -> setPermissions(client, lease, watch, request, elevated));
     }
 
-    private PermissionResult setPermissions(SftpClient client, SessionLease lease, TransferWatch watch, PermissionRequest request) {
+    private PermissionResult setPermissions(SftpClient client, SessionLease lease, TransferWatch watch, PermissionRequest request, boolean elevated) {
         SftpLocation location = new SftpLocation(request.path());
         PathInspection inspection = checker.inspect(client, location);
+        LeafState announced;
         switch (inspection) {
             case PathInspection.Lost lost -> {
                 // Nothing was sent yet. A time limit or a cancel that fires during the look closes the channel and the look then fails: the cause stays what stopped the
@@ -281,12 +283,15 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
                 return new PermissionResult.Refused(TransferErrorCode.FILE_NOT_FOUND, new FileDiagnostic.None());
             }
             case PathInspection.Present present -> {
-                // the file is a regular file: go on
+                announced = present.state();
             }
         }
         Optional<TransferFailureCause> stopped = watch.stopRequested();
         if (stopped.isPresent()) {
             return new PermissionResult.NotDispatched(stopped.orElseThrow());
+        }
+        if (elevated) {
+            return setElevatedPermissions(client, lease, watch, location, announced, request.mode().bits());
         }
         // The change of the mode is one request and the look at its result one more: from here they run to their end, so a cancel or the time limit no longer closes the
         // channel half way and turns a live session into a lost transport (defect SSH_PORTAL-D-0085).
@@ -302,28 +307,108 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
                 }
             };
         }
+        return readBackPermissions(client, lease, location, request.mode().bits());
+    }
+
+    /**
+     * Elevated chmod opens the target file first, verifies via {@code fstat} that the descriptor matches the regular file observed by {@code lstat}, and applies the mode with
+     * {@code SSH_FXP_FSETSTAT} on that handle rather than path-based {@code chmod} (defect SSH_PORTAL-D-0082).
+     */
+    private PermissionResult setElevatedPermissions(SftpClient client, SessionLease lease, TransferWatch watch, SftpLocation location, LeafState announced, int modeBits) {
+        SftpClient.CloseableHandle handle;
         try {
-            int bits = client.lstat(location.file()).getPermissions() & 0777;
-            return bits == request.mode().bits()
-                ? new PermissionResult.Applied()
-                : new PermissionResult.Refused(TransferErrorCode.INVALID_REQUEST, new FileDiagnostic.None());
+            handle = client.open(location.file(), EnumSet.of(SftpClient.OpenMode.Read));
         } catch (IOException e) {
-            // The mode was set and could not be read back (defect SSH_PORTAL-D-0086). What the server answered decides: a status that says the file is gone is that, and any
-            // other status is an answer of a live server, so the session is kept; only a loss of the connection discards it. The cause is logged, not dropped.
+            if (watch.fired().isPresent()) {
+                return new PermissionResult.NotDispatched(watch.fired().orElseThrow());
+            }
             return switch (classifier.verdict(e, SftpFailureClassifier.Site.TARGET_FILE)) {
-                case SftpFailureClassifier.Verdict.Refusal refusal -> {
-                    LOG.warn("The mode of a file was set and could not be read back (the server answered); the result is unconfirmed", e);
-                    yield refusal.code() == TransferErrorCode.FILE_NOT_FOUND
-                        ? new PermissionResult.Refused(refusal.code(), refusal.diagnostic())
-                        : new PermissionResult.Unconfirmed(new UnconfirmedCause.TransportLost());
-                }
+                case SftpFailureClassifier.Verdict.Refusal refusal -> new PermissionResult.Refused(refusal.code(), refusal.diagnostic());
                 case SftpFailureClassifier.Verdict.Lost lost -> {
-                    LOG.warn("The mode of a file was set and the connection was lost before it was read back; the session is discarded", e);
                     lease.discard();
-                    yield new PermissionResult.Unconfirmed(new UnconfirmedCause.TransportLost());
+                    yield new PermissionResult.NotDispatched(TransferFailureCause.TRANSPORT_LOST);
                 }
             };
         }
+        try {
+            SftpClient.Attributes opened;
+            try {
+                opened = client.stat(handle);
+            } catch (IOException e) {
+                if (watch.fired().isPresent()) {
+                    return new PermissionResult.NotDispatched(watch.fired().orElseThrow());
+                }
+                return switch (classifier.verdict(e, SftpFailureClassifier.Site.TARGET_FILE)) {
+                    case SftpFailureClassifier.Verdict.Refusal refusal -> new PermissionResult.Refused(refusal.code(), refusal.diagnostic());
+                    case SftpFailureClassifier.Verdict.Lost lost -> {
+                        lease.discard();
+                        yield new PermissionResult.NotDispatched(TransferFailureCause.TRANSPORT_LOST);
+                    }
+                };
+            }
+            if (FileKind.of(opened) != FileKind.REGULAR) {
+                return new PermissionResult.Refused(TransferErrorCode.UNSAFE_PATH, new FileDiagnostic.None());
+            }
+            if (!LeafState.of(opened).equals(announced)) {
+                return new PermissionResult.Refused(TransferErrorCode.FILE_CHANGED, new FileDiagnostic.None());
+            }
+            watch.disarm();
+            try {
+                client.setStat(handle, new SftpClient.Attributes().perms(modeBits));
+            } catch (IOException e) {
+                return switch (classifier.verdict(e, SftpFailureClassifier.Site.TARGET_FILE)) {
+                    case SftpFailureClassifier.Verdict.Refusal refusal -> new PermissionResult.Refused(refusal.code(), refusal.diagnostic());
+                    case SftpFailureClassifier.Verdict.Lost lost -> {
+                        lease.discard();
+                        yield new PermissionResult.Unconfirmed(new UnconfirmedCause.TransportLost());
+                    }
+                };
+            }
+            try {
+                int handleBits = client.stat(handle).getPermissions() & 0777;
+                if (handleBits != modeBits) {
+                    return new PermissionResult.Refused(TransferErrorCode.INVALID_REQUEST, new FileDiagnostic.None());
+                }
+            } catch (IOException e) {
+                return readBackFailure(lease, e);
+            }
+        } finally {
+            channels.closeQuietly(handle);
+        }
+        return readBackPermissions(client, lease, location, modeBits);
+    }
+
+    private PermissionResult readBackPermissions(SftpClient client, SessionLease lease, SftpLocation location, int modeBits) {
+        try {
+            SftpClient.Attributes current = client.lstat(location.file());
+            if (FileKind.of(current) != FileKind.REGULAR) {
+                return new PermissionResult.Refused(TransferErrorCode.UNSAFE_PATH, new FileDiagnostic.None());
+            }
+            int bits = current.getPermissions() & 0777;
+            return bits == modeBits
+                ? new PermissionResult.Applied()
+                : new PermissionResult.Refused(TransferErrorCode.INVALID_REQUEST, new FileDiagnostic.None());
+        } catch (IOException e) {
+            return readBackFailure(lease, e);
+        }
+    }
+
+    private PermissionResult readBackFailure(SessionLease lease, IOException e) {
+        // The mode was set and could not be read back (defect SSH_PORTAL-D-0086). What the server answered decides: a status that says the file is gone is that, and any
+        // other status is an answer of a live server, so the session is kept; only a loss of the connection discards it. The cause is logged, not dropped.
+        return switch (classifier.verdict(e, SftpFailureClassifier.Site.TARGET_FILE)) {
+            case SftpFailureClassifier.Verdict.Refusal refusal -> {
+                LOG.warn("The mode of a file was set and could not be read back (the server answered); the result is unconfirmed", e);
+                yield refusal.code() == TransferErrorCode.FILE_NOT_FOUND
+                    ? new PermissionResult.Refused(refusal.code(), refusal.diagnostic())
+                    : new PermissionResult.Unconfirmed(new UnconfirmedCause.TransportLost());
+            }
+            case SftpFailureClassifier.Verdict.Lost lost -> {
+                LOG.warn("The mode of a file was set and the connection was lost before it was read back; the session is discarded", e);
+                lease.discard();
+                yield new PermissionResult.Unconfirmed(new UnconfirmedCause.TransportLost());
+            }
+        };
     }
 
     /** The administrator probe of a Windows target: the whole elevated work is the same SFTP work when the connection is the administrator's. */
