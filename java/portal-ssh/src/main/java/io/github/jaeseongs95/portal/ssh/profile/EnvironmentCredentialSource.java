@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -233,9 +234,9 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
             .orElse(path);
     }
 
-    /** Reads a file; {@code source} is a phrase that says where its path was set (it opens the log line), because the path itself may be a secret text and is never logged. */
+    /** Reads a file; {@code source} is a phrase that says where its path was set (it opens the log line), because the path itself may be a secret text and is never logged. A dangling symbolic link exists with {@link LinkOption#NOFOLLOW_LINKS} and fails {@link Files#isRegularFile}, so it is refused as {@link FileRead.NotRegular} instead of silently skipped as absent (defect D-0137). */
     private FileRead read(Path file, String source) {
-        if (!Files.exists(file)) {
+        if (!Files.exists(file, LinkOption.NOFOLLOW_LINKS)) {
             return new FileRead.Absent();
         }
         if (!Files.isRegularFile(file)) {
@@ -244,7 +245,7 @@ public final class EnvironmentCredentialSource implements SshCredentialSource {
         try {
             return new FileRead.Text(Files.readString(file, StandardCharsets.UTF_8));
         } catch (IOException e) {
-            LOG.warn("{} cannot be read ({})", source,e.getClass().getSimpleName());
+            LOG.warn("{} cannot be read ({})", source, e.getClass().getSimpleName());
             return new FileRead.Unreadable();
         }
     }

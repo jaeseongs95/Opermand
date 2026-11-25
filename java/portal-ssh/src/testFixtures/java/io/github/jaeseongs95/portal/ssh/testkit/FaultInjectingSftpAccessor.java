@@ -5,6 +5,8 @@ import java.nio.ByteBuffer;
 import java.nio.channels.SeekableByteChannel;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.CopyOption;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
@@ -70,7 +72,28 @@ final class FaultInjectingSftpAccessor implements SftpFileSystemAccessor {
         if (fault.isPresent()) {
             throw failure(fault.get(), oldPath, sftpSubsystem);
         }
+        if (opts.isEmpty() && Files.isRegularFile(oldPath, LinkOption.NOFOLLOW_LINKS)) {
+            renameWithoutReplacing(oldPath, newPath);
+            return;
+        }
         SftpFileSystemAccessor.super.renameFile(sftpSubsystem, oldPath, newPath, opts);
+    }
+
+    /**
+     * What OpenSSH's {@code sftp-server} does for the plain SFTP {@code rename} of a regular file: {@code link(old, new)} and then {@code unlink(old)}, so that the one
+     * step that makes the new name fails when the name is taken, whoever else is renaming at the same moment (the protocol says the rename is an error when the target
+     * exists). MINA's default is {@link Files#move} without options, which on a POSIX system looks at the target and then {@code rename(2)}s, and {@code rename(2)} replaces:
+     * two renames onto one new name can then both succeed (defect SSH_PORTAL-D-0131, Linux only: Windows' {@code MoveFileEx} without a replace flag is atomic). A file
+     * system that cannot link falls back to the default, as the OpenSSH server does when {@code link} is not supported.
+     */
+    private static void renameWithoutReplacing(Path oldPath, Path newPath) throws IOException {
+        try {
+            Files.createLink(newPath, oldPath);
+        } catch (UnsupportedOperationException e) {
+            Files.move(oldPath, newPath);
+            return;
+        }
+        Files.delete(oldPath);
     }
 
     @Override

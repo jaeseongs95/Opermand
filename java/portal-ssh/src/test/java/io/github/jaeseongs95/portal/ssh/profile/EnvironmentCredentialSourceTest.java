@@ -514,6 +514,30 @@ class EnvironmentCredentialSourceTest {
     }
 
     @Test
+    @DisplayName("S-D0137-14: a broken symbolic link at the certificate or key path is refused as not a regular file, never silently treated as absent")
+    void aBrokenSymlinkCertificateIsRefused() throws IOException {
+        Path key = file("keys/id", "the key\n");
+        Path missingTarget = directory.resolve("keys/no-such-cert");
+        Path brokenCert = directory.resolve("keys/id-cert.pub");
+        TestFiles.requireOrSkip("links", TestFiles.canLink(brokenCert, missingTarget),
+            "the file store or the account of the test cannot make symbolic links; CI requires them (-Pportal.test.require=posix,links or acl,links) and fails instead of skipping");
+        Path brokenKey = directory.resolve("keys/broken-key");
+        Files.createSymbolicLink(brokenKey, missingTarget);
+
+        CredentialLookup certLookup = resolve("aws-local", "cert = true", Map.of("SSH_MCP_AWS_LOCAL_KEY", key.toString()));
+        CredentialLookup keyLookup = resolve("aws-local", "", Map.of("SSH_MCP_AWS_LOCAL_KEY", brokenKey.toString(), "SSH_MCP_PASSWORD", "p"));
+
+        assertThat(missesOf(certLookup)).singleElement().satisfies(miss -> {
+            assertThat(miss.part()).isEqualTo(CredentialPart.CERTIFICATE);
+            assertThat(miss.place()).contains("next to the key named by SSH_MCP_AWS_LOCAL_KEY").contains("is not a regular file");
+        });
+        assertThat(missesOf(keyLookup)).singleElement().satisfies(miss -> {
+            assertThat(miss.part()).isEqualTo(CredentialPart.PRIVATE_KEY);
+            assertThat(miss.place()).contains("SSH_MCP_AWS_LOCAL_KEY").contains("is not a regular file");
+        });
+    }
+
+    @Test
     @DisplayName("S-D0137-13: the warning for a key path that is not valid names the source and never holds the value, in the message or in its arguments")
     void theLogNeverHoldsTheKeyValue() throws IOException {
         Logger logger = (Logger) LoggerFactory.getLogger(EnvironmentCredentialSource.class);
