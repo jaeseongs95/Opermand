@@ -1,7 +1,9 @@
 package io.github.jaeseongs95.portal.ssh.exec;
 
+import io.github.jaeseongs95.portal.domain.operation.ExitStatus;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.Locale;
 import java.util.Map;
 import org.apache.sshd.client.channel.ChannelExec;
 
@@ -63,6 +65,30 @@ final class SupervisedExecChannel extends ChannelExec {
             }
             abandoned = true;
             return true;
+        }
+    }
+
+    /**
+     * How the command ended, as far as the server has said: the exit status, or the exit signal (its name without the {@code SIG} prefix, {@code UNKNOWN} when MINA's name is
+     * not one of the contract), or {@link ExitStatus.NoExit}. The only evidence of the end of a command: the close of the channel is none (D-0091).
+     */
+    ExitStatus exit() {
+        Integer code = getExitStatus();
+        if (code != null) {
+            return new ExitStatus.Exited(code);
+        }
+        String signal = getExitSignal();
+        if (signal == null) {
+            return new ExitStatus.NoExit();
+        }
+        String normalised = signal.toUpperCase(Locale.ROOT);
+        if (normalised.startsWith("SIG")) {
+            normalised = normalised.substring(3);
+        }
+        try {
+            return new ExitStatus.Signaled(normalised);
+        } catch (IllegalArgumentException e) {
+            return new ExitStatus.Signaled("UNKNOWN");
         }
     }
 

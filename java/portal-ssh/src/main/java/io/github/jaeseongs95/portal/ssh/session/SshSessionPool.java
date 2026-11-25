@@ -16,6 +16,8 @@ import org.apache.sshd.common.SshConstants;
 import org.apache.sshd.common.session.Session;
 import org.apache.sshd.common.session.SessionListener;
 import org.apache.sshd.common.util.buffer.Buffer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.core.task.TaskExecutor;
@@ -42,6 +44,8 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public final class SshSessionPool implements InitializingBean, DisposableBean {
+
+    private static final Logger LOG = LoggerFactory.getLogger(SshSessionPool.class);
 
     /** How long a probe waits for the reply: short, because the session was idle and its answer is one round trip. */
     static final Duration PROBE_TIMEOUT = Duration.ofSeconds(5);
@@ -128,6 +132,7 @@ public final class SshSessionPool implements InitializingBean, DisposableBean {
             Thread.currentThread().interrupt();
             return new Pick.Ready(new AcquireResult.Cancelled());
         } catch (ExecutionException e) {
+            LOG.debug("Waiting for the slot of a connection failed; the connection is reported as failed", e);
             return new Pick.Ready(new AcquireResult.Failed(new ConnectFailure(ConnectFailureCause.UNREACHABLE, alias)));
         }
         if (cancel.requested()) {
@@ -160,10 +165,26 @@ public final class SshSessionPool implements InitializingBean, DisposableBean {
     /** Makes the connection on the executor and fills the slot; a failure empties the slot first. */
     private void startConnecting(ProfileAlias alias, CompletableFuture<SlotValue> slot) {
         try {
-            executor.execute(() -> slot.complete(connectInto(alias, slot)));
+            executor.execute(() -> slot.complete(connectIntoOrDown(alias, slot)));
         } catch (RuntimeException e) {
+            LOG.debug("The executor refused to make a connection; the slot is emptied and the connection is reported as failed", e);
             slots.remove(alias, slot);
             slot.complete(new SlotValue.Down(new ConnectFailure(ConnectFailureCause.UNREACHABLE, alias)));
+        }
+    }
+
+    /**
+     * What fills the slot, whatever happens while the connection is made: a step after the connector (building the pooled session, listening to it) that throws used to end
+     * the task on the executor with the slot never completed and never emptied, so the waiters stayed until their own cancel and every later request for the profile
+     * waited on the same slot (defect SSH_PORTAL-D-0068). The failure is logged with its cause, the slot is emptied and the waiters get the failure.
+     */
+    private SlotValue connectIntoOrDown(ProfileAlias alias, CompletableFuture<SlotValue> slot) {
+        try {
+            return connectInto(alias, slot);
+        } catch (RuntimeException e) {
+            LOG.warn("Making the session of a profile failed after the connection was made; the slot is emptied and the waiters get a failed connection", e);
+            slots.remove(alias, slot);
+            return new SlotValue.Down(new ConnectFailure(ConnectFailureCause.UNREACHABLE, alias));
         }
     }
 
@@ -172,12 +193,27 @@ public final class SshSessionPool implements InitializingBean, DisposableBean {
         try {
             outcome = connector.connect(alias);
         } catch (RuntimeException e) {
+            LOG.debug("The connector failed with an unexpected exception; the connection is reported as failed", e);
             outcome = new ConnectOutcome.Failed(new ConnectFailure(ConnectFailureCause.UNREACHABLE, alias));
         }
         if (!(outcome instanceof ConnectOutcome.Connected connected)) {
             slots.remove(alias, slot);
             return new SlotValue.Down(((ConnectOutcome.Failed) outcome).failure());
         }
+        try {
+            return live(alias, slot, connected);
+        } catch (RuntimeException e) {
+            // The connection is made and cannot be used: it is closed here, because nobody else holds it.
+            try {
+                connected.client().stop();
+            } catch (RuntimeException stopFailure) {
+                e.addSuppressed(stopFailure);
+            }
+            throw e;
+        }
+    }
+
+    private SlotValue live(ProfileAlias alias, CompletableFuture<SlotValue> slot, ConnectOutcome.Connected connected) {
         boolean tty = connected.hops().get(connected.hops().size() - 1).profile().tty() == TtyMode.TTY;
         PooledSession pooled = new PooledSession(connected.session(), connected.client(), tty, settings.channelPermits(), settings.consecutiveOpenRejections(), clock,
             retiring -> discard(alias, slot, retiring));
@@ -213,6 +249,7 @@ public final class SshSessionPool implements InitializingBean, DisposableBean {
             session.request(PROBE_REQUEST, request, PROBE_TIMEOUT);
             return true;
         } catch (IOException | RuntimeException e) {
+            LOG.debug("The probe of a session did not get an answer; the session is dead", e);
             return false;
         }
     }

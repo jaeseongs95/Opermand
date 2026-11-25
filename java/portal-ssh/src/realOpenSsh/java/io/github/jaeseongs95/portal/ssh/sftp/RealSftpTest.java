@@ -46,7 +46,10 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.sshd.sftp.client.SftpClient;
+import org.apache.sshd.sftp.client.extensions.openssh.OpenSSHStatExtensionInfo;
+import org.apache.sshd.sftp.client.extensions.openssh.OpenSSHStatPathExtension;
 import org.apache.sshd.sftp.common.SftpException;
+import org.apache.sshd.sftp.common.extensions.openssh.StatVfsExtensionParser;
 import org.apache.sshd.sftp.common.extensions.openssh.PosixRenameExtensionParser;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -164,6 +167,19 @@ class RealSftpTest {
         java.io.ByteArrayOutputStream kept = new java.io.ByteArrayOutputStream();
         fetch(file, kept);
         assertThat(kept.toByteArray()).isEqualTo(original);
+    }
+
+    @Test
+    @DisplayName("SSH_PORTAL-D-0173 the real server, Linux or Win32-OpenSSH, advertises statvfs@openssh.com and answers it for a directory with free space: the disk probe has an answer and says the disk is not full")
+    void spaceProbeAnswersOnTheRealServer() throws IOException {
+        try (SftpClient sftp = new SftpChannels().open(server.session())) {
+            String directory = new SftpLocation(server.homePath(directoryName)).file();
+            assertThat(sftp.getServerExtensions()).as("extensions of the %s server", server.isWindows() ? "Windows" : "Linux").containsKey(StatVfsExtensionParser.NAME);
+            OpenSSHStatExtensionInfo information = sftp.getExtension(OpenSSHStatPathExtension.class).stat(directory);
+            assertThat(information.f_blocks).as("blocks of the file system of %s", directory).isPositive();
+            assertThat(information.f_bavail).as("available blocks of the file system of %s", directory).isPositive();
+            assertThat(new SpaceProbe().exhausted(sftp, directory)).isFalse();
+        }
     }
 
     @Test

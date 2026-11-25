@@ -4,14 +4,13 @@ import java.io.Closeable;
 import java.io.IOException;
 import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.sftp.client.SftpClient;
-import org.apache.sshd.sftp.client.SftpClientFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
  * Opens the SFTP subsystem channel of a session and closes the channels and streams of the file transfer. It is the one place that touches MINA's
- * {@link SftpClientFactory}, so a test can replace it to put a fault in front of an operation the embedded server cannot fail (a flush that is refused, a server extension
+ * {@link GuardedSftpClient} (MINA's client, which does not leave its channel behind when the open fails), so a test can replace it to put a fault in front of an operation the embedded server cannot fail (a flush that is refused, a server extension
  * that is not offered). The SFTP version is negotiated by MINA: the highest both sides speak (OpenSSH's {@code sftp-server} speaks 3, which is why the adapter never uses an
  * operation that needs a newer one).
  */
@@ -28,7 +27,21 @@ public class SftpChannels {
      * @throws IOException when the server refuses the subsystem or the connection fails
      */
     public SftpClient open(ClientSession session) throws IOException {
-        return SftpClientFactory.instance().createSftpClient(session);
+        return GuardedSftpClient.open(session);
+    }
+
+    /**
+     * Opens the subsystem channel of a transfer: as {@link #open(ClientSession)}, and a stop of the transfer (the owner's cancel or the time limit) that comes while the
+     * open is waited for cancels the open, so the wait ends at once and does not run its {@code SFTP_CHANNEL_OPEN_TIMEOUT} (defect SSH_PORTAL-D-0107). The channel of an open
+     * that was cancelled is closed when the server confirms it ({@link GuardedSftpClient}).
+     *
+     * @param session an authenticated session
+     * @param watch the watch of the transfer
+     * @return the SFTP client
+     * @throws IOException when the server refuses the subsystem, the open was cancelled or ran out of time, or the connection fails
+     */
+    public SftpClient open(ClientSession session, TransferWatch watch) throws IOException {
+        return GuardedSftpClient.whenOpening(opening -> watch.interruptWith(() -> opening.cancel()), () -> open(session));
     }
 
     /**

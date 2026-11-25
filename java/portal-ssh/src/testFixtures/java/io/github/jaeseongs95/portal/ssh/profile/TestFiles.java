@@ -72,6 +72,24 @@ public final class TestFiles {
         }
     }
 
+    /**
+     * Whether the machine has an ability of the file system, for a test that checks one thing where it has it and another where it has not (a mode is read back where the
+     * file system has permission bits, and the answer says that it cannot be where it has none): the test then runs one of its two sides on every machine, and a side is not
+     * skipped. A run that names the ability in {@code portal.test.require} (the Linux CI: {@code posix,links}) fails here when the machine lacks it, instead of quietly taking
+     * the side for machines without it (defects SSH_PORTAL-D-0174 and SSH_PORTAL-D-0064).
+     *
+     * @param ability {@code posix}, {@code links} or {@code acl}
+     * @param available whether the machine has it
+     * @return {@code available}
+     */
+    public static boolean hasAbility(String ability, boolean available) {
+        String required = System.getProperty("portal.test.require", "");
+        if (List.of(required.split(",")).contains(ability)) {
+            assertThat(available).as("this run requires the ability '%s' of the file system, and the machine lacks it", ability).isTrue();
+        }
+        return available;
+    }
+
     /** Tries to make {@code link} a symbolic link to {@code target}; false where the file store or the account may not (a Windows user token), which {@link #requireOrSkip} turns into a skip or a failure. */
     public static boolean canLink(Path link, Path target) {
         try {

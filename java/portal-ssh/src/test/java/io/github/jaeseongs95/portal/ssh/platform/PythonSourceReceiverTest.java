@@ -78,6 +78,32 @@ class PythonSourceReceiverTest {
     }
 
     @Test
+    @DisplayName("SSH_PORTAL-D-0172 a POSIX target whose Python is elsewhere runs a source with the interpreter it is given, as a Windows target does: the path is one quoted word, with and without sudo")
+    void aConfiguredPosixInterpreterIsRun() {
+        SourceText source = new SourceText("pass\n");
+        PosixPythonExecutable interpreter = new PosixPythonExecutable("/opt/my tools/python3.12");
+
+        PreparedCommand plain = receiver.prepareLinux(source, SourceArguments.none(), "/", interpreter, false);
+        PreparedCommand elevated = receiver.prepareLinux(source, SourceArguments.none(), "/", interpreter, true);
+
+        assertThat(plain.commandLine()).startsWith("'/opt/my tools/python3.12' '-I' '-B' '-S' '-X' 'utf8' '-c' ").doesNotContain("/usr/bin/python3");
+        assertThat(elevated.commandLine()).startsWith("'sudo' '-n' '--' '/opt/my tools/python3.12' '-I'");
+        assertThat(plain.stdin().bytes()).isEqualTo("pass\n".getBytes(StandardCharsets.UTF_8));
+        assertThat(receiver.prepareLinux(source, SourceArguments.none(), "/", false)).as("without an interpreter the 2.x one runs").isEqualTo(
+            receiver.prepareLinux(source, SourceArguments.none(), "/", PosixPythonExecutable.DEFAULT, false));
+    }
+
+    @Test
+    @DisplayName("SSH_PORTAL-D-0172 a configured interpreter must be an absolute POSIX path that names a Python: relative, another program, a line break, a NUL or a long text is refused")
+    void aPosixInterpreterMustBeAnAbsolutePythonPath() {
+        for (String bad : List.of("python3", "bin/python3", "/usr/bin/bash", "/usr/bin/python3\nid", "/usr/bin/python3\0", "/usr/bin/python3 -c x", "/" + "a/".repeat(300) + "python3")) {
+            assertThatThrownBy(() -> new PosixPythonExecutable(bad)).as("interpreter %s", bad.length() > 40 ? bad.substring(0, 40) : bad).isInstanceOf(IllegalArgumentException.class);
+        }
+        assertThat(new PosixPythonExecutable("/usr/local/bin/python").value()).isEqualTo("/usr/local/bin/python");
+        assertThat(new PosixPythonExecutable("/usr/bin/python3.12").value()).isEqualTo("/usr/bin/python3.12");
+    }
+
+    @Test
     @DisplayName("RC-B-352 한글·이모지 원문은 UTF-8 바이트 그대로 stdin이 되고 길이 인수는 문자 수가 아니라 바이트 수다. 16384바이트 원문도 받는다")
     void sourceBytesAreUtf8AndMaximumIsAccepted() {
         String text = "print('한글 😀')\r\n# 끝";

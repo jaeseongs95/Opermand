@@ -395,6 +395,18 @@ class ServerKeyPolicyTest {
     }
 
     @Test
+    @DisplayName("SSH_PORTAL-D-0146 a link that points nowhere in place of the file of known hosts is refused when the policy is built as a path that is not a regular file (KNOWN_HOSTS_UNSAFE), not as an I/O failure")
+    void aLinkToNowhereIsRefused() throws IOException {
+        TestFiles.requireOrSkip("links", TestFiles.canLink(knownHosts, root.resolve("points-nowhere")),
+            "the file store or the account of the test cannot make symbolic links (a Windows user token); the Linux CI requires them (-Pportal.test.require=posix,links) and fails instead of skipping");
+
+        assertThatThrownBy(() -> policy(HostKeyMode.TOFU)).isInstanceOfSatisfying(ProfileConfigException.class, e -> assertThat(e.code()).isEqualTo(ProfileConfigException.Code.KNOWN_HOSTS_UNSAFE))
+            .hasMessageEndingWith("is not a regular file");
+        assertThat(Files.isSymbolicLink(knownHosts)).as("the link is left as it was").isTrue();
+        assertThat(root.resolve("points-nowhere")).as("nothing is created behind the link").doesNotExist();
+    }
+
+    @Test
     @DisplayName("S-D0117-07: a file store on which nothing can be made private refuses to build the policy, and the file and its folder are not created")
     void aFileStoreWithoutARuleRefusesTheStart() {
         Path file = root.resolve("no-rule").resolve("known_hosts");

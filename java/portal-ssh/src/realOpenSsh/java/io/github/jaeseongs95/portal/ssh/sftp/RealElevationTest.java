@@ -31,7 +31,10 @@ class RealElevationTest {
         try (RealServer server = RealServer.open()) {
             boolean sudoWorks = server.exec("sudo -n true").exitStatus() == 0;
 
-            SudoSftpChannels.Opening opening = new SudoSftpChannels(new SftpChannels(), new SftpFailureClassifier()).open(server.session());
+            SudoSftpChannels.Opening opening = new SudoSftpChannels(new SftpChannels(), new SftpFailureClassifier()).open(server.session(),
+                new io.github.jaeseongs95.portal.app.remote.RemoteTarget(new io.github.jaeseongs95.portal.domain.id.TargetId("realserver"),
+                    io.github.jaeseongs95.portal.domain.target.TargetRevision.of("b".repeat(64)), new io.github.jaeseongs95.portal.domain.target.ProfileAlias("writer"),
+                    io.github.jaeseongs95.portal.domain.target.AccessMode.READ_WRITE));
 
             if (sudoWorks && !server.isWindows()) {
                 assertThat(opening).as("the account may use sudo -n: the server program is found and starts").isInstanceOf(SudoSftpChannels.Opening.Opened.class);

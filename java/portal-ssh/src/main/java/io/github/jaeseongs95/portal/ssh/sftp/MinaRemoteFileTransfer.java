@@ -284,6 +284,13 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
                 // the file is a regular file: go on
             }
         }
+        Optional<TransferFailureCause> stopped = watch.stopRequested();
+        if (stopped.isPresent()) {
+            return new PermissionResult.NotDispatched(stopped.orElseThrow());
+        }
+        // The change of the mode is one request and the look at its result one more: from here they run to their end, so a cancel or the time limit no longer closes the
+        // channel half way and turns a live session into a lost transport (defect SSH_PORTAL-D-0085).
+        watch.disarm();
         try {
             client.setStat(location.file(), new SftpClient.Attributes().perms(request.mode().bits()));
         } catch (IOException e) {
@@ -301,8 +308,21 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
                 ? new PermissionResult.Applied()
                 : new PermissionResult.Refused(TransferErrorCode.INVALID_REQUEST, new FileDiagnostic.None());
         } catch (IOException e) {
-            lease.discard();
-            return new PermissionResult.Unconfirmed(new UnconfirmedCause.TransportLost());
+            // The mode was set and could not be read back (defect SSH_PORTAL-D-0086). What the server answered decides: a status that says the file is gone is that, and any
+            // other status is an answer of a live server, so the session is kept; only a loss of the connection discards it. The cause is logged, not dropped.
+            return switch (classifier.verdict(e, SftpFailureClassifier.Site.TARGET_FILE)) {
+                case SftpFailureClassifier.Verdict.Refusal refusal -> {
+                    LOG.warn("The mode of a file was set and could not be read back (the server answered); the result is unconfirmed", e);
+                    yield refusal.code() == TransferErrorCode.FILE_NOT_FOUND
+                        ? new PermissionResult.Refused(refusal.code(), refusal.diagnostic())
+                        : new PermissionResult.Unconfirmed(new UnconfirmedCause.TransportLost());
+                }
+                case SftpFailureClassifier.Verdict.Lost lost -> {
+                    LOG.warn("The mode of a file was set and the connection was lost before it was read back; the session is discarded", e);
+                    lease.discard();
+                    yield new PermissionResult.Unconfirmed(new UnconfirmedCause.TransportLost());
+                }
+            };
         }
     }
 
@@ -323,7 +343,7 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
         try (TransferWatch watch = new TransferWatch(scheduler, clock, limits.deadline(), control.cancel())) {
             return switch (sessions.lease(target, control.cancel())) {
                 case SessionAcquisition.Unavailable unavailable -> notDispatched.apply(unavailable.cause());
-                case SessionAcquisition.Acquired acquired -> withLease(acquired.lease(), control, watch, elevated, notDispatched, refused, work);
+                case SessionAcquisition.Acquired acquired -> withLease(acquired.lease(), target, control, watch, elevated, notDispatched, refused, work);
             };
         }
     }
@@ -341,9 +361,9 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
         }
     }
 
-    private Attempt attempt(SessionLease lease, boolean elevated, TransferWatch watch) {
+    private Attempt attempt(SessionLease lease, RemoteTarget target, boolean elevated, TransferWatch watch) {
         if (elevated) {
-            return switch (sudoChannels.open(lease.session())) {
+            return switch (sudoChannels.open(lease.session(), target, watch)) {
                 case SudoSftpChannels.Opening.Opened opened -> new Attempt.Ready(opened.client());
                 case SudoSftpChannels.Opening.NoServer noServer -> new Attempt.Refused(TransferErrorCode.INVALID_REQUEST);
                 case SudoSftpChannels.Opening.NotStarted notStarted -> new Attempt.Refused(TransferErrorCode.PERMISSION_DENIED);
@@ -355,7 +375,7 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
             };
         }
         try {
-            return new Attempt.Ready(channels.open(lease.session()));
+            return new Attempt.Ready(channels.open(lease.session(), watch));
         } catch (IOException e) {
             if (!lease.session().isOpen()) {
                 return lostBeforeWork(lease, watch, e);
@@ -380,7 +400,7 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
         return new Attempt.Unreachable(TransferFailureCause.TRANSPORT_LOST);
     }
 
-    private <R> R withLease(SessionLease lease, ExecutionControl control, TransferWatch watch, boolean elevated, Function<TransferFailureCause, R> notDispatched,
+    private <R> R withLease(SessionLease lease, RemoteTarget target, ExecutionControl control, TransferWatch watch, boolean elevated, Function<TransferFailureCause, R> notDispatched,
                             Function<TransferErrorCode, R> refused, SftpWork<R> work) {
         try (lease) {
             control.guard().beforeDispatch();
@@ -389,7 +409,7 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
                 return notDispatched.apply(stopped.orElseThrow());
             }
             SftpClient client;
-            switch (attempt(lease, elevated, watch)) {
+            switch (attempt(lease, target, elevated, watch)) {
                 case Attempt.Ready ready -> client = ready.client();
                 case Attempt.Refused denied -> {
                     return refused.apply(denied.code());

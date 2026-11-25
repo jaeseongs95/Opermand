@@ -22,7 +22,6 @@ import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ScheduledFuture;
 import org.apache.sshd.client.future.OpenFuture;
@@ -31,6 +30,8 @@ import org.apache.sshd.common.channel.ChannelListener;
 import org.apache.sshd.common.channel.exception.SshChannelOpenException;
 import org.apache.sshd.common.session.ConnectionService;
 import org.apache.sshd.core.CoreModuleProperties;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.task.TaskExecutor;
 import org.springframework.scheduling.TaskScheduler;
 
@@ -47,6 +48,8 @@ import org.springframework.scheduling.TaskScheduler;
  * not evidence (the stop procedure, 3.3: INT at once, TERM after a third of the grace, KILL after two thirds, then a graceful close).
  */
 final class ExecSupervisor implements SupervisedExecChannel.Events {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ExecSupervisor.class);
 
     private enum Phase { OPENING, RUNNING, DONE }
 
@@ -189,6 +192,12 @@ final class ExecSupervisor implements SupervisedExecChannel.Events {
             try {
                 executor.execute(this::writeStdin);
             } catch (RuntimeException e) {
+                // The input was never written: a command that waits for it would wait for ever, and the run must not look as if the input had been delivered. It is the same
+                // stop as a failed write (INPUT_FAILED), which the stop procedure below carries out (defect SSH_PORTAL-D-0052).
+                LOG.warn("The executor refused to write the standard input of a command; the command is stopped", e);
+                if (stop == StopReason.NONE) {
+                    stop = StopReason.INPUT_FAILED;
+                }
                 stdinDone.complete(null);
             }
             if (request.reply() == ExecReply.AWAITED) {
@@ -265,30 +274,17 @@ final class ExecSupervisor implements SupervisedExecChannel.Events {
 
     /** The exit status or exit signal of the command, if the server has sent one (the channel notifies its listeners when it arrives). */
     private void observeExit() {
-        Integer code = channel.getExitStatus();
-        String signal = channel.getExitSignal();
+        ExitStatus seen = channel.exit();
         synchronized (this) {
-            if (phase == Phase.DONE || !(exit instanceof ExitStatus.NoExit) || code == null && signal == null) {
+            if (phase == Phase.DONE || !(exit instanceof ExitStatus.NoExit) || seen instanceof ExitStatus.NoExit) {
                 return;
             }
-            exit = code != null ? new ExitStatus.Exited(code) : signaled(signal);
+            exit = seen;
             timeline.mark(ExecutionPhase.EXIT_SEEN);
             if (stop == StopReason.NONE && phase == Phase.RUNNING) {
                 scheduleClosing(request.limits().stopGrace());
             }
             evaluate();
-        }
-    }
-
-    private ExitStatus signaled(String name) {
-        String normalised = name.toUpperCase(Locale.ROOT);
-        if (normalised.startsWith("SIG")) {
-            normalised = normalised.substring(3);
-        }
-        try {
-            return new ExitStatus.Signaled(normalised);
-        } catch (IllegalArgumentException e) {
-            return new ExitStatus.Signaled("UNKNOWN");
         }
     }
 
@@ -342,7 +338,8 @@ final class ExecSupervisor implements SupervisedExecChannel.Events {
         StreamCapture out = stdout == null ? emptyCapture() : stdout.capture();
         StreamCapture err = stderr == null ? emptyCapture() : stderr.capture();
         boolean captureFailed = stdout != null && stdout.sinkFailed() || stderr != null && stderr.sinkFailed();
-        ExecOutcomes.Facts facts = new ExecOutcomes.Facts(exit, stop, closed, outputDone(), signalDelivery, out, err, captureFailed, request.limits().deadline(),
+        boolean readFailed = stdout != null && stdout.readFailed() || stderr != null && stderr.readFailed();
+        ExecOutcomes.Facts facts = new ExecOutcomes.Facts(exit, stop, closed, outputDone() && !readFailed, readFailed, signalDelivery, out, err, captureFailed, request.limits().deadline(),
             !lease.session().isOpen());
         settle(outcomes.afterDispatch(facts));
     }
@@ -499,6 +496,7 @@ final class ExecSupervisor implements SupervisedExecChannel.Events {
                 input.flush();
             }
         } catch (IOException e) {
+            LOG.debug("The standard input of a command could not be written; the command is stopped", e);
             requestStop(StopReason.INPUT_FAILED);
         } finally {
             stdinDone.complete(null);

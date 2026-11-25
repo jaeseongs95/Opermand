@@ -130,6 +130,102 @@ final class SftpDoubles {
         });
     }
 
+    /**
+     * A client whose request to set the attributes of an open file (a handle: the mode of a file just made) is answered with the SFTP status, as a server does that cannot
+     * give the new file its mode. Every other call goes to the real client.
+     */
+    SftpClient refusingToSetTheModeOfAHandle(SftpClient real, int status) {
+        return proxy(real, (method, arguments) -> {
+            if ("setStat".equals(method.getName()) && arguments != null && arguments.length == 2 && arguments[0] instanceof SftpClient.Handle) {
+                throw new SftpException(status, "injected: the mode of the file is refused");
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client that runs {@code atTheChange} when the attributes of a path are set by name (the change of a mode: a cancel or a time limit that comes in the middle of it)
+     * and then does the real call. Every other call goes to the real client.
+     */
+    SftpClient runningWhenTheModeIsChanged(SftpClient real, Runnable atTheChange) {
+        return proxy(real, (method, arguments) -> {
+            if ("setStat".equals(method.getName()) && arguments != null && arguments.length == 2 && arguments[0] instanceof String) {
+                atTheChange.run();
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client whose {@code lstat} is answered with the SFTP status once the attributes of a path were set by name: a server that took the change of the mode and then
+     * refuses to say what the file is now (the look that reads the mode back). Every other call goes to the real client.
+     */
+    SftpClient refusingToLookAfterTheModeIsSet(SftpClient real, int status) {
+        AtomicBoolean set = new AtomicBoolean();
+        return proxy(real, (method, arguments) -> {
+            if ("setStat".equals(method.getName()) && arguments != null && arguments.length == 2 && arguments[0] instanceof String) {
+                Object result = passThrough(real, method, arguments);
+                set.set(true);
+                return result;
+            }
+            if ("lstat".equals(method.getName()) && set.get()) {
+                throw new SftpException(status, "injected: the status of the file is refused after its mode was set");
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client whose handle for reading a path that ends with the suffix (the look that reads a replaced file back) fails in {@code close()} after the real handle was
+     * closed: a close that fails by itself after the file was read and confirmed. Every other call goes to the real client.
+     */
+    SftpClient failingToCloseTheReadHandle(SftpClient real, String pathSuffix) {
+        return proxy(real, (method, arguments) -> {
+            if ("open".equals(method.getName()) && arguments != null && arguments.length == 2 && arguments[0] instanceof String path && path.endsWith(pathSuffix)
+                && arguments[1] instanceof java.util.Collection<?> modes && modes.equals(java.util.Set.of(SftpClient.OpenMode.Read))) {
+                return new ClosingFails((SftpClient.CloseableHandle) passThrough(real, method, arguments));
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client whose channel ends when the temporary file of an upload is created: the open of a path of the portal's temporary files with the exclusive-create mode runs
+     * {@code atTheOpen} and then fails with a {@link ClosedChannelException}, what a client that was closed from outside (by a cancel or the time limit) answers. Every other
+     * call goes to the real client.
+     */
+    SftpClient channelEndingAtTheTemporaryFile(SftpClient real, Runnable atTheOpen) {
+        return proxy(real, (method, arguments) -> {
+            if ("open".equals(method.getName()) && arguments != null && arguments.length == 2 && arguments[0] instanceof String path && path.contains(".ssh-approval-")
+                && arguments[1] instanceof java.util.Collection<?> modes && modes.contains(SftpClient.OpenMode.Exclusive)) {
+                atTheOpen.run();
+                throw new ClosedChannelException();
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /** A handle of the real client whose {@code close()} closes the real handle first and then fails: a close that fails by itself after the answer is known. */
+    private static final class ClosingFails extends SftpClient.CloseableHandle {
+        private final SftpClient.CloseableHandle real;
+
+        ClosingFails(SftpClient.CloseableHandle real) {
+            super(real.getPath(), real.getIdentifier());
+            this.real = real;
+        }
+
+        @Override
+        public boolean isOpen() {
+            return real.isOpen();
+        }
+
+        @Override
+        public void close() throws IOException {
+            real.close();
+            throw new IOException("injected: closing the read handle failed");
+        }
+    }
+
     /** Opens the real client of a session and puts a fault in front of it. */
     static final class FaultyChannels extends SftpChannels {
         private final UnaryOperator<SftpClient> fault;

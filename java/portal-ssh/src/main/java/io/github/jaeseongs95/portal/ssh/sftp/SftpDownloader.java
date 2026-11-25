@@ -70,10 +70,7 @@ public class SftpDownloader {
             case PathInspection.Lost lost -> {
                 // A time limit or a cancel that fires during the first look closes the channel, and the look then fails: the cause stays what stopped the transfer and the
                 // live session is kept, as in the look after the read and in failedReading. Only a loss that nobody caused is a lost connection (case S-D0013-06).
-                if (watch.fired().isPresent()) {
-                    yield new DownloadResult.Failed(watch.fired().orElseThrow());
-                }
-                yield connectionLost(lease, lost.cause());
+                yield watch.fired().<DownloadResult>map(DownloadResult.Failed::new).orElseGet(() -> connectionLost(lease, lost.cause()));
             }
             case PathInspection.Refused refused -> new DownloadResult.Refused(refused.code(), refused.diagnostic());
             case PathInspection.Absent absent -> new DownloadResult.Refused(TransferErrorCode.FILE_NOT_FOUND, new FileDiagnostic.None());
@@ -87,10 +84,12 @@ public class SftpDownloader {
         if (announced.size() > limit) {
             return new DownloadResult.TooLarge(announced.size(), limit);
         }
-        Optional<TransferFailureCause> stopped = watch.stopRequested();
-        if (stopped.isPresent()) {
-            return new DownloadResult.Failed(stopped.orElseThrow());
-        }
+        return watch.stopRequested().<DownloadResult>map(DownloadResult.Failed::new)
+            .orElseGet(() -> readUnlessStopped(client, lease, watch, request, sink, location, announced));
+    }
+
+    private DownloadResult readUnlessStopped(SftpClient client, SessionLease lease, TransferWatch watch, DownloadRequest request, PayloadSink sink, SftpLocation location,
+                                             LeafState announced) {
         // The size the target announced goes to the sink before the first block, so the use case can hold only that much of its budget (defect D-0012).
         if (sink.expect(announced.size()) instanceof SinkResult.Failed) {
             return new DownloadResult.Failed(TransferFailureCause.LOCAL_IO_FAILED);
@@ -125,10 +124,7 @@ public class SftpDownloader {
             case PathInspection.Lost lost -> {
                 // A time limit or a cancel that came after the last byte closes the channel, and the look at the file then fails: the cause stays what stopped the transfer
                 // (the same order as in failedReading), and only a loss that nobody caused is a lost connection (case S-D0013-05).
-                if (watch.fired().isPresent()) {
-                    yield new DownloadResult.Failed(watch.fired().orElseThrow());
-                }
-                yield connectionLost(lease, lost.cause());
+                yield watch.fired().<DownloadResult>map(DownloadResult.Failed::new).orElseGet(() -> connectionLost(lease, lost.cause()));
             }
         };
     }
@@ -159,13 +155,10 @@ public class SftpDownloader {
     }
 
     private DownloadResult failedReading(SessionLease lease, TransferWatch watch, IOException cause) {
-        if (watch.fired().isPresent()) {
-            return new DownloadResult.Failed(watch.fired().orElseThrow());
-        }
-        return switch (classifier.verdict(cause, SftpFailureClassifier.Site.TARGET_FILE)) {
+        return watch.fired().<DownloadResult>map(DownloadResult.Failed::new).orElseGet(() -> switch (classifier.verdict(cause, SftpFailureClassifier.Site.TARGET_FILE)) {
             case SftpFailureClassifier.Verdict.Lost lost -> connectionLost(lease, cause);
             case SftpFailureClassifier.Verdict.Refusal refusal -> new DownloadResult.Refused(refusal.code(), refusal.diagnostic());
-        };
+        });
     }
 
     /**

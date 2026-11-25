@@ -131,7 +131,7 @@ public class SftpUploader {
         }
         String tempName = replacer.newTempName();
         String tempPath = location.sibling(tempName);
-        Optional<UploadResult> created = createTemporaryFile(client, lease, request, location, tempName, tempPath);
+        Optional<UploadResult> created = createTemporaryFile(client, lease, watch, request, location, tempName, tempPath);
         if (created.isPresent()) {
             return created.orElseThrow();
         }
@@ -143,7 +143,7 @@ public class SftpUploader {
         if (verified.isPresent()) {
             return verified.orElseThrow();
         }
-        Optional<UploadResult> moded = inheritMode(client, lease, location, tempName, tempPath, request, original);
+        Optional<UploadResult> moded = inheritMode(client, lease, watch, location, tempName, tempPath, request, original);
         if (moded.isPresent()) {
             return moded.orElseThrow();
         }
@@ -154,41 +154,34 @@ public class SftpUploader {
 
     // ---- the temporary file ----
 
-    private Optional<UploadResult> createTemporaryFile(SftpClient client, SessionLease lease, UploadRequest request, SftpLocation location, String tempName,
-                                                       String tempPath) {
+    private Optional<UploadResult> createTemporaryFile(SftpClient client, SessionLease lease, TransferWatch watch, UploadRequest request, SftpLocation location,
+                                                       String tempName, String tempPath) {
         try (SftpClient.CloseableHandle handle = client.open(tempPath, EnumSet.of(SftpClient.OpenMode.Write, SftpClient.OpenMode.Create, SftpClient.OpenMode.Exclusive))) {
             if (!(request.path() instanceof WindowsRemotePath)) {
                 protect(client, handle);
             }
             return Optional.empty();
         } catch (IOException e) {
-            return Optional.of(failedRemotely(client, lease, location, tempName, tempPath, e, SftpFailureClassifier.Site.NEW_FILE));
+            return Optional.of(failedRemotely(client, lease, watch, location, tempName, tempPath, e, SftpFailureClassifier.Site.NEW_FILE));
         }
     }
 
     /**
-     * Sets the mode of a new temporary file to {@code 0600}. A server that answers the plain failure or does not know the request leaves the file with the mode its umask
-     * gives (the embedded server on a file system without POSIX modes does that); every other failure ends the upload, because a file that other accounts may read must
-     * not receive the content.
+     * Sets the mode of a new temporary file to {@code 0600}. Every failure ends the upload (defect SSH_PORTAL-D-0056): a file that other accounts may read must not
+     * receive the content, and a server that could not set the mode of the file it just made gives no proof that the file is private. (This method used to go on after the
+     * plain failure and the unknown status, with the mode the umask of the server gives, and only a debug line said so.) The temporary file is removed by the caller's
+     * clean-up and the result is a refusal that names the cause of the server's answer.
      */
     private void protect(SftpClient client, SftpClient.Handle handle) throws IOException {
-        try {
-            client.setStat(handle, new SftpClient.Attributes().perms(OWNER_ONLY));
-        } catch (IOException e) {
-            SftpFailure.Kind kind = classifier.classify(e).kind();
-            if (kind != SftpFailure.Kind.PLAIN_FAILURE && kind != SftpFailure.Kind.OTHER) {
-                throw e;
-            }
-            LOG.debug("The server did not set the mode of the temporary file; it keeps the mode its umask gives it");
-        }
+        client.setStat(handle, new SftpClient.Attributes().perms(OWNER_ONLY));
     }
 
     /**
      * A file that is replaced keeps the permission bits it had (2.x kept the mode of an overwritten file): the temporary file gets them before it goes in place. The
      * same tolerance as for the first mode applies, and a path in Windows syntax has no mode.
      */
-    private Optional<UploadResult> inheritMode(SftpClient client, SessionLease lease, SftpLocation location, String tempName, String tempPath, UploadRequest request,
-                                               PathInspection original) {
+    private Optional<UploadResult> inheritMode(SftpClient client, SessionLease lease, TransferWatch watch, SftpLocation location, String tempName, String tempPath,
+                                               UploadRequest request, PathInspection original) {
         if (!(original instanceof PathInspection.Present present) || request.path() instanceof WindowsRemotePath) {
             return Optional.empty();
         }
@@ -203,9 +196,11 @@ public class SftpUploader {
         } catch (IOException e) {
             SftpFailure.Kind kind = classifier.classify(e).kind();
             if (kind == SftpFailure.Kind.PLAIN_FAILURE || kind == SftpFailure.Kind.OTHER) {
+                // The new file is already private (protect ran first), so what is lost is that the replaced file's wider mode is not given back; the cause is logged, not hidden.
+                LOG.warn("The server did not give the mode (and owner) of the replaced file to the new file; the new file keeps the private mode it was made with", e);
                 return Optional.empty();
             }
-            return Optional.of(failedRemotely(client, lease, location, tempName, tempPath, e, SftpFailureClassifier.Site.OWN_FILE));
+            return Optional.of(failedRemotely(client, lease, watch, location, tempName, tempPath, e, SftpFailureClassifier.Site.OWN_FILE));
         }
     }
 
@@ -287,15 +282,22 @@ public class SftpUploader {
             case Copy.Mismatch mismatch -> Optional.of(cleanedRefusal(client, tempName, tempPath, TransferErrorCode.FILE_CHANGED, new FileDiagnostic.None()));
             case Copy.Stopped stopped -> Optional.of(stopped(lease, tempName, tempPath, stopped.cause()));
             case Copy.LocalFailure local -> Optional.of(stopped(lease, tempName, tempPath, TransferFailureCause.LOCAL_IO_FAILED));
-            case Copy.RemoteFailure remote -> Optional.of(watch.fired().isPresent()
-                ? stopped(lease, tempName, tempPath, watch.fired().orElseThrow())
-                : failedRemotely(client, lease, location, tempName, tempPath, remote.cause(), SftpFailureClassifier.Site.OWN_FILE));
+            case Copy.RemoteFailure remote -> Optional.of(failedRemotely(client, lease, watch, location, tempName, tempPath, remote.cause(), SftpFailureClassifier.Site.OWN_FILE));
         };
     }
 
-    /** A request the server refused or a connection that broke while the temporary file was being made, written or read. */
-    private UploadResult failedRemotely(SftpClient client, SessionLease lease, SftpLocation location, String tempName, String tempPath, IOException cause,
+    /**
+     * A request the server refused or a connection that broke while the temporary file was being made, written or read. A time limit or a cancel that fired closed the channel
+     * and made the request fail: that is the stop, not a lost connection, so the cause stays what stopped the upload, the live session is kept and the temporary file is
+     * removed on a channel of its own (defect SSH_PORTAL-D-0089; the stage of the temporary file and of the mode used to report {@code Unconfirmed(TransportLost)} and
+     * to discard the session).
+     */
+    private UploadResult failedRemotely(SftpClient client, SessionLease lease, TransferWatch watch, SftpLocation location, String tempName, String tempPath, IOException cause,
                                         SftpFailureClassifier.Site site) {
+        if (watch.fired().isPresent()) {
+            LOG.debug("The upload was stopped while its temporary file was being made or written", cause);
+            return stopped(lease, tempName, tempPath, watch.fired().orElseThrow());
+        }
         SftpFailure failure = classifier.classify(cause);
         return switch (classifier.verdict(failure, site)) {
             case SftpFailureClassifier.Verdict.Lost lost -> {
@@ -333,6 +335,7 @@ public class SftpUploader {
         try {
             fresh = channels.open(lease.session());
         } catch (IOException e) {
+            LOG.warn("A channel for removing the temporary file of a stopped upload could not be opened; the file may remain", e);
             return CleanupState.INCOMPLETE;
         }
         try {
