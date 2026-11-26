@@ -29,7 +29,8 @@ import io.github.jaeseongs95.portal.store.journal.OperationMetadataLookup;
     @ComponentScan(basePackages = "io.github.jaeseongs95.portal.store.attachment"),
     @ComponentScan(basePackages = "io.github.jaeseongs95.portal.store", useDefaultFilters = false,
         includeFilters = @ComponentScan.Filter(type = FilterType.REGEX, pattern = "io\\.github\\.jaeseongs95\\.portal\\.store\\.(IdentifierQuoting|UtcTimestamps|UtcJdbcConversions)")),
-    @ComponentScan(basePackages = "io.github.jaeseongs95.portal.app.storage"),
+    @ComponentScan(basePackages = "io.github.jaeseongs95.portal.app.storage", useDefaultFilters = false,
+        includeFilters = @ComponentScan.Filter(type = FilterType.REGEX, pattern = "io\\.github\\.jaeseongs95\\.portal\\.app\\.storage\\.(PrivateStorages|PosixPrivateStorage|AclPrivateStorage)")),
     @ComponentScan(basePackages = "io.github.jaeseongs95.portal.app.attachment",
         excludeFilters = @ComponentScan.Filter(type = FilterType.REGEX, pattern = "io\\.github\\.jaeseongs95\\.portal\\.app\\.attachment\\.AttachmentReaper"))
 })
