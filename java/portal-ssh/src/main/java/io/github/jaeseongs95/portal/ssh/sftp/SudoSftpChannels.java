@@ -4,12 +4,9 @@ import io.github.jaeseongs95.portal.app.remote.RemoteTarget;
 import io.github.jaeseongs95.portal.domain.error.TransferErrorCode;
 import java.io.EOFException;
 import java.io.IOException;
-import java.io.InterruptedIOException;
-import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
-import org.apache.sshd.client.channel.ClientChannel;
 import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.common.channel.exception.SshChannelOpenException;
 import org.apache.sshd.sftp.client.SftpClient;
@@ -187,8 +184,7 @@ public class SudoSftpChannels {
                 case SftpFailureClassifier.Verdict.Lost lost -> new Opening.Lost(e);
             };
         } finally {
-            plain.closeQuietly(look);
-            awaitCloseQuietly(look, watch);
+            plain.closeAndAwaitQuietly(look, watch);
         }
         if (server.isEmpty()) {
             return new Opening.NoServer();
@@ -201,41 +197,6 @@ public class SudoSftpChannels {
         } catch (IOException e) {
             LOG.debug("The SFTP server program did not start under sudo -n", e);
             return failedStart(session, e, watch);
-        }
-    }
-
-    /**
-     * Waits boundedly for the server to confirm the close of the plain lookup channel before opening the elevated {@code exec} channel, so a server configured with
-     * {@code MaxSessions=1} has freed the lookup slot before the second channel-open arrives.
-     */
-    private void awaitCloseQuietly(SftpClient look, TransferWatch watch) {
-        ClientChannel channel = look.getClientChannel();
-        if (channel == null || channel.isClosed() || !channel.isClosing()) {
-            return;
-        }
-        if (watch != null && watch.stopRequested().isPresent()) {
-            return;
-        }
-        Duration wait = plain.stopGrace();
-        if (watch != null) {
-            Duration remaining = watch.remaining();
-            if (remaining.compareTo(wait) < 0) {
-                wait = remaining;
-            }
-        }
-        if (wait.isZero() || wait.isNegative()) {
-            return;
-        }
-        if (watch != null) {
-            watch.interruptWith(() -> channel.close(true));
-        }
-        try {
-            channel.close(false).await(wait);
-        } catch (InterruptedIOException e) {
-            Thread.currentThread().interrupt();
-            LOG.debug("Interrupted while waiting for the SFTP lookup channel to finish closing", e);
-        } catch (IOException e) {
-            LOG.debug("Waiting for the SFTP lookup channel to finish closing failed; continuing", e);
         }
     }
 

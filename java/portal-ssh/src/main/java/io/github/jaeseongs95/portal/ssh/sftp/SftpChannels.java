@@ -3,8 +3,10 @@ package io.github.jaeseongs95.portal.ssh.sftp;
 import io.github.jaeseongs95.portal.app.remote.ExecutionLimits;
 import java.io.Closeable;
 import java.io.IOException;
+import java.io.InterruptedIOException;
 import java.time.Duration;
 import java.util.Objects;
+import org.apache.sshd.client.channel.ClientChannel;
 import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.slf4j.Logger;
@@ -88,6 +90,49 @@ public class SftpChannels {
             closeable.close();
         } catch (IOException e) {
             LOG.debug("A channel or stream did not close cleanly; the result it carried stands", e);
+        }
+    }
+
+    /**
+     * Closes an SFTP client and waits boundedly for the peer to confirm its channel close, so a pooled session talking to a {@code MaxSessions=1} server has freed the slot
+     * before the next channel-open arrives (whether the next channel is the elevated {@code exec} channel or the next pooled transfer). When a stop has already been requested on
+     * {@code watch}, returns immediately after closing so cancellation or deadline handling never blocks.
+     *
+     * @param client the SFTP client to close, or {@code null}
+     * @param watch the active transfer watch, or {@code null} when closing after normal completion
+     */
+    public void closeAndAwaitQuietly(SftpClient client, TransferWatch watch) {
+        if (client == null) {
+            return;
+        }
+        closeQuietly(client);
+        ClientChannel channel = client.getClientChannel();
+        if (channel == null || channel.isClosed() || !channel.isClosing()) {
+            return;
+        }
+        if (watch != null && watch.stopRequested().isPresent()) {
+            return;
+        }
+        Duration wait = stopGrace;
+        if (watch != null) {
+            Duration remaining = watch.remaining();
+            if (remaining.compareTo(wait) < 0) {
+                wait = remaining;
+            }
+        }
+        if (wait.isZero() || wait.isNegative()) {
+            return;
+        }
+        if (watch != null) {
+            watch.interruptWith(() -> channel.close(true));
+        }
+        try {
+            channel.close(false).await(wait);
+        } catch (InterruptedIOException e) {
+            Thread.currentThread().interrupt();
+            LOG.debug("Interrupted while waiting for the SFTP channel to finish closing", e);
+        } catch (IOException e) {
+            LOG.debug("Waiting for the SFTP channel to finish closing failed; continuing", e);
         }
     }
 }

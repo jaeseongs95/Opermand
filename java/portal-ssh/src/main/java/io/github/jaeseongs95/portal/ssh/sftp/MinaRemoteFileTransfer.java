@@ -530,7 +530,7 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
                 return work.run(client, lease, watch);
             } finally {
                 watch.disarm();
-                channels.closeQuietly(client);
+                channels.closeAndAwaitQuietly(client, watch.stopRequested().isPresent() ? watch : null);
             }
         }
     }

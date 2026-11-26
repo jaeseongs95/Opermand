@@ -565,7 +565,7 @@ class ElevatedTransferTest {
     void elevatedTransferSucceedsUnderMaxSessionsOne() throws IOException {
         Files.createDirectories(root.resolve("usr/lib/openssh"));
         Files.writeString(root.resolve("usr/lib/openssh/sftp-server"), "placeholder");
-        AtomicInteger activeSessionChannels = new AtomicInteger();
+        AtomicReference<Channel> activeSessionChannel = new AtomicReference<>();
         ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
         scheduler.setDaemon(true);
         scheduler.initialize();
@@ -586,15 +586,19 @@ class ElevatedTransferTest {
 
                             @Override
                             public Channel createChannel(Session session) throws IOException {
-                                if (!activeSessionChannels.compareAndSet(0, 1)) {
+                                Channel current = activeSessionChannel.get();
+                                if (current != null && !current.isClosing() && !current.isClosed()) {
                                     return null;
                                 }
                                 Channel created = factory.createChannel(session);
                                 if (created == null) {
-                                    activeSessionChannels.set(0);
                                     return null;
                                 }
-                                created.addCloseFutureListener(future -> activeSessionChannels.set(0));
+                                if (!activeSessionChannel.compareAndSet(current, created)) {
+                                    created.close(true);
+                                    return null;
+                                }
+                                created.addCloseFutureListener(future -> activeSessionChannel.compareAndSet(created, null));
                                 return created;
                             }
                         }
