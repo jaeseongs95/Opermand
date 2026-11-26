@@ -6,8 +6,15 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileStore;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.attribute.AclEntry;
+import java.nio.file.attribute.AclEntryType;
+import java.nio.file.attribute.AclFileAttributeView;
+import java.nio.file.attribute.PosixFilePermissions;
+import java.nio.file.attribute.UserPrincipal;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
@@ -39,6 +46,21 @@ class OwnerOnlyFileTest {
         assertOnlyThese(root, "settings.env");
     }
 
+    private static void assertOwnerOnlyFolder(Path folder) throws IOException {
+        FileStore store = Files.getFileStore(folder);
+        if (store.supportsFileAttributeView("posix")) {
+            assertThat(Files.getPosixFilePermissions(folder, LinkOption.NOFOLLOW_LINKS)).isEqualTo(PosixFilePermissions.fromString("rwx------"));
+        } else if (store.supportsFileAttributeView("acl")) {
+            AclFileAttributeView view = Files.getFileAttributeView(folder, AclFileAttributeView.class, LinkOption.NOFOLLOW_LINKS);
+            UserPrincipal owner = view.getOwner();
+            assertThat(view.getAcl()).isNotEmpty().allSatisfy(entry -> {
+                assertThat(entry.type()).isEqualTo(AclEntryType.ALLOW);
+                assertThat(entry.principal()).isEqualTo(owner);
+            });
+            assertThat(view.getAcl().stream().map(AclEntry::principal).distinct()).containsExactly(owner);
+        }
+    }
+
     @Test
     void theMissingFoldersAreMadeAndTheFileIsStillPrivate(@TempDir Path root) throws IOException {
         Path file = root.resolve("a").resolve("b").resolve("settings.env");
@@ -47,6 +69,19 @@ class OwnerOnlyFileTest {
 
         assertThat(Files.readAllBytes(file)).isEqualTo(CONTENT);
         LegacyEnvFixture.assertOwnerOnly(file);
+        assertOwnerOnlyFolder(root.resolve("a"));
+        assertOwnerOnlyFolder(root.resolve("a").resolve("b"));
+    }
+
+    @Test
+    void aBrokenSymbolicLinkAtThePathIsRefusedAndLeftAlone(@TempDir Path root) throws IOException {
+        Path link = root.resolve("settings.env");
+        Files.createSymbolicLink(link, root.resolve("does-not-exist.env"));
+
+        assertThatThrownBy(() -> files.createNew(link, CONTENT)).isInstanceOf(FileAlreadyExistsException.class);
+
+        assertThat(Files.isSymbolicLink(link)).isTrue();
+        assertOnlyThese(root, "settings.env");
     }
 
     @Test

@@ -1,5 +1,6 @@
 package io.github.jaeseongs95.portal.migrate.target;
 
+import java.nio.file.Path;
 import java.security.SecureRandom;
 import java.time.Clock;
 
@@ -10,27 +11,29 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.FilterType;
 import org.springframework.data.jdbc.repository.config.EnableJdbcRepositories;
 
+import io.github.jaeseongs95.portal.domain.attachment.AttachmentIdGenerator;
 import io.github.jaeseongs95.portal.domain.id.Digester;
 import io.github.jaeseongs95.portal.domain.id.OperationIdGenerator;
 import io.github.jaeseongs95.portal.domain.id.Sha256Digester;
-import io.github.jaeseongs95.portal.store.journal.JdbcOperationJournal;
-import io.github.jaeseongs95.portal.store.journal.JdbcOperationQueueView;
+import io.github.jaeseongs95.portal.store.StorageRoots;
+import io.github.jaeseongs95.portal.store.journal.OperationMetadataLookup;
 
 /**
- * The part of the 3.0 store that the migration uses: the operation journal and the claim store of {@code portal-store} (found by name below, the same classes the server's
- * assembly uses, over the same tables), the mapping settings the store needs, and the helper beans the journal asks for. Nothing else of the store is started: the artifact,
- * output, audit and policy adapters are not needed to write a history. It is imported by the two roots, {@link ReadOnlyTargetConfiguration} and
- * {@link WritableTargetConfiguration}.
+ * The full journal and encrypted-attachment store wiring used by a real migration run (and full store inspection in tests): wires {@code portal.store.journal},
+ * {@code portal.store.attachment}, UTC/quoting JDBC helpers, and the storage/attachment-preparation helpers via component scan while keeping {@code portal-migrate}'s
+ * compiled classes free of direct {@code portal-app} references (rule A-DIR).
  */
 @Configuration(proxyBeanMethods = false)
 @ComponentScans({
     @ComponentScan(basePackages = "io.github.jaeseongs95.portal.store.journal"),
-    // The two classes of the store's root package that the journal adapters depend on (the name quoting of the mapping context, the savepoints); the filter names them
-    // because the quoting class is package private and the rest of that package belongs to adapters this tool does not start.
+    @ComponentScan(basePackages = "io.github.jaeseongs95.portal.store.attachment"),
     @ComponentScan(basePackages = "io.github.jaeseongs95.portal.store", useDefaultFilters = false,
-        includeFilters = @ComponentScan.Filter(type = FilterType.REGEX, pattern = "io\\.github\\.jaeseongs95\\.portal\\.store\\.(IdentifierQuoting|Savepoints)"))
+        includeFilters = @ComponentScan.Filter(type = FilterType.REGEX, pattern = "io\\.github\\.jaeseongs95\\.portal\\.store\\.(IdentifierQuoting|UtcTimestamps|UtcJdbcConversions)")),
+    @ComponentScan(basePackages = "io.github.jaeseongs95.portal.app.storage"),
+    @ComponentScan(basePackages = "io.github.jaeseongs95.portal.app.attachment",
+        excludeFilters = @ComponentScan.Filter(type = FilterType.REGEX, pattern = "io\\.github\\.jaeseongs95\\.portal\\.app\\.attachment\\.AttachmentReaper"))
 })
-@EnableJdbcRepositories(basePackages = "io.github.jaeseongs95.portal.store.journal")
+@EnableJdbcRepositories(basePackages = {"io.github.jaeseongs95.portal.store.journal", "io.github.jaeseongs95.portal.store.attachment"})
 class StoreAccess {
 
     @Bean
@@ -39,17 +42,33 @@ class StoreAccess {
     }
 
     @Bean
+    SecureRandom secureRandom() {
+        return new SecureRandom();
+    }
+
+    @Bean
     Digester digester() {
         return new Sha256Digester();
     }
 
     @Bean
-    OperationIdGenerator operationIdGenerator() {
-        return new OperationIdGenerator(new SecureRandom());
+    OperationIdGenerator operationIdGenerator(SecureRandom random) {
+        return new OperationIdGenerator(random);
     }
 
     @Bean
-    ExistingHistory existingHistory(JdbcOperationJournal journal, JdbcOperationQueueView queue) {
-        return new StoredHistory(journal, queue);
+    AttachmentIdGenerator attachmentIdGenerator(SecureRandom random) {
+        return new AttachmentIdGenerator(random);
+    }
+
+    @Bean
+    StorageRoots storageRoots(MigrationTarget target) {
+        Path base = target.dataDir();
+        return new StorageRoots(base.resolve("artifacts"), base.resolve("outputs"), base.resolve("attachments"), base.resolve("keyring"));
+    }
+
+    @Bean
+    ExistingHistory existingHistory(OperationMetadataLookup lookup) {
+        return new StoredHistory(lookup);
     }
 }

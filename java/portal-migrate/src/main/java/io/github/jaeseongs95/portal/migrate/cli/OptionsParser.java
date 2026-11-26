@@ -20,7 +20,7 @@ final class OptionsParser {
     static final String USAGE = String.join("\n",
         "usage: portal-migrate --source=<2.x data folder> --target=<3.0 data folder> [--dry-run] [--unknown-budget=<n>] [--env-file=<2.x environment file> --env-out=<new file>]",
         "  --source          the folder the 2.x service kept its state in (stop the 2.x service first)",
-        "  --target          the 3.0 data folder (BRIDGE_DATA_DIR of the server); the embedded store is the file portal in it. Not needed when --spring.datasource.url names the store",
+        "  --target          the 3.0 data folder (BRIDGE_DATA_DIR of the server); holds the embedded store (portal) and encrypted attachments/keyring. Required for real history imports even when --spring.datasource.url names the database",
         "  --dry-run         write nothing: report what would be moved, what collides and what is not moved",
         "  --unknown-budget  the unknown budget the 3.0 server runs with (default " + ConcurrencyLimits.DEFAULT_UNKNOWN_BUDGET + "); the migration stops if the unknown operations would use it up",
         "  --env-file        a 2.x environment file (BRIDGE_* settings, secrets included); it is only read. Needs --env-out",

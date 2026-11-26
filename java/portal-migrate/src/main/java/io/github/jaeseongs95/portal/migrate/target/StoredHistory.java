@@ -4,34 +4,29 @@ import java.util.Optional;
 
 import io.github.jaeseongs95.portal.domain.id.OperationId;
 import io.github.jaeseongs95.portal.domain.id.RequestKey;
-import io.github.jaeseongs95.portal.domain.operation.Operation;
-import io.github.jaeseongs95.portal.domain.operation.OperationState;
-import io.github.jaeseongs95.portal.store.journal.JdbcOperationJournal;
-import io.github.jaeseongs95.portal.store.journal.JdbcOperationQueueView;
+import io.github.jaeseongs95.portal.store.journal.OperationMetadataLookup;
 
-/** The history of an existing 3.0 store, read through the store's own journal and queue view. */
+/** The history metadata of an existing 3.0 store, read directly from the {@code operation} table without reading or creating a keyring. */
 final class StoredHistory implements ExistingHistory {
 
-    private final JdbcOperationJournal journal;
-    private final JdbcOperationQueueView queue;
+    private final OperationMetadataLookup lookup;
 
-    StoredHistory(JdbcOperationJournal journal, JdbcOperationQueueView queue) {
-        this.journal = journal;
-        this.queue = queue;
+    StoredHistory(OperationMetadataLookup lookup) {
+        this.lookup = lookup;
     }
 
     @Override
-    public Optional<Operation> byRequestKey(RequestKey key) {
-        return journal.findByRequestKey(key);
+    public Optional<OperationMetadataLookup.Entry> byRequestKey(RequestKey key) {
+        return lookup.findByRequestKey(key);
     }
 
     @Override
-    public Optional<Operation> byId(OperationId id) {
-        return journal.find(id);
+    public Optional<OperationMetadataLookup.Entry> byId(OperationId id) {
+        return lookup.findById(id);
     }
 
     @Override
     public int unknownOperations() {
-        return queue.counts().counts().getOrDefault(OperationState.UNKNOWN, 0);
+        return lookup.unknownOperations();
     }
 }

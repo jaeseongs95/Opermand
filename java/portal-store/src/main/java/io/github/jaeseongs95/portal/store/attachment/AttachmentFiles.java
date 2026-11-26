@@ -70,9 +70,13 @@ public class AttachmentFiles {
         Path target = bucket.resolve(id.value());
         Path tmp = null;
         try {
-            storages.createFolder(root);
+            if (!Files.isDirectory(root)) {
+                storages.createFolder(root);
+            }
             storages.requireFolder(root);
-            storages.createFolder(bucket);
+            if (!Files.isDirectory(bucket)) {
+                storages.createFolder(bucket);
+            }
             storages.requireFolder(bucket);
             byte[] suffix = new byte[8];
             random.nextBytes(suffix);

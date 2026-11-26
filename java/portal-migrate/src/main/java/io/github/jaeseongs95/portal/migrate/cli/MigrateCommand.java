@@ -85,6 +85,10 @@ public final class MigrateCommand {
     }
 
     private void moveHistory(MigrateOptions options, LegacyDirectory directory, List<LegacySource> sources, MigrationReport report, String[] args) throws IOException {
+        if (!options.dryRun() && options.target() == null) {
+            report.error("--target is required when importing operation history with --spring.datasource.url (3.0 stores encrypted operation bodies and the attachment keyring under --target)");
+            return;
+        }
         Map<String, String> fingerprints = directory.fingerprints();
         fingerprints.forEach(report::fingerprint);
         LegacyTranslator translator = new LegacyTranslator(JsonParserFactory.getJsonParser(), new Sha256Digester());
@@ -105,7 +109,7 @@ public final class MigrateCommand {
                 return;
             }
         }
-        if (!options.dryRun() && !options.customDatabase()) {
+        if (!options.dryRun() && options.target() != null) {
             Files.createDirectories(options.target());
         }
         runInStoreContext(options, input, args);
@@ -117,7 +121,7 @@ public final class MigrateCommand {
         application.setBannerMode(Banner.Mode.OFF);
         application.setLogStartupInfo(false);
         application.setDefaultProperties(options.springDefaults());
-        application.addInitializers(new RunnerRegistration(input, options.dryRun()));
+        application.addInitializers(new RunnerRegistration(input, options.dryRun(), options.target()));
         // The runner of the context does the work while Boot starts it; closing the context releases the store (and its file lock) before the report is printed.
         application.run(args).close();
     }

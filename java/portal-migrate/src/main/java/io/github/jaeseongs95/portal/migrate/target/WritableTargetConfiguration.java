@@ -15,7 +15,8 @@ import io.github.jaeseongs95.portal.store.migration.Migrations;
 
 /**
  * The context of a real run: the store with its schema brought up to date by the store's own runner (when the run asks for it, after every check of the 2.x data has passed,
- * not at the start of the context, so that a 2.x folder that cannot be migrated never creates a 3.0 store), and the writer.
+ * not at the start of the context, so that a 2.x folder that cannot be migrated never creates a 3.0 store), encrypted body attachments under {@link MigrationTarget}, and the
+ * writer.
  */
 @Configuration(proxyBeanMethods = false)
 @EnableAutoConfiguration

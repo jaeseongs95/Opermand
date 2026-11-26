@@ -223,4 +223,30 @@ class MigrateImportTest {
         assertThat(run.exitCode()).isEqualTo(1);
         assertThat(run.output()).contains("--target is required").contains("usage: portal-migrate");
     }
+
+    @Test
+    void importingHistoryWithAnExternalDatasourceStillRequiresTarget(@TempDir Path root) {
+        LegacyFixture legacy = new LegacyFixture(root.resolve("legacy")).operations(List.of(
+            job(1).state("completed").times(T0, T0 + 1000, T0 + 2000).exited(0).decision(EXECUTE)));
+
+        Run run = kit.run("--source=" + legacy.folder(), "--spring.datasource.url=jdbc:h2:mem:b7-no-target-test");
+
+        assertThat(run.exitCode()).as(run.output()).isEqualTo(1);
+        assertThat(run.output()).contains("--target is required when importing operation history with --spring.datasource.url");
+    }
+
+    @Test
+    void importingHistoryStoresEncryptedAttachmentsAndOwnerOnlyKeyringUnderTarget(@TempDir Path root) {
+        LegacyFixture legacy = new LegacyFixture(root.resolve("legacy")).operations(List.of(
+            job(1).state("completed").times(T0, T0 + 1000, T0 + 2000).exited(0).decision(EXECUTE).command("echo secret-payload-check")));
+        Path target = root.resolve("v3");
+
+        Run run = kit.run(kit.importArgs(legacy.folder(), target));
+
+        assertThat(run.exitCode()).as(run.output()).isZero();
+        Path keyFile = target.resolve("keyring").resolve("attachment.keys");
+        assertThat(keyFile).isRegularFile();
+        LegacyEnvFixture.assertOwnerOnly(keyFile);
+        assertThat(target.resolve("attachments")).isDirectory();
+    }
 }

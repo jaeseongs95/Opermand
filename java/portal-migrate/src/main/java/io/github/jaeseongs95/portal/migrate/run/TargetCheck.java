@@ -4,10 +4,10 @@ import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
 
-import io.github.jaeseongs95.portal.domain.operation.Operation;
 import io.github.jaeseongs95.portal.domain.operation.OperationState;
 import io.github.jaeseongs95.portal.migrate.report.MigrationReport;
 import io.github.jaeseongs95.portal.migrate.target.ExistingHistory;
+import io.github.jaeseongs95.portal.store.journal.OperationMetadataLookup;
 
 /**
  * The second half of the checks, against the 3.0 store: an operation that the store already holds with the same id, request key and contract is one an earlier run moved
@@ -30,9 +30,9 @@ public final class TargetCheck {
         Set<String> alreadyMoved = new HashSet<>();
         int pendingUnknown = 0;
         for (PlannedRow row : input.planned()) {
-            Optional<Operation> sameKey = existing.byRequestKey(row.key());
+            Optional<OperationMetadataLookup.Entry> sameKey = existing.byRequestKey(row.key());
             if (sameKey.isPresent()) {
-                Operation found = sameKey.orElseThrow();
+                OperationMetadataLookup.Entry found = sameKey.orElseThrow();
                 if (found.id().equals(row.id()) && found.hasContract(row.contract())) {
                     alreadyMoved.add(row.id().value());
                 } else {

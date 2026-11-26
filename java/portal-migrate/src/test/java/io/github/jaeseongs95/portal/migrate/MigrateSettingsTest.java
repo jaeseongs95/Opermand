@@ -2,7 +2,6 @@ package io.github.jaeseongs95.portal.migrate;
 
 import static io.github.jaeseongs95.portal.migrate.LegacyEnvFixture.ADMIN_ORIGIN;
 import static io.github.jaeseongs95.portal.migrate.LegacyEnvFixture.ADMIN_TOKEN;
-import static io.github.jaeseongs95.portal.migrate.LegacyEnvFixture.JEV_KEY;
 import static io.github.jaeseongs95.portal.migrate.LegacyEnvFixture.MCP_TOKEN;
 import static io.github.jaeseongs95.portal.migrate.LegacyEnvFixture.PROFILE_PASSWORD;
 import static io.github.jaeseongs95.portal.migrate.LegacyEnvFixture.TARGETS;
@@ -49,7 +48,7 @@ class MigrateSettingsTest {
         return args.toArray(String[]::new);
     }
 
-    /** The 3.0 file the installer-shaped 2.x file becomes: every kept line as it was written, none of the five dropped keys, the data folder last. */
+    /** The 3.0 file the installer-shaped 2.x file becomes: every kept line as it was written, none of the dropped keys (including JEV_API_KEY), the data folder last. */
     private static String expectedFor(Path profile, Path target) {
         return HEADER
             + "BRIDGE_MCP_TOKEN=" + MCP_TOKEN + "\n"
@@ -62,7 +61,6 @@ class MigrateSettingsTest {
             + "BRIDGE_TARGETS=" + TARGETS + "\n"
             + "BRIDGE_ADMIN_AUTH_MODE=token\n"
             + "SSH_MCP_ALPHA_WRITE_PASSWORD=" + PROFILE_PASSWORD + "\n"
-            + "JEV_API_KEY=" + JEV_KEY + "\n"
             + "BRIDGE_DATA_DIR=" + dataDir(target) + "\n";
     }
 
@@ -87,11 +85,12 @@ class MigrateSettingsTest {
         assertThat(run.exitCode()).as(run.output()).isZero();
         assertThat(LegacyEnvFixture.read(out)).isEqualTo(expectedFor(profile, target));
         LegacyEnvFixture.assertOwnerOnly(out);
-        assertThat(run.output()).contains("carried over unchanged (11): BRIDGE_MCP_TOKEN, BRIDGE_ADMIN_TOKEN, BRIDGE_UI_TICKET_KEY, BRIDGE_ADMIN_ORIGIN, BRIDGE_DISPLAY_NAME,"
-            + " BRIDGE_UI_ENABLED, BRIDGE_CONFIG_PATH, BRIDGE_TARGETS, BRIDGE_ADMIN_AUTH_MODE, SSH_MCP_ALPHA_WRITE_PASSWORD, JEV_API_KEY")
+        assertThat(run.output()).contains("carried over unchanged (10): BRIDGE_MCP_TOKEN, BRIDGE_ADMIN_TOKEN, BRIDGE_UI_TICKET_KEY, BRIDGE_ADMIN_ORIGIN, BRIDGE_DISPLAY_NAME,"
+            + " BRIDGE_UI_ENABLED, BRIDGE_CONFIG_PATH, BRIDGE_TARGETS, BRIDGE_ADMIN_AUTH_MODE, SSH_MCP_ALPHA_WRITE_PASSWORD")
             .contains("removed in 3.0, not carried over: BRIDGE_TRANSFER_ROOT").contains("removed in 3.0, not carried over: BRIDGE_AUDIT_PATH")
             .contains("removed in 3.0, not carried over: BRIDGE_ACCESS_TEAM_DOMAIN").contains("removed in 3.0, not carried over: BRIDGE_ACCESS_AUD")
-            .contains("removed in 3.0, not carried over: BRIDGE_ACCESS_OWNER_EMAILS").contains("added: BRIDGE_DATA_DIR is the --target folder")
+            .contains("removed in 3.0, not carried over: BRIDGE_ACCESS_OWNER_EMAILS").contains("removed in 3.0, not carried over: JEV_API_KEY")
+            .contains("added: BRIDGE_DATA_DIR is the --target folder")
             .contains("settings file: written, owner only").contains("moved now: 1");
         assertNothingSecretWasPrinted(run.output());
         assertThat(kit.fingerprint(root.resolve("etc"))).as("the 2.x environment file and the profile file are byte for byte what they were").isEqualTo(sourcesBefore);
@@ -144,7 +143,7 @@ class MigrateSettingsTest {
         Run run = kit.run(settingsArgs(kit, legacy.folder(), target, env, out, true));
 
         assertThat(run.exitCode()).as(run.output()).isZero();
-        assertThat(run.output()).contains("dry run, nothing is written").contains("settings file: would be written, owner only").contains("carried over unchanged (11)");
+        assertThat(run.output()).contains("dry run, nothing is written").contains("settings file: would be written, owner only").contains("carried over unchanged (10)");
         assertThat(out).as("a dry run writes no settings file").doesNotExist();
         assertThat(out.getParent()).as("and creates no folder for it").doesNotExist();
         assertThat(target).doesNotExist();
@@ -268,14 +267,21 @@ class MigrateSettingsTest {
 
     @Test
     void aSecretStoreFolderIsNotReadAndTheOperatorIsToldSo(@TempDir Path root) {
-        Path env = LegacyEnvFixture.write(root.resolve("etc").resolve("bridge.env"), "BRIDGE_SECRET_STORE_DIR=/var/lib/example/secrets", "BRIDGE_JEV_KEY_REF=secret://local-file/example-key");
+        Path env = LegacyEnvFixture.write(root.resolve("etc").resolve("bridge.env"), "BRIDGE_SECRET_STORE_DIR=/var/lib/example/secrets",
+            "BRIDGE_TEST_SERVER_SECRET_REF=secret://local-file/example-key", "BRIDGE_JEV_KEY_REF=secret://local-file/jev-key", "BRIDGE_COMMAND_AUTOMATION=false");
         Path out = root.resolve("out.env");
 
         Run run = kit.run(settingsArgs(kit, new LegacyFixture(root.resolve("legacy")).folder(), root.resolve("v3"), env, out, false));
 
         assertThat(run.exitCode()).as(run.output()).isZero();
-        assertThat(LegacyEnvFixture.read(out)).contains("BRIDGE_SECRET_STORE_DIR=/var/lib/example/secrets\n").contains("BRIDGE_JEV_KEY_REF=secret://local-file/example-key\n");
-        assertThat(run.output()).contains("ACTION REQUIRED the local secret store named by BRIDGE_SECRET_STORE_DIR is neither read nor moved");
+        String written = LegacyEnvFixture.read(out);
+        assertThat(written).contains("BRIDGE_SECRET_STORE_DIR=/var/lib/example/secrets\n")
+            .contains("BRIDGE_TEST_SERVER_SECRET_REF=secret://local-file/example-key\n")
+            .doesNotContain("BRIDGE_JEV_KEY_REF")
+            .doesNotContain("BRIDGE_COMMAND_AUTOMATION");
+        assertThat(run.output()).contains("ACTION REQUIRED the local secret store named by BRIDGE_SECRET_STORE_DIR is neither read nor moved")
+            .contains("removed in 3.0, not carried over: BRIDGE_JEV_KEY_REF")
+            .contains("removed in 3.0, not carried over: BRIDGE_COMMAND_AUTOMATION");
     }
 
     @Test

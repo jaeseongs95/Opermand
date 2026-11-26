@@ -27,7 +27,8 @@ import io.github.jaeseongs95.portal.domain.operation.Operation;
 import io.github.jaeseongs95.portal.domain.operation.OperationEvent;
 import io.github.jaeseongs95.portal.domain.operation.OperationState;
 import io.github.jaeseongs95.portal.migrate.cli.MigrateCommand;
-import io.github.jaeseongs95.portal.migrate.target.ReadOnlyTargetConfiguration;
+import io.github.jaeseongs95.portal.migrate.target.MigrationTarget;
+import io.github.jaeseongs95.portal.migrate.target.WritableTargetConfiguration;
 import io.github.jaeseongs95.portal.store.journal.JdbcClaimStore;
 import io.github.jaeseongs95.portal.store.journal.JdbcOperationJournal;
 import io.github.jaeseongs95.portal.store.journal.JdbcOperationQueueView;
@@ -65,10 +66,14 @@ final class MigrationKit {
         return args.toArray(String[]::new);
     }
 
-    /** An open 3.0 store, read through the store's own journal (the journal the server uses); close it before the command runs again (the store file is locked while open). */
+    /** An open 3.0 store, read through the store's own journal (the journal the server uses, including encrypted attachments and keyring under {@code target}); close it before the command runs again (the store file is locked while open). */
     Store open(Path target) {
         String location = target.toAbsolutePath().resolve("portal").toString().replace('\\', '/');
-        ConfigurableApplicationContext context = new SpringApplicationBuilder(ReadOnlyTargetConfiguration.class).web(WebApplicationType.NONE).bannerMode(Banner.Mode.OFF)
+        ConfigurableApplicationContext context = new SpringApplicationBuilder(WritableTargetConfiguration.class)
+            .web(WebApplicationType.NONE)
+            .bannerMode(Banner.Mode.OFF)
+            .initializers(ctx -> ((org.springframework.context.support.GenericApplicationContext) ctx)
+                .registerBean(MigrationTarget.class, () -> new MigrationTarget(target)))
             .properties("spring.datasource.url=jdbc:h2:file:" + location, "spring.datasource.username=sa", "spring.datasource.password=", "spring.sql.init.mode=never",
                 "logging.level.root=WARN")
             .run();

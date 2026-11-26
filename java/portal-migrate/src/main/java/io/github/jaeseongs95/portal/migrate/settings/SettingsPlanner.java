@@ -11,7 +11,7 @@ import io.github.jaeseongs95.portal.migrate.settings.EnvText.Entry;
 import io.github.jaeseongs95.portal.migrate.settings.SettingsPlan.Problem;
 
 /**
- * Turns a 2.x environment file into the 3.0 settings file. 3.0 reads the same {@code KEY=value} file with the same keys, except for the seven it dropped
+ * Turns a 2.x environment file into the 3.0 settings file. 3.0 reads the same {@code KEY=value} file with the same keys, except for the twelve it dropped
  * ({@link SettingsContract#REMOVED}) and the four it added; so every setting is carried over as it was written (a secret is copied, not parsed or changed), a dropped key is
  * left out and named, and the one added key that the command can know, {@code BRIDGE_DATA_DIR}, is the {@code --target} folder. What cannot be known (the owner account
  * of the OIDC login, its client secret, the login mode when 2.x used the access mode) is listed as an action for the operator, never filled with a guess.

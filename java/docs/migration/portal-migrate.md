@@ -40,7 +40,7 @@
 
 | 2.x가 남기는 것 | 분류 | 시험 · 이유 · 선행 변경 |
 |---|---|---|
-| 환경 파일 `/etc/ssh-mcp-approval-bridge.env`(`BRIDGE_*`, `JEV_API_KEY`, `SSH_MCP_*`)와 Docker용 비밀 환경 파일(같은 형식) | 옮김(`--env-file`·`--env-out`) | 3.0이 가진 키는 쓰인 그대로(비밀 포함) 새 파일로 옮기고, 3.0이 뺀 7개는 「제거됨」으로 보고하며, `BRIDGE_DATA_DIR`은 `--target`으로 채운다. 6절. `MigrateSettingsTest.theSettingsAreCarriedOverAsWrittenTheDroppedKeysAreLeftOutAndTheHistoryMovesWithThem` 외 `MigrateSettingsTest.*`, `MigrateSettingsFailureTest.*`, `SettingsContractTest.*` |
+| 환경 파일 `/etc/ssh-mcp-approval-bridge.env`(`BRIDGE_*`, `JEV_API_KEY`, `SSH_MCP_*`)와 Docker용 비밀 환경 파일(같은 형식) | 옮김(`--env-file`·`--env-out`) | 3.0이 가진 키는 쓰인 그대로(비밀 포함) 새 파일로 옮기고, 3.0이 뺀 12개(`BRIDGE_COMMAND_AUTOMATION`·Jev 4개 포함)는 「제거됨」으로 보고하며, `BRIDGE_DATA_DIR`은 `--target`으로 채운다. 6절. `MigrateSettingsTest.theSettingsAreCarriedOverAsWrittenTheDroppedKeysAreLeftOutAndTheHistoryMovesWithThem` 외 `MigrateSettingsTest.*`, `MigrateSettingsFailureTest.*`, `SettingsContractTest.*` |
 | 환경 파일의 `BRIDGE_ADMIN_AUTH_MODE=access`와 `BRIDGE_ACCESS_*`, `BRIDGE_OIDC_JWKS_URL`, `BRIDGE_OIDC_OWNER_EMAILS` | 의도적으로 옮기지 않음 | 3.0에 없는 키·모드다. 접속 모드는 token이 기본으로 적용되고 oidc로 바꾸려면 소유자 계정(`BRIDGE_OIDC_OWNER_SUBJECT`)과 `BRIDGE_OIDC_CLIENT_SECRET`을 운영자가 넣어야 한다(이메일을 계정 식별자로 바꿀 수 없다). 보고서의 「ACTION REQUIRED」로 알린다. `MigrateSettingsTest.the2xAccessModeHasNoEquivalent...`, `theOidcModeNeedsTheOwnerAccountAndTheClientSecretWhichOnlyTheOperatorCanGive` |
 | 환경 파일의 `BRIDGE_TARGETS`·`BRIDGE_DEFAULT_TARGET`(대상 설정) | 옮김(쓰인 그대로) | 값을 바꾸지 않고 복사한다. 3.0 서버가 시작할 때 검증한다. 선행 변경 필요: 3.0의 `BridgeTargetsConverter`(4단계 U2)가 만들어져야 2.x JSON이 그대로 받아들여지는지 시험할 수 있다 |
 | 환경 파일의 `SSH_MCP_*`(프로필 자격 증명) | 옮김(쓰인 그대로) | 3.0도 같은 이름을 읽는다(결정 D3-09). `MigrateSettingsTest.theSettingsAreCarriedOver...`(키 이름만 보고서에 나오고 값은 나오지 않음을 확인) |
@@ -61,8 +61,8 @@ java -jar portal-migrate.jar --source=<2.x 데이터 폴더> --target=<3.0 데�
 ```
 
 - 2.x 서비스는 먼저 정상 종료한다. 저널 파일 옆에 `-journal`·`-wal`·`-shm`이 있거나 파일이 잠겨 있으면 명령은 읽지 않고 오류로 끝난다.
-- `--target`은 3.0 데이터 폴더(서버의 `BRIDGE_DATA_DIR`)다. 내장 H2 저장소는 그 안의 파일 `portal`(`portal.mv.db`)이며 서버가 여는 `jdbc:h2:file:<BRIDGE_DATA_DIR>/portal`과 같다. 다른 DBMS는 `--spring.datasource.url=...`(그리고 username·password)로 지정하며, 이때 `--target`은 필요 없다(환경 파일을 옮길 때 `BRIDGE_DATA_DIR`은 운영자가 정한다).
-- `--dry-run`은 아무것도 쓰지 않는다. 저장소가 없으면 만들지도 않고, 설정 파일도 만들지 않는다(폴더도). 저장소가 있으면 읽기 전용으로 열어 충돌을 확인한다. 설정 파일은 「쓰게 될 것 / 이미 같은 내용이 있음 / 다른 내용이 있어 그대로 둠」을 알린다.
+- `--target`은 3.0 데이터 폴더(서버의 `BRIDGE_DATA_DIR`)다. 내장 H2 저장소는 그 안의 파일 `portal`(`portal.mv.db`)이며 서버가 여는 `jdbc:h2:file:<BRIDGE_DATA_DIR>/portal`과 같고, 암호화된 작업 본문(`attachments/`)과 키링(`keyring/attachment.keys`)도 그 아래에 저장된다. 다른 DBMS는 `--spring.datasource.url=...`(그리고 username·password)로 지정하되, 실 이력 이전 시에도 암호화 첨부와 키링 위치를 지정하기 위해 `--target`이 필수다(환경 파일만 옮기거나 `--dry-run`일 때만 생략 가능).
+- `--dry-run`은 아무것도 쓰지 않는다. 저장소가 없으면 만들지도 않고, 설정 파일도 만들지 않는다(폴더도). 저장소가 있으면 읽기 전용으로 DB 메타데이터(`operation` 표)만 조회해 충돌과 unknown 예산을 확인하며, 첨부 키링을 생성하거나 읽지 않는다. 설정 파일은 「쓰게 될 것 / 이미 같은 내용이 있음 / 다른 내용이 있어 그대로 둠」을 알린다.
 - `--unknown-budget`은 3.0 서버가 쓸 unknown 예산이다(기본 32). 5절 참고.
 - `--env-file`과 `--env-out`은 함께 준다. `--env-out`은 새 파일이어야 하고 `--env-file`과 같은 파일일 수 없다(철자가 달라도 같은 파일이면 거절). 기존 파일을 덮어쓰지 않는다. 데이터 폴더에 저널이 없어도 환경 파일만 옮길 수 있다.
 - 종료 코드: 0 성공(옮김, 옮길 것 없음, 문제 없는 dry-run), 1 오류(실행 못 함), 2 충돌(그대로는 옮길 수 없음, 이번 실행이 쓴 것 없음).
@@ -109,7 +109,7 @@ java -jar portal-migrate.jar --source=<2.x 데이터 폴더> --target=<3.0 데�
 
 ## 6. 설정 이전 (환경 파일)
 
-3.0이 읽는 환경 파일은 2.x와 같은 형식(`KEY=value`, `#` 주석, 앞뒤 공백 제거, 한 쌍의 같은 따옴표 제거)과 같은 키 이름이다. 4단계 계약 기준본(`settings-contract.json`)에서 달라진 것은 키 7개가 빠지고 4개가 더해진 것뿐이다. 명령은 2.4.2와 같은 규칙으로 파일을 읽는다(키는 `[A-Z_][A-Z0-9_]*`, 2.x가 받던 키와 `SSH_MCP_[A-Z0-9_]+`만, 64 KiB 이하, 올바른 UTF-8, 값에 제어 문자 없음). 2.x가 거절했을 줄은 추측하지 않고 충돌(`SETTINGS_ENTRY`)로 줄 번호와 함께 보고한다(값은 찍지 않는다).
+3.0이 읽는 환경 파일은 2.x와 같은 형식(`KEY=value`, `#` 주석, 앞뒤 공백 제거, 한 쌍의 같은 따옴표 제거)과 같은 키 이름이다. 4단계 계약 기준본(`settings-contract.json`)에서 달라진 것은 키 12개가 빠지고 4개가 더해진 것뿐이다(허용 키 32개). 명령은 2.4.2와 같은 규칙으로 파일을 읽는다(키는 `[A-Z_][A-Z0-9_]*`, 2.x가 받던 키와 `SSH_MCP_[A-Z0-9_]+`만, 64 KiB 이하, 올바른 UTF-8, 값에 제어 문자 없음). 2.x가 거절했을 줄은 추측하지 않고 충돌(`SETTINGS_ENTRY`)로 줄 번호와 함께 보고한다(값은 찍지 않는다).
 
 | 키 | 처리 |
 |---|---|
@@ -119,9 +119,11 @@ java -jar portal-migrate.jar --source=<2.x 데이터 폴더> --target=<3.0 데�
 | `BRIDGE_ACCESS_TEAM_DOMAIN`, `BRIDGE_ACCESS_AUD`, `BRIDGE_ACCESS_OWNER_EMAILS` | 제거됨(access 모드 없음). `BRIDGE_ADMIN_AUTH_MODE=access`이면 그 줄도 빼고(기본 token 적용) 운영자에게 알린다 |
 | `BRIDGE_OIDC_JWKS_URL` | 제거됨(발급자 discovery로 키를 찾는다) |
 | `BRIDGE_OIDC_OWNER_EMAILS` | 제거됨. 3.0은 계정 식별자 하나(`BRIDGE_OIDC_OWNER_SUBJECT`)만 받는다. 이메일에서 만들 수 없으므로 `BRIDGE_ADMIN_AUTH_MODE=oidc`이면 운영자가 소유자 계정과 `BRIDGE_OIDC_CLIENT_SECRET`을 새 파일에 넣어야 한다고 알린다. 값은 지어내지 않는다 |
+| `BRIDGE_COMMAND_AUTOMATION` | 제거됨(3.0은 결정적 규칙 판정이 항상 동작하며 전역 스위치가 없다) |
+| `BRIDGE_JEV_ENABLED`, `BRIDGE_JEV_MAX_CALLS`, `BRIDGE_JEV_KEY_REF`, `JEV_API_KEY` | 제거됨(3.0은 모델 판정 Jev를 제외하고 결정적 규칙만 사용한다) |
 | `BRIDGE_SOURCE_URL`(새 키) | 쓰지 않는다(비면 3.0이 이 판의 공개 저장소 태그를 쓴다) |
 
-한계: 3.0 쪽의 설정 바인딩(`BridgeProperties`, `SecretEnvFileLoader`)은 4단계 U2에서 만들어지므로, 만들어진 파일이 그 바인딩에 실제로 묶이는지는 이 모듈의 시험이 보지 못한다. 키 목록은 계약 기준본과 `SettingsContractTest`로만 대조한다(2.4.2의 `allowedKeys` 사본, 빠지는 7개, 더해지는 4개, 3.0 허용 키 37개). 새 설정 파일의 기본 위치도 3.0 설치 명령(7단계)이 정하므로 이 명령은 운영자가 준 `--env-out`에만 쓴다.
+한계: 3.0 쪽의 설정 바인딩(`BridgeProperties`, `SecretEnvFileLoader`)은 4단계 U2에서 만들어지므로, 만들어진 파일이 그 바인딩에 실제로 묶이는지는 이 모듈의 시험이 보지 못한다. 키 목록은 계약 기준본과 `SettingsContractTest`로만 대조한다(2.4.2의 `allowedKeys` 사본 40개, 빠지는 12개, 더해지는 4개, 3.0 허용 키 32개). 새 설정 파일의 기본 위치도 3.0 설치 명령(7단계)이 정하므로 이 명령은 운영자가 준 `--env-out`에만 쓴다.
 
 ## 7. 3.0 쪽에서 필요한 변경과 한계
 

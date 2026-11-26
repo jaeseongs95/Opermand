@@ -6,12 +6,12 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 
 /**
- * The context of a dry run: the store as it is, read only. No migration script is applied and no writer exists, so the run cannot write by construction. (The data source
- * is opened read only by the settings the command gives for an embedded store.)
+ * The context of a dry run: the store as it is, metadata-only and read only. No migration script is applied, no writer exists, and no attachment keyring or encrypted body
+ * store is loaded or created, so a dry run cannot write or touch the keyring by construction.
  */
 @Configuration(proxyBeanMethods = false)
 @EnableAutoConfiguration
-@Import(StoreAccess.class)
+@Import(ReadOnlyStoreAccess.class)
 public class ReadOnlyTargetConfiguration {
 
     @Bean

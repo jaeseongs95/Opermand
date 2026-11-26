@@ -21,12 +21,3 @@ tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
         attributes("Implementation-Version" to project.version)
     }
 }
-
-// java-openssh.yml runs :portal-migrate:test on Windows (the job runs "check" for every module) but not on Linux, where only the arch-checks build this module's classes. Until the
-// workflow lists this module's tests itself, a CI run (GitHub Actions sets CI) runs them after the classes are built, so that the tests of this module are run on both systems.
-// A developer machine is not affected: it runs the tests it asks for.
-if (providers.environmentVariable("CI").isPresent) {
-    tasks.named("classes") {
-        finalizedBy(tasks.named("test"))
-    }
-}

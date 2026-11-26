@@ -17,15 +17,16 @@ import io.github.jaeseongs95.portal.migrate.settings.SettingsContract;
 
 /**
  * The table of what becomes of each 2.x setting, held against what the sources say: the 2.4.2 list of accepted keys (a copy of its {@code allowedKeys}, in the test resources) and
- * the 3.0 contract baseline (seven keys dropped, four added). A key of 2.x that the table does not know, or a change of the baseline that the table does not follow, fails here.
+ * the 3.0 contract baseline (twelve keys dropped, four added, 32 allowed). A key of 2.x that the table does not know, or a change of the baseline that the table does not follow, fails here.
  */
 class SettingsContractTest {
 
     private final SettingsContract contract = new SettingsContract();
 
-    /** Item 6 of the contract changes of the 3.0 baseline (stage 4): the keys that are no longer allowed. */
-    private static final Set<String> DROPPED_BY_3_0 = Set.of("BRIDGE_AUDIT_PATH", "BRIDGE_TRANSFER_ROOT", "BRIDGE_ACCESS_TEAM_DOMAIN", "BRIDGE_ACCESS_AUD", "BRIDGE_ACCESS_OWNER_EMAILS",
-        "BRIDGE_OIDC_JWKS_URL", "BRIDGE_OIDC_OWNER_EMAILS");
+    /** Item 6 of the contract changes of the 3.0 baseline (stage 4, B1): the twelve keys that are no longer allowed. */
+    private static final Set<String> DROPPED_BY_3_0 = Set.of("BRIDGE_AUDIT_PATH", "BRIDGE_TRANSFER_ROOT", "BRIDGE_ACCESS_TEAM_DOMAIN", "BRIDGE_ACCESS_AUD",
+        "BRIDGE_ACCESS_OWNER_EMAILS", "BRIDGE_OIDC_JWKS_URL", "BRIDGE_OIDC_OWNER_EMAILS", "BRIDGE_COMMAND_AUTOMATION", "BRIDGE_JEV_ENABLED", "BRIDGE_JEV_MAX_CALLS",
+        "BRIDGE_JEV_KEY_REF", "JEV_API_KEY");
 
     /** The keys that are new in 3.0. */
     private static final Set<String> ADDED_BY_3_0 = Set.of("BRIDGE_DATA_DIR", "BRIDGE_OIDC_OWNER_SUBJECT", "BRIDGE_OIDC_CLIENT_SECRET", "BRIDGE_SOURCE_URL");
@@ -48,7 +49,7 @@ class SettingsContractTest {
     }
 
     @Test
-    void theDroppedKeysAreTheSevenOfTheBaselineAndAllOfThemWereKeysOf2x() throws IOException {
+    void theDroppedKeysAreTheTwelveOfTheBaselineAndAllOfThemWereKeysOf2x() throws IOException {
         assertThat(contract.removedKeys()).containsExactlyInAnyOrderElementsOf(DROPPED_BY_3_0);
         assertThat(keysOf2x()).containsAll(contract.removedKeys());
         assertThat(contract.addedKeys()).containsExactlyInAnyOrderElementsOf(ADDED_BY_3_0);
@@ -61,7 +62,7 @@ class SettingsContractTest {
         allowedIn3.removeAll(DROPPED_BY_3_0);
         allowedIn3.addAll(ADDED_BY_3_0);
 
-        assertThat(allowedIn3).hasSize(37);
+        assertThat(allowedIn3).hasSize(32);
         for (String key : keysOf2x()) {
             assertThat(contract.legacyAccepts(key)).isTrue();
             assertThat(contract.removalReason(key) != null).as(key).isEqualTo(DROPPED_BY_3_0.contains(key));

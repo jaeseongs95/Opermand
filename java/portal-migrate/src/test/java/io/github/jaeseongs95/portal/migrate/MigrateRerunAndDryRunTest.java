@@ -4,6 +4,8 @@ import static io.github.jaeseongs95.portal.migrate.LegacyJob.T0;
 import static io.github.jaeseongs95.portal.migrate.LegacyJob.job;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Map;
@@ -130,5 +132,32 @@ class MigrateRerunAndDryRunTest {
         assertThat(run.exitCode()).as(run.output()).isZero();
         assertThat(kit.fingerprint(legacy.folder())).as("same files, same bytes").isEqualTo(sourceBefore);
         assertThat(run.output()).contains("sha256: " + sourceBefore.get("operations.sqlite"));
+    }
+
+    @Test
+    void aDryRunChecksMetadataOnlyAndNeverCreatesOrReadsAKeyring(@TempDir Path root) throws IOException {
+        LegacyFixture legacy = new LegacyFixture(root.resolve("legacy")).operations(List.of(done(1), done(2)));
+        Path target = root.resolve("v3");
+        assertThat(kit.run(kit.importArgs(legacy.folder(), target)).exitCode()).isZero();
+        Path keyringDir = target.resolve("keyring");
+        Path keyFile = keyringDir.resolve("attachment.keys");
+        assertThat(keyFile).as("real import creates the attachment keyring").isRegularFile();
+
+        // Remove the keyring completely; a metadata-only dry-run must neither need nor recreate it.
+        Files.delete(keyFile);
+        Files.delete(keyringDir);
+        assertThat(keyringDir).doesNotExist();
+
+        LegacyFixture more = new LegacyFixture(root.resolve("legacy-2")).operations(List.of(done(1), done(2), done(3)));
+        Run dryOk = kit.run(kit.dryRunArgs(more.folder(), target));
+        assertThat(dryOk.exitCode()).as(dryOk.output()).isZero();
+        assertThat(dryOk.output()).contains("already moved 2").contains("operations to move: 3");
+        assertThat(keyringDir).as("dry-run must never create a keyring folder or file").doesNotExist();
+
+        LegacyFixture clash = new LegacyFixture(root.resolve("legacy-3")).operations(List.of(done(1).command("echo tampered")));
+        Run dryConflict = kit.run(kit.dryRunArgs(clash.folder(), target));
+        assertThat(dryConflict.exitCode()).as(dryConflict.output()).isEqualTo(2);
+        assertThat(dryConflict.output()).contains("CONFLICT REQUEST_KEY_IN_TARGET");
+        assertThat(keyringDir).as("conflicting dry-run must never create a keyring folder or file").doesNotExist();
     }
 }
