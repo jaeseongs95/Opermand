@@ -277,12 +277,12 @@ public class StagedFileService {
     public StagedPlacement place(StagedPlacementRequest request) {
         Objects.requireNonNull(request, "request");
         RequestKey key = requestKey(request.operationKey());
-        record PlaceLookup(ArtifactRecord source, Optional<StagedAction> earlier) {
+        record PlaceLookup(ArtifactRecord source, StagedAction earlier) {
         }
         PlaceLookup lookup = Objects.requireNonNull(readTx.execute(status -> {
             requireOpen();
             ArtifactRecord source = owned(request.owner(), request.uuid());
-            Optional<StagedAction> earlier = registry.actions(source.id()).stream().filter(action -> action.operationKey().equals(key.value())).findFirst();
+            StagedAction earlier = registry.actions(source.id()).stream().filter(action -> action.operationKey().equals(key.value())).findFirst().orElse(null);
             return new PlaceLookup(source, earlier);
         }), "lookup");
         ArtifactRecord source = lookup.source();
@@ -290,8 +290,8 @@ public class StagedFileService {
             throw new RequestRefusedException(RequestErrorCode.TARGET_REVISION_CONFLICT);
         }
         Digest inputDigest = inputDigestOf(request);
-        if (lookup.earlier().isPresent()) {
-            return answerEarlier(lookup.earlier().orElseThrow(), inputDigest);
+        if (lookup.earlier() != null) {
+            return answerEarlier(lookup.earlier(), inputDigest);
         }
         return reserveAndPublish(request, key, source, inputDigest);
     }
