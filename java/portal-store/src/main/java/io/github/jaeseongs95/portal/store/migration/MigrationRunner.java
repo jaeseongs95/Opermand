@@ -22,11 +22,8 @@ import javax.sql.DataSource;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.core.io.support.EncodedResource;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.jdbc.datasource.init.ScriptException;
-import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.jdbc.support.SQLErrorCodeSQLExceptionTranslator;
 import org.springframework.jdbc.support.SQLExceptionTranslator;
 
@@ -351,9 +348,7 @@ final class MigrationRunner {
         List<CreatedObject> createdObjects = new ArrayList<>();
         try {
             record(connection, translator, phase, script, attempt, Outcome.FAILED);
-            List<String> statements = new ArrayList<>();
-            ScriptUtils.splitSqlScript((EncodedResource) null, script.text(longText), ScriptUtils.DEFAULT_STATEMENT_SEPARATOR,
-                ScriptUtils.DEFAULT_COMMENT_PREFIXES, ScriptUtils.DEFAULT_BLOCK_COMMENT_START_DELIMITER, ScriptUtils.DEFAULT_BLOCK_COMMENT_END_DELIMITER, statements);
+            List<String> statements = splitStatements(script.text(longText));
             for (String statement : statements) {
                 String trimmed = statement.trim();
                 if (trimmed.isEmpty()) {
@@ -381,10 +376,97 @@ final class MigrationRunner {
             connection.rollback();
             LOG.debug("Another runner has taken the migration {} ({}), attempt {}.", script.file(), phase, attempt, taken);
             return settleAfterPeer(connection, phase, script);
-        } catch (ScriptException | SQLException failure) {
+        } catch (SQLException failure) {
             failAndRecord(connection, translator, phase, script, attempt, createdObjects, failure);
             throw new MigrationException(Reason.MIGRATION_FAILED, "The migration " + script.file() + " did not apply (" + phase.location() + ").", failure);
         }
+    }
+
+    /** Splits a SQL script on semicolons while respecting single-quoted literals, double-quoted identifiers, {@code --} line comments, and block comments. */
+    private static List<String> splitStatements(String script) {
+        List<String> statements = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        int length = script.length();
+        boolean inSingleQuote = false;
+        boolean inDoubleQuote = false;
+        int i = 0;
+        while (i < length) {
+            char ch = script.charAt(i);
+            if (inSingleQuote) {
+                current.append(ch);
+                if (ch == '\'') {
+                    if (i + 1 < length && script.charAt(i + 1) == '\'') {
+                        current.append('\'');
+                        i += 2;
+                        continue;
+                    }
+                    inSingleQuote = false;
+                }
+                i++;
+                continue;
+            }
+            if (inDoubleQuote) {
+                current.append(ch);
+                if (ch == '"') {
+                    if (i + 1 < length && script.charAt(i + 1) == '"') {
+                        current.append('"');
+                        i += 2;
+                        continue;
+                    }
+                    inDoubleQuote = false;
+                }
+                i++;
+                continue;
+            }
+            if (ch == '-' && i + 1 < length && script.charAt(i + 1) == '-') {
+                i += 2;
+                while (i < length && script.charAt(i) != '\n') {
+                    i++;
+                }
+                if (i < length) {
+                    current.append('\n');
+                    i++;
+                }
+                continue;
+            }
+            if (ch == '/' && i + 1 < length && script.charAt(i + 1) == '*') {
+                i += 2;
+                while (i + 1 < length && !(script.charAt(i) == '*' && script.charAt(i + 1) == '/')) {
+                    i++;
+                }
+                i = Math.min(length, i + 2);
+                current.append(' ');
+                continue;
+            }
+            if (ch == '\'') {
+                inSingleQuote = true;
+                current.append(ch);
+                i++;
+                continue;
+            }
+            if (ch == '"') {
+                inDoubleQuote = true;
+                current.append(ch);
+                i++;
+                continue;
+            }
+            if (ch == ';') {
+                String trimmed = current.toString().trim();
+                if (!trimmed.isEmpty()) {
+                    statements.add(trimmed);
+                }
+                current.setLength(0);
+                i++;
+                continue;
+            }
+            current.append(ch);
+            i++;
+        }
+        String tail = current.toString().trim();
+        if (!tail.isEmpty()) {
+            statements.add(tail);
+        }
+        return statements;
     }
 
     private static CreatedObject parseCreatedObject(String statement) {

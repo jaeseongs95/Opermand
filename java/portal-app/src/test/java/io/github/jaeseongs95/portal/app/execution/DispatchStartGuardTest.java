@@ -406,7 +406,7 @@ class DispatchStartGuardTest {
                 });
                 ArtifactPayloadStore payloads = proxy(ArtifactPayloadStore.class, (method, args) -> {
                     payloadCalls.add(method);
-                    return null;
+                    return "usable".equals(method) ? new io.github.jaeseongs95.portal.app.storage.DiskSpace(Long.MAX_VALUE) : null;
                 });
                 RemoteFileTransfer transfer = new RemoteFileTransfer() {
                     @Override
@@ -456,7 +456,7 @@ class DispatchStartGuardTest {
                     });
                 });
                 assertThat(registryCalls).containsSubsequence("reserve", "beginDelete", "release:REFUSED");
-                assertThat(payloadCalls).containsExactly("delete");
+                assertThat(payloadCalls).containsExactly("usable", "delete");
                 List<ILoggingEvent> errors = downloadRunnerLogs.list.stream().filter(event -> event.getLevel().isGreaterOrEqual(Level.ERROR)).toList();
                 assertThat(errors).hasSize(1);
                 assertThat(errors.get(0).getThrowableProxy()).isNotNull();

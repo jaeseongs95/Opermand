@@ -112,9 +112,18 @@ class UtcJdbcConversions {
         }
 
         @Override
-        public void close() throws Exception {
+        public void close() {
             if (getTargetDataSource() instanceof AutoCloseable closeable) {
-                closeable.close();
+                try {
+                    closeable.close();
+                } catch (RuntimeException e) {
+                    throw e;
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new IllegalStateException("Interrupted while closing delegated DataSource", e);
+                } catch (Exception e) {
+                    throw new IllegalStateException("Failed to close delegated DataSource", e);
+                }
             }
         }
 
