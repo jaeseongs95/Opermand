@@ -9,8 +9,6 @@ import java.util.Optional;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.jdbc.core.JdbcAggregateOperations;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Isolation;
-import org.springframework.transaction.annotation.Transactional;
 
 import io.github.jaeseongs95.portal.app.policy.CommandPolicyStore;
 import io.github.jaeseongs95.portal.domain.command.CommandPolicyDocument;
@@ -48,18 +46,16 @@ public class JdbcCommandPolicyStore implements CommandPolicyStore {
         this.mapper = mapper;
     }
 
-    /** The revision and the child rows are read in one snapshot so that a replace that commits in between cannot mix two revisions. */
+    /** The revision and the child rows are read in one snapshot owned by the calling service transaction. */
     @Override
-    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public PolicySnapshot current() {
         CommandPolicyRow row = policies.findById(THE_ROW)
             .orElseThrow(() -> new IllegalStateException("The command policy row (id 1) is missing; the migration V4 inserts it"));
         return new PolicySnapshot(row.revision(), mapper.document(rules.findAllOrdered(), names.findAllOrdered()));
     }
 
-    /** Reads only the target's rule row and its name rows in one {@code REPEATABLE_READ} snapshot (defect D-0121). */
+    /** Reads only the target's rule row and its name rows in the caller's {@code REPEATABLE_READ} snapshot (defect D-0121). */
     @Override
-    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public TargetPolicy targetPolicy(TargetId targetId) {
         Objects.requireNonNull(targetId, "targetId");
         Optional<PolicyRuleRow> found = rules.findByTargetId(targetId.value());
@@ -72,7 +68,6 @@ public class JdbcCommandPolicyStore implements CommandPolicyStore {
     }
 
     @Override
-    @Transactional
     public PolicySnapshot replace(CommandPolicyDocument next, long expectedRevision) {
         if (policies.advanceRevision(expectedRevision) != 1) {
             // Another writer moved the revision first (or the caller read an older one): the caller reads the policy again and decides again, which only this code says (D-0164).

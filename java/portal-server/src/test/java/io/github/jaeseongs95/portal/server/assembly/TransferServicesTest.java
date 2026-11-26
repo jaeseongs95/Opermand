@@ -42,6 +42,7 @@ import io.github.jaeseongs95.portal.app.remote.RestoreEvidence;
 import io.github.jaeseongs95.portal.app.remote.TransferFailureCause;
 import io.github.jaeseongs95.portal.app.remote.UnconfirmedCause;
 import io.github.jaeseongs95.portal.app.remote.UploadResult;
+import io.github.jaeseongs95.portal.app.storage.DiskCheck;
 import io.github.jaeseongs95.portal.domain.error.DispatchFailure;
 import io.github.jaeseongs95.portal.domain.error.DispatchReason;
 import io.github.jaeseongs95.portal.domain.error.DispatchRefusedException;
@@ -115,6 +116,7 @@ class TransferServicesTest {
         jdbc.update("DELETE FROM staged_action");
         jdbc.update("DELETE FROM artifact_chunk");
         jdbc.update("DELETE FROM artifact");
+        jdbc.update("UPDATE storage_budget SET charged_bytes = 0, item_count = 0 WHERE scope = 'ARTIFACT'");
     }
 
     // ---- upload ----
@@ -170,6 +172,7 @@ class TransferServicesTest {
             assertThat(remote.uploads).as(entry.getKey() + ": sent once").hasSize(1);
             jdbc.update("DELETE FROM artifact_chunk");
             jdbc.update("DELETE FROM artifact");
+            jdbc.update("UPDATE storage_budget SET charged_bytes = 0, item_count = 0 WHERE scope = 'ARTIFACT'");
         }
     }
 
@@ -202,6 +205,7 @@ class TransferServicesTest {
 
         jdbc.update("DELETE FROM artifact_chunk");
         jdbc.update("DELETE FROM artifact");
+        jdbc.update("UPDATE storage_budget SET charged_bytes = 0, item_count = 0 WHERE scope = 'ARTIFACT'");
         remote.permissionAnswer = new PermissionResult.Refused(TransferErrorCode.PERMISSION_DENIED, new FileDiagnostic.SftpStatus(3));
         ExecutionOutcome refused = uploads.upload(uploadJob(readyUpload(bytes), bytes, new FilePermission.Explicit(new FileMode(0640)), Elevation.NONE, targets.linux()),
             CONTROL);
@@ -372,7 +376,7 @@ class TransferServicesTest {
 
     /** A reserved upload that stays {@code STAGING}. */
     private ArtifactId reserveUpload(byte[] bytes) {
-        ArtifactReservation reservation = registry.reserve(uploadSpec(bytes), clock.instant());
+        ArtifactReservation reservation = registry.reserve(uploadSpec(bytes), clock.instant(), DiskCheck.measure(payloads::usable));
         assertThat(reservation).isInstanceOf(ArtifactReservation.Reserved.class);
         return ((ArtifactReservation.Reserved) reservation).id();
     }
@@ -382,7 +386,7 @@ class TransferServicesTest {
     }
 
     private ArtifactId ready(ArtifactSpec spec, byte[] bytes) {
-        ArtifactReservation reservation = registry.reserve(spec, clock.instant());
+        ArtifactReservation reservation = registry.reserve(spec, clock.instant(), DiskCheck.measure(payloads::usable));
         ArtifactId id = ((ArtifactReservation.Reserved) reservation).id();
         payloads.append(id, 0, bytes);
         registry.append(id, 0, new ChunkDigest(bytes.length, DIGEST.digest(bytes)));

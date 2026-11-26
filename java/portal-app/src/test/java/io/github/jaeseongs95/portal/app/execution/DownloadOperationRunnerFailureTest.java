@@ -46,6 +46,7 @@ import io.github.jaeseongs95.portal.app.remote.RemoteFileTransfer;
 import io.github.jaeseongs95.portal.app.remote.TransferLimits;
 import io.github.jaeseongs95.portal.app.remote.UploadRequest;
 import io.github.jaeseongs95.portal.app.remote.UploadResult;
+import io.github.jaeseongs95.portal.app.storage.DiskSpace;
 import io.github.jaeseongs95.portal.app.target.TargetPlatform;
 import io.github.jaeseongs95.portal.app.target.TargetPlatformRegistry;
 import io.github.jaeseongs95.portal.app.target.TargetSource;
@@ -227,7 +228,7 @@ class DownloadOperationRunnerFailureTest {
 
     private void assertDiscarded() {
         assertThat(registryCalls).as("the reserved row is removed in the registry's order").containsSubsequence("reserve", "beginDelete", "release:REFUSED");
-        assertThat(payloadCalls).containsExactly("delete");
+        assertThat(payloadCalls).containsExactly("usable", "delete");
     }
 
     private void assertCauseLogged(Throwable cause) {
@@ -249,7 +250,10 @@ class DownloadOperationRunnerFailureTest {
             case "reserve" -> reservation.get();
             default -> null;
         });
-        ArtifactPayloadStore payloads = recording(ArtifactPayloadStore.class, payloadCalls, method -> null);
+        ArtifactPayloadStore payloads = recording(ArtifactPayloadStore.class, payloadCalls, method -> switch (method) {
+            case "usable" -> new DiskSpace(Long.MAX_VALUE);
+            default -> null;
+        });
         RemoteFileTransfer transfer = new RemoteFileTransfer() {
             @Override
             public UploadResult upload(UploadRequest request, PayloadSource source, ExecutionControl control) {

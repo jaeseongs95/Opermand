@@ -65,7 +65,7 @@ import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
 import io.github.jaeseongs95.portal.domain.target.TargetRevision;
 import io.github.jaeseongs95.portal.domain.text.CommandText;
 import io.github.jaeseongs95.portal.domain.text.Utf8Text;
-import io.github.jaeseongs95.portal.store.Savepoints;
+import io.github.jaeseongs95.portal.store.TestSavepoints;
 
 @JournalTest
 class JdbcOperationJournalTest {
@@ -77,13 +77,13 @@ class JdbcOperationJournalTest {
     private final OperationStorage storage;
     private final OperationIdGenerator ids;
     private final Clock clock;
-    private final Savepoints savepoints;
+    private final TestSavepoints savepoints;
     private final Digester digester;
     private final JdbcTemplate jdbc;
     private final JournalFixture fx = new JournalFixture();
 
     JdbcOperationJournalTest(JdbcOperationJournal journal, JdbcClaimStore claims, OperationRowRepository operations, OperationEventRowRepository events,
-                             OperationStorage storage, OperationIdGenerator ids, Clock clock, Savepoints savepoints,
+                             OperationStorage storage, OperationIdGenerator ids, Clock clock, TestSavepoints savepoints,
                              Digester digester, JdbcTemplate jdbc) {
         this.journal = journal;
         this.claims = claims;

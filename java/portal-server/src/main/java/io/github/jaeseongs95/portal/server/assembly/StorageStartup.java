@@ -1,9 +1,14 @@
 package io.github.jaeseongs95.portal.server.assembly;
 
 import java.time.Clock;
+import java.util.function.Consumer;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.lifecycle.StartupProtection;
 import io.github.jaeseongs95.portal.app.lifecycle.StartupSequence;
@@ -33,23 +38,45 @@ public class StorageStartup implements StartupStep {
     private final ArtifactStartupCheck artifacts;
     private final OutputStartupCheck outputs;
     private final Clock clock;
+    private final TransactionOperations readTx;
+    private final TransactionOperations writeTx;
+
+    @Autowired
+    public StorageStartup(StartupProtection protection, MaintenanceStore maintenance, ArtifactStartupCheck artifacts, OutputStartupCheck outputs, Clock clock,
+                          PlatformTransactionManager transactionManager) {
+        this(protection, maintenance, artifacts, outputs, clock, readOnly(transactionManager), new TransactionTemplate(transactionManager));
+    }
 
     public StorageStartup(StartupProtection protection, MaintenanceStore maintenance, ArtifactStartupCheck artifacts, OutputStartupCheck outputs, Clock clock) {
+        this(protection, maintenance, artifacts, outputs, clock, TransactionOperations.withoutTransaction(), TransactionOperations.withoutTransaction());
+    }
+
+    private StorageStartup(StartupProtection protection, MaintenanceStore maintenance, ArtifactStartupCheck artifacts, OutputStartupCheck outputs, Clock clock,
+                           TransactionOperations readTx, TransactionOperations writeTx) {
         this.protection = protection;
         this.maintenance = maintenance;
         this.artifacts = artifacts;
         this.outputs = outputs;
         this.clock = clock;
+        this.readTx = readTx;
+        this.writeTx = writeTx;
+    }
+
+    private static TransactionOperations readOnly(PlatformTransactionManager transactionManager) {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        return tx;
     }
 
     @Override
     public void run() {
         protection.verify();
-        artifacts.reconcile();
-        if (maintenance.occupied()) {
-            outputs.recover(clock.instant());
+        Consumer<Runnable> inTransaction = work -> writeTx.executeWithoutResult(status -> work.run());
+        artifacts.reconcile(inTransaction);
+        if (Boolean.TRUE.equals(readTx.execute(status -> maintenance.occupied()))) {
+            outputs.recover(clock.instant(), inTransaction);
         } else {
-            outputs.reconcile(clock.instant());
+            outputs.reconcile(clock.instant(), inTransaction);
         }
     }
 }

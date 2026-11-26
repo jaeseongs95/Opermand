@@ -4,7 +4,11 @@ import java.time.Clock;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.audit.AuditAction;
 import io.github.jaeseongs95.portal.app.audit.AuditEvent;
@@ -28,11 +32,22 @@ public class OutcomeAudit {
     private final AuditGate audit;
     private final OperationJournal journal;
     private final Clock clock;
+    private final TransactionOperations writeTx;
+
+    @Autowired
+    public OutcomeAudit(AuditGate audit, OperationJournal journal, Clock clock, PlatformTransactionManager transactionManager) {
+        this(audit, journal, clock, new TransactionTemplate(transactionManager));
+    }
 
     public OutcomeAudit(AuditGate audit, OperationJournal journal, Clock clock) {
+        this(audit, journal, clock, TransactionOperations.withoutTransaction());
+    }
+
+    private OutcomeAudit(AuditGate audit, OperationJournal journal, Clock clock, TransactionOperations writeTx) {
         this.audit = audit;
         this.journal = journal;
         this.clock = clock;
+        this.writeTx = writeTx;
     }
 
     /** Writes the final audit line of a terminal operation. */
@@ -40,13 +55,13 @@ public class OutcomeAudit {
         recordEvent(terminal, new AuditEvent(actionOf(terminal), terminal.id(), noteOf(terminal)));
     }
 
-    /** Writes any audit line about a stored operation; a line that did not become durable marks the operation and is logged. */
+    /** Writes any audit line about a stored operation; a line that did not become durable marks the operation in a short write transaction and is logged. */
     public void recordEvent(Operation stored, AuditEvent event) {
         if (audit.appendAfter(event)) {
             return;
         }
         try {
-            journal.save(stored.recordAuditFailure(clock.instant()), stored.version());
+            writeTx.executeWithoutResult(status -> journal.save(stored.recordAuditFailure(clock.instant()), stored.version()));
         } catch (RuntimeException e) {
             LOG.error("The audit failure of an operation could not be recorded", e);
         }

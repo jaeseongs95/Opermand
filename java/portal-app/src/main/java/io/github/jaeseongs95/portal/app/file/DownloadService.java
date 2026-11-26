@@ -5,7 +5,11 @@ import java.util.Objects;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.artifact.ArtifactDestination;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactDirection;
@@ -31,6 +35,7 @@ import io.github.jaeseongs95.portal.app.remote.RemoteTarget;
 import io.github.jaeseongs95.portal.app.remote.SinkResult;
 import io.github.jaeseongs95.portal.app.remote.TransferFailureCause;
 import io.github.jaeseongs95.portal.app.remote.TransferLimits;
+import io.github.jaeseongs95.portal.app.storage.DiskCheck;
 import io.github.jaeseongs95.portal.app.target.TargetPlatform;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.file.FileBinding;
@@ -75,9 +80,21 @@ public class DownloadService {
     private final StagingTimes times;
     private final Digester digester;
     private final Clock clock;
+    private final TransactionOperations writeTx;
+
+    @Autowired
+    public DownloadService(ArtifactRegistry registry, ArtifactPayloadStore payloads, RemoteFileTransfer transfer, TransferSupport support, TransferOutcomes outcomes,
+                           TransferLimits limits, StagingTimes times, Digester digester, Clock clock, PlatformTransactionManager transactionManager) {
+        this(registry, payloads, transfer, support, outcomes, limits, times, digester, clock, new TransactionTemplate(transactionManager));
+    }
 
     public DownloadService(ArtifactRegistry registry, ArtifactPayloadStore payloads, RemoteFileTransfer transfer, TransferSupport support, TransferOutcomes outcomes,
                            TransferLimits limits, StagingTimes times, Digester digester, Clock clock) {
+        this(registry, payloads, transfer, support, outcomes, limits, times, digester, clock, TransactionOperations.withoutTransaction());
+    }
+
+    private DownloadService(ArtifactRegistry registry, ArtifactPayloadStore payloads, RemoteFileTransfer transfer, TransferSupport support, TransferOutcomes outcomes,
+                            TransferLimits limits, StagingTimes times, Digester digester, Clock clock, TransactionOperations writeTx) {
         this.registry = registry;
         this.payloads = payloads;
         this.transfer = transfer;
@@ -87,6 +104,7 @@ public class DownloadService {
         this.times = times;
         this.digester = digester;
         this.clock = clock;
+        this.writeTx = writeTx;
     }
 
     public DownloadExecution download(DownloadJob job, ExecutionControl control) {
@@ -103,17 +121,17 @@ public class DownloadService {
 
         ArtifactReservation reservation;
         try {
-            reservation = registry.reserve(reservationOf(job), clock.instant());
+            DiskCheck disk = DiskCheck.measure(payloads::usable);
+            ArtifactSpec spec = reservationOf(job);
+            reservation = Objects.requireNonNull(writeTx.execute(status -> registry.reserve(spec, clock.instant(), disk)), "reservation");
         } catch (RequestRefusedException e) {
-            // The artifact store could not be read (ARTIFACT_STORAGE_IO_ERROR) or refused the reservation outright: nothing was sent to the target. A runtime exception of the
-            // store is not caught here: it goes on to DownloadOperationRunner, which settles every such exception once (audit F4).
             return new DownloadExecution.NotStored(outcomes.portalFailure(e));
         }
         if (!(reservation instanceof ArtifactReservation.Reserved reserved)) {
             return new DownloadExecution.NotStored(outcomes.reservationRefused(ArtifactRefusal.of(reservation)));
         }
 
-        ArtifactSink sink = new ArtifactSink(reserved.id(), payloads, registry, digester);
+        ArtifactSink sink = new ArtifactSink(reserved.id(), payloads, registry, digester, writeTx);
         DownloadResult result;
         try {
             result = transfer.download(new DownloadRequest(remote, input.remotePath(), access, pathPolicy, limits), sink, control);
@@ -151,7 +169,7 @@ public class DownloadService {
             return new DownloadExecution.NotStored(outcomes.downloadNotStored("FILE_CHANGED", "The stored bytes are not what the target confirmed; nothing was delivered."));
         }
         try {
-            ArtifactRecord ready = registry.completeDownload(id, actual);
+            ArtifactRecord ready = Objects.requireNonNull(writeTx.execute(status -> registry.completeDownload(id, actual)), "ready");
             return new DownloadExecution.Stored(outcomes.downloaded(), ready);
         } catch (RequestRefusedException e) {
             discard(id);
@@ -188,9 +206,9 @@ public class DownloadService {
     /** Removes the bytes and the row, and so the charge. A failure here is logged. When it came after the row was set to {@code DELETING}, a later reap removes the row at once and the start-up check finishes it; when the row could not be set to {@code DELETING}, it stays and a reap removes it when it expires. */
     private void discard(ArtifactId id) {
         try {
-            registry.beginDelete(id);
+            writeTx.executeWithoutResult(status -> registry.beginDelete(id));
             payloads.delete(id);
-            registry.release(id, ReleaseReason.REFUSED);
+            writeTx.executeWithoutResult(status -> registry.release(id, ReleaseReason.REFUSED));
         } catch (RuntimeException e) {
             LOG.warn("The download artifact {} could not be discarded; a later reap or the start-up check removes it (at once when the removal had begun, otherwise at the expiry of the artifact)", id.value(), e);
         }

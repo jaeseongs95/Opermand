@@ -68,12 +68,12 @@ class JdbcOutputManifestStoreTest {
         OutputWorld w = factory.create(folder, limits(1024, 2048, 2, 0L));
         OutputBinding binding = fixture.unbound();
 
-        assertThat(refusal(w.manifests.reserve(binding, 1025, T0), OutputReservation.TooLarge.class).limitBytes()).isEqualTo(1024L);
+        assertThat(refusal(w.manifests.reserve(binding, 1025, T0, w.payloads.usable()), OutputReservation.TooLarge.class).limitBytes()).isEqualTo(1024L);
         assertThat(w.manifests.budget().count()).isZero();
 
         w.reserve(binding, 1024, T0);
         w.reserve(binding, 1024, T0);
-        assertThat(refusal(w.manifests.reserve(binding, 1, T0), OutputReservation.CountExceeded.class).maxCount()).isEqualTo(2);
+        assertThat(refusal(w.manifests.reserve(binding, 1, T0, w.payloads.usable()), OutputReservation.CountExceeded.class).maxCount()).isEqualTo(2);
         assertThat(w.manifests.budget().count()).isEqualTo(2);
     }
 
@@ -85,7 +85,7 @@ class JdbcOutputManifestStoreTest {
         w.reserve(binding, 1024, T0);
         w.reserve(binding, 1000, T0);
 
-        OutputReservation.BudgetExceeded refused = refusal(w.manifests.reserve(binding, 25, T0), OutputReservation.BudgetExceeded.class);
+        OutputReservation.BudgetExceeded refused = refusal(w.manifests.reserve(binding, 25, T0, w.payloads.usable()), OutputReservation.BudgetExceeded.class);
 
         assertThat(refused.requestedBytes()).isEqualTo(25L);
         assertThat(refused.chargedBytes()).isEqualTo(2024L);
@@ -103,7 +103,7 @@ class JdbcOutputManifestStoreTest {
         OutputWorld w = factory.create(folder, limits(1024, 2048, 10, Long.MAX_VALUE));
         OutputBinding binding = fixture.unbound();
 
-        OutputReservation.DiskSpaceInsufficient refused = refusal(w.manifests.reserve(binding, 10, T0), OutputReservation.DiskSpaceInsufficient.class);
+        OutputReservation.DiskSpaceInsufficient refused = refusal(w.manifests.reserve(binding, 10, T0, w.payloads.usable()), OutputReservation.DiskSpaceInsufficient.class);
 
         assertThat(refused.requiredBytes()).isEqualTo(Long.MAX_VALUE);
         assertThat(refused.usableBytes()).isPositive().isLessThan(Long.MAX_VALUE);
@@ -142,7 +142,7 @@ class JdbcOutputManifestStoreTest {
         assertThat(w.manifests.find(id, expiresAt)).isInstanceOf(OutputLookup.Expired.class);
 
         OutputId given = w.reserve(fixture.unbound(), 1000, T0);
-        w.manifests.markUnavailable(given, expiresAt);
+        w.markUnavailable(given, expiresAt);
         assertThat(w.manifests.find(given, T0)).isInstanceOf(OutputLookup.Unavailable.class);
         assertThat(w.manifests.find(given, expiresAt)).isInstanceOf(OutputLookup.Expired.class);
         assertThat(w.row(given).targetId()).isNull();
@@ -156,7 +156,7 @@ class JdbcOutputManifestStoreTest {
         OutputWorld w = factory.create(folder, OutputLimits.defaults());
         OutputId id = w.reserve(fixture.unbound(), 100, Instant.parse("2027-11-07T07:45:00Z"));
         // The expiry is 01:45 PDT. A quarter of an hour past 09:00Z the clock shows 01:15 PST: the same hour again, but after the expiry as a moment.
-        w.manifests.markUnavailable(id, Instant.parse("2027-11-07T08:45:00Z"));
+        w.markUnavailable(id, Instant.parse("2027-11-07T08:45:00Z"));
 
         assertThat(w.manifests.expired(Instant.parse("2027-11-07T08:30:00Z"))).isEmpty();
         assertThat(w.manifests.expired(Instant.parse("2027-11-07T09:15:00Z"))).extracting(OutputManifest::id).containsExactly(id);
@@ -169,7 +169,7 @@ class JdbcOutputManifestStoreTest {
         OutputWorld w = factory.create(folder, OutputLimits.defaults());
         OutputId writing = w.reserve(fixture.unbound(), 100, T0);
         OutputId givenUp = w.reserve(fixture.unbound(), 100, T0);
-        w.manifests.markUnavailable(givenUp, T0.plus(Duration.ofHours(1)));
+        w.markUnavailable(givenUp, T0.plus(Duration.ofHours(1)));
         OutputId ready = w.reserve(fixture.unbound(), 100, T0);
         w.manifests.markReady(ready, w.payloads.finish(ready, utf8("{}"), utf8("done")), 6);
         Instant afterTheRetention = T0.plus(Duration.ofHours(3));
@@ -213,7 +213,7 @@ class JdbcOutputManifestStoreTest {
         w.manifests.markReady(id, formats, 3);
         assertThatThrownBy(() -> w.manifests.markReady(id, formats, 3)).isInstanceOf(RequestRefusedException.class);
         assertThatThrownBy(() -> w.manifests.recordStream(id, new StreamInfo.OpenStream(1))).isInstanceOf(RequestRefusedException.class);
-        assertThatThrownBy(() -> w.manifests.markUnavailable(id, T0)).isInstanceOf(RequestRefusedException.class);
+        assertThatThrownBy(() -> w.markUnavailable(id, T0)).isInstanceOf(RequestRefusedException.class);
         assertThatThrownBy(() -> w.manifests.markReady(new OutputId("e".repeat(48)), formats, 3)).isInstanceOf(RequestRefusedException.class);
         assertThat(w.row(id).state()).isEqualTo(OutputState.READY);
         assertThat(w.row(id).version()).isEqualTo(3L);
@@ -227,7 +227,7 @@ class JdbcOutputManifestStoreTest {
         OutputBinding binding = fixture.unbound();
         OutputId accepted = w.reserve(binding, 1024, T0);
 
-        OutputReservation.BudgetExceeded refused = refusal(w.manifests.reserve(binding, 1024, T0), OutputReservation.BudgetExceeded.class);
+        OutputReservation.BudgetExceeded refused = refusal(w.manifests.reserve(binding, 1024, T0, w.payloads.usable()), OutputReservation.BudgetExceeded.class);
 
         assertThat(refused.chargedBytes()).isEqualTo(1024L);
         assertThat(w.manifests.budget().count()).isEqualTo(1);
@@ -251,7 +251,7 @@ class JdbcOutputManifestStoreTest {
         assertThat(w.manifests.expired(T0.plus(Duration.ofHours(1))).stream().map(OutputManifest::id).toList()).containsExactly(first);
         // The second output is still being written (PENDING): the cleaner leaves it, whatever its expiry is (D-0162); once it is given up it is listed.
         assertThat(w.manifests.expired(T0.plus(Duration.ofMinutes(70))).stream().map(OutputManifest::id).toList()).containsExactly(first);
-        w.manifests.markUnavailable(second, T0.plus(Duration.ofMinutes(65)));
+        w.markUnavailable(second, T0.plus(Duration.ofMinutes(65)));
         assertThat(w.manifests.expired(T0.plus(Duration.ofMinutes(70))).stream().map(OutputManifest::id).toList()).containsExactlyInAnyOrder(first, second);
         List<OutputManifest> expired = w.manifests.expired(T0.plus(Duration.ofHours(1)));
         assertThat(expired.get(0).formats().spans()).hasSize(2);

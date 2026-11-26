@@ -1,8 +1,13 @@
 package io.github.jaeseongs95.portal.app.execution;
 
 import java.time.Clock;
+import java.util.Objects;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import tools.jackson.databind.json.JsonMapper;
 
@@ -12,6 +17,7 @@ import io.github.jaeseongs95.portal.app.output.OutputPayloadStore;
 import io.github.jaeseongs95.portal.app.output.OutputReservation;
 import io.github.jaeseongs95.portal.app.output.OutputTarget;
 import io.github.jaeseongs95.portal.app.remote.ExecutionLimits;
+import io.github.jaeseongs95.portal.app.storage.DiskSpace;
 import io.github.jaeseongs95.portal.domain.error.ExecutionErrorCode;
 import io.github.jaeseongs95.portal.domain.error.ExecutionFailure;
 import io.github.jaeseongs95.portal.domain.error.ExecutionStage;
@@ -37,22 +43,37 @@ public class CommandOutputWriter {
     private final JsonMapper json;
     private final Digester digester;
     private final Clock clock;
+    private final TransactionOperations writeTx;
+
+    @Autowired
+    public CommandOutputWriter(OutputManifestStore manifests, OutputPayloadStore payloads, OutputRedactor redactor, JsonMapper json, Digester digester, Clock clock,
+                               PlatformTransactionManager transactionManager) {
+        this(manifests, payloads, redactor, json, digester, clock, new TransactionTemplate(transactionManager));
+    }
 
     public CommandOutputWriter(OutputManifestStore manifests, OutputPayloadStore payloads, OutputRedactor redactor, JsonMapper json, Digester digester, Clock clock) {
+        this(manifests, payloads, redactor, json, digester, clock, TransactionOperations.withoutTransaction());
+    }
+
+    private CommandOutputWriter(OutputManifestStore manifests, OutputPayloadStore payloads, OutputRedactor redactor, JsonMapper json, Digester digester, Clock clock,
+                                TransactionOperations writeTx) {
         this.manifests = manifests;
         this.payloads = payloads;
         this.redactor = redactor;
         this.json = json;
         this.digester = digester;
         this.clock = clock;
+        this.writeTx = writeTx;
     }
 
-    /** Reserves the output of the operation's command under the limits of the execution. */
+    /** Reserves the output of the operation's command under the limits of the execution; free disk space is measured outside the reservation transaction. */
     public OutputOpening open(Operation operation, ExecutionLimits limits) {
         long reserved = OutputRendering.maxBytes(limits.outputPerStream().toBytes());
         OutputBinding binding = new OutputBinding(operation.id(), new OutputTarget.Bound(operation.targetId(), operation.targetRevision()));
-        return switch (manifests.reserve(binding, reserved, clock.instant())) {
-            case OutputReservation.Reserved ok -> new OutputOpening.Opened(new OpenOutput(ok.id(), reserved, payloads, manifests, redactor, json, digester, clock));
+        DiskSpace disk = payloads.usable();
+        OutputReservation reservation = Objects.requireNonNull(writeTx.execute(status -> manifests.reserve(binding, reserved, clock.instant(), disk)), "reservation");
+        return switch (reservation) {
+            case OutputReservation.Reserved ok -> new OutputOpening.Opened(new OpenOutput(ok.id(), reserved, payloads, manifests, redactor, json, digester, clock, writeTx));
             case OutputReservation.TooLarge tooLarge -> refused(ExecutionErrorCode.OUTPUT_CAPACITY);
             case OutputReservation.CountExceeded countExceeded -> refused(ExecutionErrorCode.OUTPUT_CAPACITY);
             case OutputReservation.BudgetExceeded budgetExceeded -> refused(ExecutionErrorCode.ARTIFACT_QUOTA);

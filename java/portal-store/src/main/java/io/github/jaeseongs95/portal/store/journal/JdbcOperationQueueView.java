@@ -14,7 +14,6 @@ import java.util.Set;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Transactional;
 
 import io.github.jaeseongs95.portal.app.journal.OperationQueueView;
 import io.github.jaeseongs95.portal.app.journal.TargetFilter;
@@ -52,7 +51,6 @@ public class JdbcOperationQueueView implements OperationQueueView {
     }
 
     @Override
-    @Transactional(readOnly = true)
     public SchedulingView schedulingView(ConcurrencyLimits limits, Instant now, int queuedLimit) {
         List<OperationRow> queuedRows = operations.findByStateOrderByReadySequenceAsc(OperationState.QUEUED, PageRequest.ofSize(queuedLimit));
         List<QueuedOperation> queued = new ArrayList<>();
@@ -82,7 +80,6 @@ public class JdbcOperationQueueView implements OperationQueueView {
     }
 
     @Override
-    @Transactional(readOnly = true)
     public StateCounts counts() {
         Map<OperationState, Integer> counts = new EnumMap<>(OperationState.class);
         for (OperationState state : OperationState.values()) {
@@ -95,7 +92,6 @@ public class JdbcOperationQueueView implements OperationQueueView {
     }
 
     @Override
-    @Transactional(readOnly = true)
     public List<Operation> inStates(Set<OperationState> states, TargetFilter filter, int limit) {
         Collection<OperationState> wanted = Set.copyOf(states);
         Pageable page = PageRequest.ofSize(limit);

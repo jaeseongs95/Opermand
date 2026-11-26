@@ -7,7 +7,6 @@ import java.util.Optional;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.jdbc.core.JdbcAggregateOperations;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Transactional;
 
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
 import io.github.jaeseongs95.portal.domain.error.RequestErrorCode;
@@ -31,19 +30,16 @@ public class JdbcMaintenanceStore implements MaintenanceStore {
     }
 
     @Override
-    @Transactional(readOnly = true)
     public boolean occupied() {
         return reservations.existsById(THE_ROW);
     }
 
     @Override
-    @Transactional(readOnly = true)
     public Optional<Instant> reservedAt() {
         return reservations.findById(THE_ROW).map(MaintenanceReservationRow::reservedAt);
     }
 
     @Override
-    @Transactional
     public void reserve(Instant reservedAt) {
         Objects.requireNonNull(reservedAt, "reservedAt");
         try {
@@ -54,7 +50,6 @@ public class JdbcMaintenanceStore implements MaintenanceStore {
     }
 
     @Override
-    @Transactional
     public void release() {
         if (!reservations.existsById(THE_ROW)) {
             throw new RequestRefusedException(RequestErrorCode.REQUEST_REFUSED);

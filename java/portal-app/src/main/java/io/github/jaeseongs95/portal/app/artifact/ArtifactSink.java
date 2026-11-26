@@ -4,8 +4,11 @@ import java.util.Arrays;
 import java.util.Objects;
 import java.util.Optional;
 
+import org.springframework.transaction.support.TransactionOperations;
+
 import io.github.jaeseongs95.portal.app.remote.PayloadSink;
 import io.github.jaeseongs95.portal.app.remote.SinkResult;
+import io.github.jaeseongs95.portal.app.storage.DiskCheck;
 import io.github.jaeseongs95.portal.app.storage.RunningDigest;
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
 import io.github.jaeseongs95.portal.domain.id.Digest;
@@ -25,6 +28,7 @@ public final class ArtifactSink implements PayloadSink {
     private final ArtifactPayloadStore payloads;
     private final ArtifactRegistry registry;
     private final Digester digester;
+    private final TransactionOperations writeTx;
     private final RunningDigest whole = new RunningDigest();
 
     private long announced = -1L;
@@ -35,10 +39,15 @@ public final class ArtifactSink implements PayloadSink {
 
     /** A sink of a download: its size is not known yet, and {@link #append} takes no byte until {@link #expect} announced it. */
     public ArtifactSink(ArtifactId id, ArtifactPayloadStore payloads, ArtifactRegistry registry, Digester digester) {
+        this(id, payloads, registry, digester, TransactionOperations.withoutTransaction());
+    }
+
+    public ArtifactSink(ArtifactId id, ArtifactPayloadStore payloads, ArtifactRegistry registry, Digester digester, TransactionOperations writeTx) {
         this.id = Objects.requireNonNull(id, "id");
         this.payloads = Objects.requireNonNull(payloads, "payloads");
         this.registry = Objects.requireNonNull(registry, "registry");
         this.digester = Objects.requireNonNull(digester, "digester");
+        this.writeTx = Objects.requireNonNull(writeTx, "writeTx");
     }
 
     /**
@@ -46,15 +55,17 @@ public final class ArtifactSink implements PayloadSink {
      * so no announcement is needed.
      */
     public static ArtifactSink declared(ArtifactId id, ArtifactPayloadStore payloads, ArtifactRegistry registry, Digester digester) {
-        ArtifactSink sink = new ArtifactSink(id, payloads, registry, digester);
+        return declared(id, payloads, registry, digester, TransactionOperations.withoutTransaction());
+    }
+
+    public static ArtifactSink declared(ArtifactId id, ArtifactPayloadStore payloads, ArtifactRegistry registry, Digester digester, TransactionOperations writeTx) {
+        ArtifactSink sink = new ArtifactSink(id, payloads, registry, digester, writeTx);
         sink.announced = Long.MAX_VALUE;
         return sink;
     }
 
     /**
-     * The target announced the size of the file, before the first byte: the reservation, which held no bytes, is set to that size, so a download holds exactly what its file needs and
-     * a small file is not refused for the budget a large one would have needed (defect D-0012). The budget and the disk judge the announced size; when either refuses, the sink fails
-     * and {@link #refusal()} tells which. Only a download that has received nothing can be sized; the size is announced once.
+     * The target announced the size of the file, before the first byte: measures free disk space outside any transaction, then updates the reservation in a short write transaction.
      */
     @Override
     public SinkResult expect(long totalBytes) {
@@ -65,7 +76,8 @@ public final class ArtifactSink implements PayloadSink {
             if (announced >= 0) {
                 throw new IllegalStateException("The size of the file was announced twice");
             }
-            ArtifactReservation answer = registry.sizeDownload(id, totalBytes);
+            DiskCheck disk = DiskCheck.measure(payloads::usable);
+            ArtifactReservation answer = Objects.requireNonNull(writeTx.execute(status -> registry.sizeDownload(id, totalBytes, disk)), "reservation");
             if (answer instanceof ArtifactReservation.Reserved) {
                 announced = totalBytes;
             } else {
@@ -100,7 +112,9 @@ public final class ArtifactSink implements PayloadSink {
                 int size = Math.min(ChunkDigest.MAX_CHUNK_BYTES, data.length - from);
                 byte[] piece = size == data.length ? data : Arrays.copyOfRange(data, from, from + size);
                 payloads.append(id, written, piece);
-                registry.append(id, nextChunk, new ChunkDigest(size, digester.digest(piece)));
+                ChunkDigest chunk = new ChunkDigest(size, digester.digest(piece));
+                int chunkNo = nextChunk;
+                writeTx.executeWithoutResult(status -> registry.append(id, chunkNo, chunk));
                 whole.update(piece);
                 written += size;
                 nextChunk++;

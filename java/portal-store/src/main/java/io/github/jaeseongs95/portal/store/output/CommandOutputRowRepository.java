@@ -21,14 +21,6 @@ interface CommandOutputRowRepository extends CrudRepository<CommandOutputRow, St
     @Query("UPDATE command_output SET version = :next WHERE id = :id AND version = :expected")
     int bumpVersion(@Param("id") String id, @Param("expected") long expected, @Param("next") long next);
 
-    /**
-     * Takes the row lock of the output budget until the transaction ends (defect D-0058): two reservations are judged one after the other, so the count and the sum they read are
-     * those that the earlier one's row left. It changes the one row of the budget, and none when the script of the gate was not applied.
-     */
-    @Modifying
-    @Query("UPDATE budget_gate SET version = version + 1 WHERE scope = 'OUTPUT'")
-    int takeBudgetGate();
-
     /** The sum of the charges of all outputs (2.x {@code coalesce(sum(charge),0)}). */
     @Query("SELECT COALESCE(SUM(charge_bytes), 0) FROM command_output")
     long totalCharge();

@@ -2,7 +2,11 @@ package io.github.jaeseongs95.portal.app.storage;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
 
@@ -18,15 +22,32 @@ public class ReapGate {
 
     private final MaintenanceStore maintenance;
     private final StorageProtection protection;
+    private final TransactionOperations readTx;
 
-    public ReapGate(MaintenanceStore maintenance, StorageProtection protection) {
-        this.maintenance = maintenance;
-        this.protection = protection;
+    @Autowired
+    public ReapGate(MaintenanceStore maintenance, StorageProtection protection, PlatformTransactionManager transactionManager) {
+        this(maintenance, protection, readOnly(transactionManager));
     }
 
-    /** Maintenance first (it needs no file I/O), then the protection of the stores. */
+    public ReapGate(MaintenanceStore maintenance, StorageProtection protection) {
+        this(maintenance, protection, TransactionOperations.withoutTransaction());
+    }
+
+    private ReapGate(MaintenanceStore maintenance, StorageProtection protection, TransactionOperations readTx) {
+        this.maintenance = maintenance;
+        this.protection = protection;
+        this.readTx = readTx;
+    }
+
+    private static TransactionOperations readOnly(PlatformTransactionManager transactionManager) {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        return tx;
+    }
+
+    /** Maintenance first in a short read-only transaction (no file I/O), then the protection of the stores outside any transaction. */
     public ReapPermission permission() {
-        if (maintenance.occupied()) {
+        if (Boolean.TRUE.equals(readTx.execute(status -> maintenance.occupied()))) {
             return new ReapPermission.Suspended(ReapPermission.SuspendReason.MAINTENANCE);
         }
         if (protection.check() instanceof ProtectionCheck.Unprotected unprotected) {

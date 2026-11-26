@@ -11,6 +11,7 @@ import org.springframework.context.annotation.Import;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactPayloadStore;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRegistry;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactReservation;
+import io.github.jaeseongs95.portal.app.storage.DiskCheck;
 
 import io.github.jaeseongs95.portal.store.StoreTest;
 
@@ -44,7 +45,7 @@ class JdbcArtifactRegistryDiskTest {
     @Test
     @DisplayName("RC-A-160 / RC-B-094 / S3-AR-03 (D-0012): a 1 byte file on a disk without room is refused as DiskSpaceInsufficient, not as a budget refusal, with the usable space and the margin, and no row is created")
     void aSmallFileIsRefusedByTheDiskNotByTheBudget() {
-        ArtifactReservation refused = registry.reserve(fixtures.upload(1), fixtures.at());
+        ArtifactReservation refused = registry.reserve(fixtures.upload(1), fixtures.at(), DiskCheck.measure(payloads::usable));
 
         assertThat(refused).isInstanceOf(ArtifactReservation.DiskSpaceInsufficient.class);
         ArtifactReservation.DiskSpaceInsufficient disk = (ArtifactReservation.DiskSpaceInsufficient) refused;
@@ -60,7 +61,7 @@ class JdbcArtifactRegistryDiskTest {
     @Test
     @DisplayName("RC-A-160: the per-file limit is answered before the disk is asked")
     void thePerFileLimitComesBeforeTheDisk() {
-        assertThat(registry.reserve(fixtures.upload(ArtifactLimits.MAX_FILE_BYTES + 1), fixtures.at())).isEqualTo(
+        assertThat(registry.reserve(fixtures.upload(ArtifactLimits.MAX_FILE_BYTES + 1), fixtures.at(), DiskCheck.measure(payloads::usable))).isEqualTo(
             new ArtifactReservation.FileTooLarge(ArtifactLimits.MAX_FILE_BYTES + 1, ArtifactLimits.MAX_FILE_BYTES));
     }
 }

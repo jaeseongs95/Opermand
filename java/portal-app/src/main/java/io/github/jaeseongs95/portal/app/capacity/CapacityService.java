@@ -6,8 +6,16 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.config.AvailableCpus;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
@@ -26,23 +34,57 @@ import io.github.jaeseongs95.portal.domain.target.Target;
 @Service
 public class CapacityService {
 
+    private static final Logger LOG = LoggerFactory.getLogger(CapacityService.class);
     private static final long INITIAL_VERSION = 1L;
 
     private final RuntimeCapacityStore store;
     private final MaintenanceStore maintenance;
     private final ConfiguredTargets targets;
     private final AvailableCpus cpus;
+    private final TransactionOperations readTx;
+    private final TransactionOperations writeTx;
+
+    @Autowired
+    public CapacityService(RuntimeCapacityStore store, MaintenanceStore maintenance, ConfiguredTargets targets, AvailableCpus cpus,
+                           PlatformTransactionManager transactionManager) {
+        this(store, maintenance, targets, cpus, repeatableReadOnly(transactionManager), new TransactionTemplate(transactionManager));
+    }
 
     public CapacityService(RuntimeCapacityStore store, MaintenanceStore maintenance, ConfiguredTargets targets, AvailableCpus cpus) {
+        this(store, maintenance, targets, cpus, TransactionOperations.withoutTransaction(), TransactionOperations.withoutTransaction());
+    }
+
+    private CapacityService(RuntimeCapacityStore store, MaintenanceStore maintenance, ConfiguredTargets targets, AvailableCpus cpus,
+                            TransactionOperations readTx, TransactionOperations writeTx) {
         this.store = store;
         this.maintenance = maintenance;
         this.targets = targets;
         this.cpus = cpus;
+        this.readTx = readTx;
+        this.writeTx = writeTx;
     }
 
-    /** The stored limits; the first call of a new installation stores the defaults (two first writers: one wins, the other reads). */
+    private static TransactionOperations repeatableReadOnly(PlatformTransactionManager transactionManager) {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        tx.setIsolationLevel(TransactionDefinition.ISOLATION_REPEATABLE_READ);
+        return tx;
+    }
+
+    /** The stored limits; the first call of a new installation stores the defaults (two first writers: the loser rolls back and reads the winner in a fresh read-only TX). */
     public CapacityState current() {
-        return store.read().orElseGet(() -> store.initialize(defaults()));
+        Optional<CapacityState> existing = readTx.execute(status -> store.read());
+        if (existing != null && existing.isPresent()) {
+            return existing.orElseThrow();
+        }
+        CapacityState initial = defaults();
+        try {
+            return Objects.requireNonNull(writeTx.execute(status -> store.initialize(initial)), "capacity");
+        } catch (DuplicateKeyException e) {
+            LOG.info("Another writer initialized the runtime capacity first; reading the stored state in a fresh transaction", e);
+            Optional<CapacityState> winner = readTx.execute(status -> store.read());
+            return winner == null ? initial : winner.orElseThrow(() -> new IllegalStateException("The runtime capacity row vanished after a duplicate insert", e));
+        }
     }
 
     /**
@@ -63,7 +105,11 @@ public class CapacityService {
         }
         requireKnownTargets(current, proposed.targets());
         if (existing.isEmpty()) {
-            store.initialize(current);
+            try {
+                store.initialize(current);
+            } catch (DuplicateKeyException e) {
+                throw new RequestRefusedException(CapacityErrorCode.CAPACITY_REVISION_CONFLICT, e);
+            }
         }
         return store.compareAndSet(expectedVersion, proposed);
     }

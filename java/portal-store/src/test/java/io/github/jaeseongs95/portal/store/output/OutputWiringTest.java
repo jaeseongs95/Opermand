@@ -41,7 +41,7 @@ class OutputWiringTest {
     @Test
     @DisplayName("S2-OUT-06: the output adapters wire into one Spring context and work through the ports: reserve, find, start-up check")
     void theAdaptersWorkThroughThePorts() {
-        OutputReservation reservation = manifests.reserve(fixture.unbound(), 100, T0);
+        OutputReservation reservation = manifests.reserve(fixture.unbound(), 100, T0, payloads.usable());
 
         assertThat(reservation).isInstanceOf(OutputReservation.Reserved.class);
         OutputReservation.Reserved reserved = (OutputReservation.Reserved) reservation;

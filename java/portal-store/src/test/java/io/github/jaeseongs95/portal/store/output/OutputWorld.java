@@ -10,11 +10,11 @@ import java.time.Instant;
 import java.security.SecureRandom;
 
 import org.springframework.data.jdbc.core.JdbcAggregateOperations;
-import org.springframework.transaction.PlatformTransactionManager;
 
 import io.github.jaeseongs95.portal.app.output.OutputBinding;
 import io.github.jaeseongs95.portal.app.output.OutputId;
 import io.github.jaeseongs95.portal.app.output.OutputReservation;
+import io.github.jaeseongs95.portal.app.output.RetainedBytes;
 import io.github.jaeseongs95.portal.app.output.StreamFrame;
 import io.github.jaeseongs95.portal.app.output.StreamKind;
 import io.github.jaeseongs95.portal.domain.id.OperationIdGenerator;
@@ -22,6 +22,7 @@ import io.github.jaeseongs95.portal.domain.id.Sha256Digester;
 import io.github.jaeseongs95.portal.store.StorageRoots;
 import io.github.jaeseongs95.portal.store.TestStorage;
 import io.github.jaeseongs95.portal.store.output.OutputFiles.PayloadKind;
+import io.github.jaeseongs95.portal.store.storage.StorageBudgetRowRepository;
 
 /**
  * The output store as a test builds it: the manifest store over the test's database, the payload store over a temporary folder, and the start-up check over both.
@@ -39,15 +40,14 @@ final class OutputWorld {
     private final JdbcAggregateOperations aggregates;
 
     OutputWorld(Path folder, OutputLimits limits, Clock clock, CommandOutputRowRepository rows, CommandOutputFormatRowRepository formats, CommandOutputPageRowRepository pages,
-                JdbcAggregateOperations aggregates, OutputMapper mapper, PlatformTransactionManager transactionManager) {
+                StorageBudgetRowRepository budgets, JdbcAggregateOperations aggregates, OutputMapper mapper) {
         this.rows = rows;
         this.formats = formats;
         this.pages = pages;
         this.aggregates = aggregates;
         this.files = new OutputFiles(new StorageRoots(folder, folder), TestStorage.rules());
         this.payloads = new FileOutputPayloadStore(files, new Sha256Digester(), limits);
-        this.manifests = new JdbcOutputManifestStore(rows, formats, pages, aggregates, mapper, new OperationIdGenerator(new SecureRandom()), payloads, transactionManager,
-            limits, clock);
+        this.manifests = new JdbcOutputManifestStore(rows, formats, pages, budgets, aggregates, mapper, new OperationIdGenerator(new SecureRandom()), limits, clock);
         this.startup = new OutputStartupCheck(manifests, payloads);
     }
 
@@ -57,11 +57,16 @@ final class OutputWorld {
 
     /** Reserves and insists that the reservation was accepted. */
     OutputId reserve(OutputBinding binding, long expectedBytes, Instant at) {
-        OutputReservation reservation = manifests.reserve(binding, expectedBytes, at);
+        OutputReservation reservation = manifests.reserve(binding, expectedBytes, at, payloads.usable());
         if (reservation instanceof OutputReservation.Reserved reserved) {
             return reserved.id();
         }
         throw new AssertionError("The reservation was refused: " + reservation);
+    }
+
+    /** Measures retained bytes outside any DB write and marks the output unavailable. */
+    void markUnavailable(OutputId id, Instant expiresAt) {
+        manifests.markUnavailable(id, expiresAt, new RetainedBytes.Measured(payloads.retainedBytes(id)));
     }
 
     CommandOutputRow row(OutputId id) {
@@ -84,8 +89,9 @@ final class OutputWorld {
         }
     }
 
-    /** Sets a charge directly, as an older version of the store would have left it. */
+    /** Sets a charge directly, as an older version of the store would have left it, and reconciles the budget ledger to match. */
     void forceCharge(OutputId id, long chargeBytes) {
         aggregates.update(row(id).withChargeBytes(chargeBytes));
+        manifests.reconcileBudget();
     }
 }

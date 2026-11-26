@@ -6,7 +6,11 @@ import java.util.Objects;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.cli.AgentCliInstallRecord;
 import io.github.jaeseongs95.portal.app.cli.AgentCliRequestStore;
@@ -71,9 +75,26 @@ public class AgentCliService {
     private final Digester digester;
     private final Clock clock;
     private final TransferLimits limits;
+    private final TransactionOperations readTx;
+    private final TransactionOperations writeTx;
+
+    @Autowired
+    public AgentCliService(AgentCliCatalog providers, AgentReleaseCatalog releases, AgentCliInstallerPort installer, AgentCliRequestStore store,
+                           TargetPlatformRegistry platforms, TransferOutcomes outcomes, Digester digester, Clock clock, TransferLimits limits,
+                           PlatformTransactionManager transactionManager) {
+        this(providers, releases, installer, store, platforms, outcomes, digester, clock, limits,
+            readOnly(transactionManager), new TransactionTemplate(transactionManager));
+    }
 
     public AgentCliService(AgentCliCatalog providers, AgentReleaseCatalog releases, AgentCliInstallerPort installer, AgentCliRequestStore store,
                            TargetPlatformRegistry platforms, TransferOutcomes outcomes, Digester digester, Clock clock, TransferLimits limits) {
+        this(providers, releases, installer, store, platforms, outcomes, digester, clock, limits,
+            TransactionOperations.withoutTransaction(), TransactionOperations.withoutTransaction());
+    }
+
+    private AgentCliService(AgentCliCatalog providers, AgentReleaseCatalog releases, AgentCliInstallerPort installer, AgentCliRequestStore store,
+                            TargetPlatformRegistry platforms, TransferOutcomes outcomes, Digester digester, Clock clock, TransferLimits limits,
+                            TransactionOperations readTx, TransactionOperations writeTx) {
         this.providers = providers;
         this.releases = releases;
         this.installer = installer;
@@ -83,6 +104,14 @@ public class AgentCliService {
         this.digester = digester;
         this.clock = clock;
         this.limits = limits;
+        this.readTx = readTx;
+        this.writeTx = writeTx;
+    }
+
+    private static TransactionOperations readOnly(PlatformTransactionManager transactionManager) {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        return tx;
     }
 
     /**
@@ -92,7 +121,9 @@ public class AgentCliService {
     public ExecutionOutcome install(AgentCliRun run, ExecutionControl control) {
         Objects.requireNonNull(run, "run");
         Objects.requireNonNull(control, "control");
-        AgentCliInstallRecord record = store.findByOperation(run.operation()).orElseThrow(() -> refusal(DispatchReason.PRIVATE_PLAN, DispatchStage.CLI_GUARD));
+        AgentCliInstallRecord record = Objects.requireNonNull(
+            readTx.execute(status -> store.findByOperation(run.operation()).orElseThrow(() -> refusal(DispatchReason.PRIVATE_PLAN, DispatchStage.CLI_GUARD))),
+            "record");
         AgentCliIntent intent = verified(run, record);
         ResolvedTarget target = run.target();
         if (!target.target().capabilities().agentCli()) {
@@ -164,7 +195,7 @@ public class AgentCliService {
      */
     private ExecutionOutcome recorded(AgentCliRun run, RemoteStatus status, ExecutionOutcome outcome) {
         try {
-            store.recordRemote(run.operation(), status);
+            writeTx.executeWithoutResult(tx -> store.recordRemote(run.operation(), status));
         } catch (RuntimeException e) {
             LOG.warn("The remote status of the installation {} could not be recorded", run.operation().value(), e);
         }

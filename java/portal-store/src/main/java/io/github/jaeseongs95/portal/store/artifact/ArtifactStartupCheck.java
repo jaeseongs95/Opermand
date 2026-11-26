@@ -7,6 +7,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,6 +55,10 @@ public class ArtifactStartupCheck {
     }
 
     public ArtifactReconciliation reconcile() {
+        return reconcile(Runnable::run);
+    }
+
+    public ArtifactReconciliation reconcile(Consumer<Runnable> inTransaction) {
         Set<ArtifactId> stored = payloads.stored();
         Map<ArtifactId, ArtifactRecord> rows = new HashMap<>();
         for (ArtifactRecord record : registry.holding()) {
@@ -75,14 +80,14 @@ public class ArtifactStartupCheck {
             switch (record.state()) {
                 case DELETING -> {
                     if (deleteBytes(record)) {
-                        registry.release(record.id(), ReleaseReason.ABANDONED);
+                        inTransaction.accept(() -> registry.release(record.id(), ReleaseReason.ABANDONED));
                         deleted.add(record.id());
                     }
                 }
                 case CONSUMING -> {
                     // Nothing is in use at a start, so a use that began and did not finish is finished now, for the reason it recorded (defect D-0012).
                     if (record.consumption() instanceof ConsumeState.Consuming consuming && deleteBytes(record)) {
-                        registry.completeConsume(record.id(), consuming.reason());
+                        inTransaction.accept(() -> registry.completeConsume(record.id(), consuming.reason()));
                         finishedConsumptions.add(record.id());
                     }
                 }
@@ -90,6 +95,7 @@ public class ArtifactStartupCheck {
                 case CONSUMED -> LOG.debug("A consumed artifact holds no bytes: {}", record.id().value());
             }
         }
+        inTransaction.accept(registry::reconcileBudget);
         LOG.info("Artifact start-up check: {} quarantined, {} truncated, {} deletions finished, {} consumptions finished", quarantined.size(), truncated.size(),
             deleted.size(), finishedConsumptions.size());
         quarantine.log();

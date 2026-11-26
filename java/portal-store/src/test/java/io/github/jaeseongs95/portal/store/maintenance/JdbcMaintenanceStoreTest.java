@@ -11,8 +11,8 @@ import org.springframework.context.annotation.Import;
 
 import io.github.jaeseongs95.portal.domain.error.RequestErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
-import io.github.jaeseongs95.portal.store.Savepoints;
 import io.github.jaeseongs95.portal.store.StoreTest;
+import io.github.jaeseongs95.portal.store.TestSavepoints;
 
 @StoreTest
 @Import(JdbcMaintenanceStore.class)
@@ -22,9 +22,9 @@ class JdbcMaintenanceStoreTest {
     private static final Instant T2 = Instant.parse("2026-11-19T00:05:00Z");
 
     private final JdbcMaintenanceStore store;
-    private final Savepoints savepoints;
+    private final TestSavepoints savepoints;
 
-    JdbcMaintenanceStoreTest(JdbcMaintenanceStore store, Savepoints savepoints) {
+    JdbcMaintenanceStoreTest(JdbcMaintenanceStore store, TestSavepoints savepoints) {
         this.store = store;
         this.savepoints = savepoints;
     }

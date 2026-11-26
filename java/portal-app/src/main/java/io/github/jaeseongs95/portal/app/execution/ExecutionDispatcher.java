@@ -5,13 +5,19 @@ import java.time.Instant;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.task.TaskExecutor;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.event.OperationEvents;
 import io.github.jaeseongs95.portal.app.history.ExecutionTimelineStore;
@@ -60,7 +66,6 @@ public class ExecutionDispatcher {
     private static final Logger LOG = LoggerFactory.getLogger(ExecutionDispatcher.class);
     /** The most claims, expiries and refusals one drain makes before it looks at the request flag again, so a store that keeps answering "contended" cannot spin forever. */
     private static final int MAX_STEPS = 1000;
-    private static final int SETTLE_ATTEMPTS = 3;
 
     private final OperationJournal journal;
     private final OperationQueueView queueView;
@@ -76,14 +81,33 @@ public class ExecutionDispatcher {
     private final ExecutionTimelineStore timelines;
     private final TaskExecutor executor;
     private final Clock clock;
+    private final TransactionOperations readTx;
+    private final TransactionOperations writeTx;
     private final Map<OperationKind, OperationRunner> runners = new EnumMap<>(OperationKind.class);
     private final AtomicBoolean draining = new AtomicBoolean();
     private final AtomicBoolean requested = new AtomicBoolean();
     private final AtomicBoolean open = new AtomicBoolean();
 
+    @Autowired
+    public ExecutionDispatcher(OperationJournal journal, OperationQueueView queueView, ClaimStore claims, OperationScheduler scheduler, ConcurrencyLimits limits,
+                               OperationExpiry expiry, OperationWrites writes, OutcomeAudit outcomes, OperationEvents events, RunningExecutions running,
+                               DispatchChecks checks, ExecutionTimelineStore timelines, TaskExecutor executor, Clock clock, List<OperationRunner> operationRunners,
+                               PlatformTransactionManager transactionManager) {
+        this(journal, queueView, claims, scheduler, limits, expiry, writes, outcomes, events, running, checks, timelines, executor, clock, operationRunners,
+            readOnly(transactionManager), new TransactionTemplate(transactionManager));
+    }
+
     public ExecutionDispatcher(OperationJournal journal, OperationQueueView queueView, ClaimStore claims, OperationScheduler scheduler, ConcurrencyLimits limits,
                                OperationExpiry expiry, OperationWrites writes, OutcomeAudit outcomes, OperationEvents events, RunningExecutions running,
                                DispatchChecks checks, ExecutionTimelineStore timelines, TaskExecutor executor, Clock clock, List<OperationRunner> operationRunners) {
+        this(journal, queueView, claims, scheduler, limits, expiry, writes, outcomes, events, running, checks, timelines, executor, clock, operationRunners,
+            TransactionOperations.withoutTransaction(), TransactionOperations.withoutTransaction());
+    }
+
+    private ExecutionDispatcher(OperationJournal journal, OperationQueueView queueView, ClaimStore claims, OperationScheduler scheduler, ConcurrencyLimits limits,
+                                OperationExpiry expiry, OperationWrites writes, OutcomeAudit outcomes, OperationEvents events, RunningExecutions running,
+                                DispatchChecks checks, ExecutionTimelineStore timelines, TaskExecutor executor, Clock clock, List<OperationRunner> operationRunners,
+                                TransactionOperations readTx, TransactionOperations writeTx) {
         this.journal = journal;
         this.queueView = queueView;
         this.claims = claims;
@@ -98,12 +122,20 @@ public class ExecutionDispatcher {
         this.timelines = timelines;
         this.executor = executor;
         this.clock = clock;
+        this.readTx = readTx;
+        this.writeTx = writeTx;
         for (OperationRunner runner : operationRunners) {
             OperationRunner earlier = runners.put(runner.kind(), runner);
             if (earlier != null) {
                 throw new IllegalStateException("Two OperationRunner beans run " + runner.kind() + ": " + earlier.getClass().getName() + " and " + runner.getClass().getName());
             }
         }
+    }
+
+    private static TransactionOperations readOnly(PlatformTransactionManager transactionManager) {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        return tx;
     }
 
     /**
@@ -158,10 +190,10 @@ public class ExecutionDispatcher {
 
     /** One decision of the scheduler and its action. True when something changed, so that the queue is asked again. */
     boolean step() {
-        Instant now = clock.instant();
-        SchedulingDecision decision = scheduler.select(queueView.schedulingView(limits, now, limits.queueCapacity().value()));
+        SchedulingDecision decision = Objects.requireNonNull(
+            readTx.execute(status -> scheduler.select(queueView.schedulingView(limits, clock.instant(), limits.queueCapacity().value()))), "decision");
         return switch (decision) {
-            case SchedulingDecision.Claim claim -> claim(claim, now);
+            case SchedulingDecision.Claim claim -> claim(claim);
             case SchedulingDecision.ExpireQueued expire -> expireAll(expire);
             case SchedulingDecision.Idle idle -> false;
             case SchedulingDecision.Saturated saturated -> false;
@@ -178,8 +210,22 @@ public class ExecutionDispatcher {
         return expired > 0;
     }
 
-    private boolean claim(SchedulingDecision.Claim claim, Instant now) {
-        return switch (claims.claim(claim.id(), claim.expectedVersion(), limits, now)) {
+    private boolean claim(SchedulingDecision.Claim claim) {
+        ClaimResult result;
+        try {
+            Instant claimAt = clock.instant();
+            result = Objects.requireNonNull(writeTx.execute(status -> claims.claim(claim.id(), claim.expectedVersion(), limits, claimAt)), "claim");
+        } catch (DuplicateKeyException e) {
+            // The write transaction rolled back cleanly (PostgreSQL-safe, no 25P02); another claim took the slot or conflict fence.
+            result = new ClaimResult.Contended();
+        } catch (RequestRefusedException e) {
+            if (e.code() == OperationErrorCode.OPERATION_VERSION_CONFLICT) {
+                result = new ClaimResult.NotQueued();
+            } else {
+                throw e;
+            }
+        }
+        return switch (result) {
             case ClaimResult.Claimed claimed -> {
                 start(claimed.operation());
                 yield true;
@@ -241,77 +287,63 @@ public class ExecutionDispatcher {
     }
 
     /**
-     * Stops an operation that no runner took across: a cancel that came first settles as cancelled (nothing ran), any other refusal as failed before dispatch with the
-     * reason and the step. An operation that already ended is left alone. A write that lost the race every time is not dropped (defect D-0051): it is
-     * {@code OPERATION_DISPATCH_PERSISTENCE_FAILED}, which the caller logs, and the operation stays as the journal has it for the recovery after a restart, which settles it
-     * unknown and never sends it again.
+     * Stops an operation that no runner took across in a single write attempt (Principles 4.4: no whole-transaction retry): a cancel that came first settles as cancelled
+     * (nothing ran), any other refusal as failed before dispatch with the reason and the step. A version conflict is reported as {@code OPERATION_DISPATCH_PERSISTENCE_FAILED}
+     * and leaves the operation as the journal has it for recovery after a restart (defect D-0051).
      */
     private void refuseOrCancel(OperationId id, DispatchFailure failure) {
-        for (int attempt = 0; attempt < SETTLE_ATTEMPTS; attempt++) {
-            Optional<Operation> found = journal.find(id);
-            if (found.isEmpty()) {
-                return;
-            }
-            Operation current = found.orElseThrow();
-            Instant now = clock.instant();
-            Optional<Operation> next = switch (current.state()) {
-                case TERMINATING -> Optional.of(current.settle(ExecutionOutcome.notDispatched(ExecutionReason.CANCEL, List.of()), now));
-                case PENDING, QUEUED, STARTING -> Optional.of(current.refuseBeforeDispatch(failure, now));
-                case RUNNING, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN -> Optional.empty();
-            };
-            if (next.isEmpty()) {
-                return;
-            }
-            try {
-                outcomes.recordOutcome(writes.store(next.orElseThrow(), current.version()));
-                return;
-            } catch (RequestRefusedException e) {
-                if (e.code() != OperationErrorCode.OPERATION_VERSION_CONFLICT) {
-                    throw e;
-                }
-            }
+        Optional<Operation> found = readTx.execute(status -> journal.find(id));
+        if (found == null || found.isEmpty()) {
+            return;
         }
-        throw new RequestRefusedException(OperationErrorCode.OPERATION_DISPATCH_PERSISTENCE_FAILED);
+        Operation current = found.orElseThrow();
+        Instant now = clock.instant();
+        Optional<Operation> next = switch (current.state()) {
+            case TERMINATING -> Optional.of(current.settle(ExecutionOutcome.notDispatched(ExecutionReason.CANCEL, List.of()), now));
+            case PENDING, QUEUED, STARTING -> Optional.of(current.refuseBeforeDispatch(failure, now));
+            case RUNNING, COMPLETED, FAILED, CANCELLED, DENIED, EXPIRED, UNKNOWN -> Optional.empty();
+        };
+        if (next.isEmpty()) {
+            return;
+        }
+        try {
+            outcomes.recordOutcome(writes.store(next.orElseThrow(), current.version()));
+        } catch (RequestRefusedException e) {
+            if (e.code() == OperationErrorCode.OPERATION_VERSION_CONFLICT) {
+                throw new RequestRefusedException(OperationErrorCode.OPERATION_DISPATCH_PERSISTENCE_FAILED, e);
+            }
+            throw e;
+        }
     }
 
     /**
-     * Settles the operation from the executor's outcome and stores its timeline. A conflicting write (a cancel that came in between) is read again and decided again, the
-     * outcome being the same; a result that cannot be stored is {@code OPERATION_OUTCOME_PERSISTENCE_FAILED} and leaves the operation to the recovery (decision on
-     * S3-SF-05 c).
+     * Settles the operation from the executor's outcome and stores its timeline in a single write attempt (Principles 4.4: no whole-transaction retry). A result that cannot
+     * be stored is {@code OPERATION_OUTCOME_PERSISTENCE_FAILED} and leaves the operation to recovery.
      */
     private void settle(OperationId id, ExecutionReport report) {
-        for (int attempt = 0; attempt < SETTLE_ATTEMPTS; attempt++) {
-            Optional<Operation> found = journal.find(id);
-            if (found.isEmpty()) {
-                return;
-            }
-            Operation current = found.orElseThrow();
-            if (!current.state().isActive()) {
-                LOG.warn("An operation was settled by something else while it ran; its outcome is not stored again");
-                return;
-            }
-            Operation settled = current.settle(report.outcome(), clock.instant());
-            Operation stored;
-            try {
-                stored = writes.store(settled, current.version());
-            } catch (RequestRefusedException e) {
-                if (e.code() == OperationErrorCode.OPERATION_VERSION_CONFLICT) {
-                    continue;
-                }
-                throw new RequestRefusedException(OperationErrorCode.OPERATION_OUTCOME_PERSISTENCE_FAILED, e);
-            } catch (RuntimeException e) {
-                throw new RequestRefusedException(OperationErrorCode.OPERATION_OUTCOME_PERSISTENCE_FAILED, e);
-            }
-            recordTimeline(id, report.timeline());
-            outcomes.recordOutcome(stored);
+        Optional<Operation> found = readTx.execute(status -> journal.find(id));
+        if (found == null || found.isEmpty()) {
             return;
         }
-        throw new RequestRefusedException(OperationErrorCode.OPERATION_OUTCOME_PERSISTENCE_FAILED);
+        Operation current = found.orElseThrow();
+        if (!current.state().isActive()) {
+            LOG.warn("An operation was settled by something else while it ran; its outcome is not stored again");
+            return;
+        }
+        Operation settled = current.settle(report.outcome(), clock.instant());
+        Operation stored;
+        try {
+            stored = writes.store(settled, current.version());
+        } catch (RuntimeException e) {
+            throw new RequestRefusedException(OperationErrorCode.OPERATION_OUTCOME_PERSISTENCE_FAILED, e);
+        }
+        recordTimeline(id, report.timeline());
+        outcomes.recordOutcome(stored);
     }
 
     private void recordTimeline(OperationId id, ExecutionTimeline timeline) {
         try {
-            timelines.record(id, timeline);
+            writeTx.executeWithoutResult(status -> timelines.record(id, timeline));
         } catch (RuntimeException e) {
             LOG.error("The timeline of an execution could not be stored; the result of the operation is unchanged", e);
         }

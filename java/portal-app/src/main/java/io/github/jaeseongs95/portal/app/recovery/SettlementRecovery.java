@@ -3,14 +3,18 @@ package io.github.jaeseongs95.portal.app.recovery;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.HashSet;
 import java.util.LinkedHashSet;
+import java.util.Objects;
 import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.artifact.ArtifactOrigin;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRecord;
@@ -53,14 +57,33 @@ public class SettlementRecovery {
     private final TerminalNotifier terminal;
     private final ReapGate gate;
     private final Clock clock;
+    private final TransactionOperations readTx;
+
+    @Autowired
+    public SettlementRecovery(StagedFileService staged, ArtifactRegistry registry, OperationJournal journal, TerminalNotifier terminal, ReapGate gate, Clock clock,
+                              PlatformTransactionManager transactionManager) {
+        this(staged, registry, journal, terminal, gate, clock, readOnly(transactionManager));
+    }
 
     public SettlementRecovery(StagedFileService staged, ArtifactRegistry registry, OperationJournal journal, TerminalNotifier terminal, ReapGate gate, Clock clock) {
+        this(staged, registry, journal, terminal, gate, clock, TransactionOperations.withoutTransaction());
+    }
+
+    private SettlementRecovery(StagedFileService staged, ArtifactRegistry registry, OperationJournal journal, TerminalNotifier terminal, ReapGate gate, Clock clock,
+                               TransactionOperations readTx) {
         this.staged = staged;
         this.registry = registry;
         this.journal = journal;
         this.terminal = terminal;
         this.gate = gate;
         this.clock = clock;
+        this.readTx = readTx;
+    }
+
+    private static TransactionOperations readOnly(PlatformTransactionManager transactionManager) {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        return tx;
     }
 
     /**
@@ -92,14 +115,16 @@ public class SettlementRecovery {
             LOG.debug("The settlement sweep is held back: {}", suspended.reason());
             return 0;
         }
-        int told = 0;
-        Set<OperationId> seen = new HashSet<>();
-        for (ArtifactRecord record : registry.holding()) {
-            for (OperationId id : operationsHeldBy(record)) {
-                if (seen.add(id)) {
-                    told += tellIfEnded(id, endedBefore);
-                }
+        Set<OperationId> held = Objects.requireNonNull(readTx.execute(status -> {
+            Set<OperationId> ids = new LinkedHashSet<>();
+            for (ArtifactRecord record : registry.holding()) {
+                ids.addAll(operationsHeldBy(record));
             }
+            return ids;
+        }), "held");
+        int told = 0;
+        for (OperationId id : held) {
+            told += tellIfEnded(id, endedBefore);
         }
         return told;
     }
@@ -122,7 +147,7 @@ public class SettlementRecovery {
 
     private int tellIfEnded(OperationId id, Instant endedBefore) {
         try {
-            Operation operation = journal.find(id).orElse(null);
+            Operation operation = readTx.execute(status -> journal.find(id).orElse(null));
             if (operation == null || !operation.state().isFinal() || operation.updatedAt().isAfter(endedBefore)) {
                 return 0;
             }

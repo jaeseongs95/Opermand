@@ -50,8 +50,8 @@ import io.github.jaeseongs95.portal.domain.operation.UploadProtocol;
 import io.github.jaeseongs95.portal.domain.path.PosixRemotePath;
 import io.github.jaeseongs95.portal.domain.path.WindowsRemotePath;
 import io.github.jaeseongs95.portal.domain.target.TargetRevision;
-import io.github.jaeseongs95.portal.store.Savepoints;
 import io.github.jaeseongs95.portal.store.StoreTest;
+import io.github.jaeseongs95.portal.store.TestSavepoints;
 
 /**
  * The registry with the 2.x default limits (512 MiB budget, 64 MiB per file, 10 minute staging) and no disk margin, so that these cases never depend on how full the
@@ -75,11 +75,15 @@ class JdbcArtifactRegistryTest {
 
     private final ArtifactFixtures fixtures = new ArtifactFixtures();
     private final ArtifactRegistry registry;
-    private final Savepoints savepoints;
+    private final TestSavepoints savepoints;
 
-    JdbcArtifactRegistryTest(ArtifactRegistry registry, Savepoints savepoints) {
+    JdbcArtifactRegistryTest(ArtifactRegistry registry, TestSavepoints savepoints) {
         this.registry = registry;
         this.savepoints = savepoints;
+    }
+
+    private ArtifactReservation reserve(ArtifactSpec spec) {
+        return registry.reserve(spec, fixtures.at(), ArtifactFixtures.UNLIMITED_DISK);
     }
 
     @Test
@@ -87,13 +91,13 @@ class JdbcArtifactRegistryTest {
     void eightLimitFilesFillTheDefaultBudget() {
         List<ArtifactId> ids = new ArrayList<>();
         for (int i = 0; i < 8; i++) {
-            ids.add(fixtures.reservedId(registry.reserve(fixtures.upload(MAX_FILE), fixtures.at())));
+            ids.add(fixtures.reservedId(reserve(fixtures.upload(MAX_FILE))));
         }
 
         assertThat(registry.budget().budgetBytes()).isEqualTo(536_870_912L);
         assertThat(registry.budget().chargedBytes()).isEqualTo(536_870_912L);
         assertThat(registry.budget().remainingBytes()).isZero();
-        assertThat(registry.reserve(fixtures.upload(MAX_FILE), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(MAX_FILE, 536_870_912L, 536_870_912L));
+        assertThat(reserve(fixtures.upload(MAX_FILE))).isEqualTo(new ArtifactReservation.BudgetExceeded(MAX_FILE, 536_870_912L, 536_870_912L));
         assertThat(registry.holding()).hasSize(8);
 
         ids.forEach(id -> registry.release(id, ReleaseReason.REFUSED));
@@ -104,7 +108,7 @@ class JdbcArtifactRegistryTest {
     @Test
     @DisplayName("RC-A-158: a staging upload expires after 10 minutes and is listed from that instant on; a submitted upload is pinned and never listed")
     void aStagingUploadExpiresAndASubmittedOneIsPinned() {
-        ArtifactId partial = fixtures.reservedId(registry.reserve(fixtures.upload(4), fixtures.at()));
+        ArtifactId partial = fixtures.reservedId(reserve(fixtures.upload(4)));
         ArtifactId submitted = fixtures.readyArtifact(registry, fixtures.upload(4), fixtures.bytes(4, 1));
         registry.submit(submitted, OPERATION_A);
 
@@ -140,7 +144,7 @@ class JdbcArtifactRegistryTest {
     @Test
     @DisplayName("RC-A-772 / D3-17: a download reserves the largest size, receives fewer bytes and completes with the real size, so the charge falls to what was received; an upload cannot complete this way")
     void aCompletedDownloadChargesWhatItReceived() {
-        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.download(64), fixtures.at()));
+        ArtifactId id = fixtures.reservedId(reserve(fixtures.download(64)));
         assertThat(registry.budget().chargedBytes()).isEqualTo(64);
         byte[] bytes = fixtures.bytes(4, 7);
         registry.append(id, 0, fixtures.chunk(bytes));
@@ -153,28 +157,28 @@ class JdbcArtifactRegistryTest {
         assertThat(ready.content()).isEqualTo(new ContentDigest.Sealed(fixtures.digest(bytes)));
         assertThat(registry.budget().chargedBytes()).isEqualTo(4);
         assertThat(registry.completeDownload(id, fixtures.digest(bytes))).isEqualTo(ready);
-        ArtifactId upload = fixtures.reservedId(registry.reserve(fixtures.upload(4), fixtures.at()));
+        ArtifactId upload = fixtures.reservedId(reserve(fixtures.upload(4)));
         assertRefused(() -> registry.completeDownload(upload, fixtures.digest(bytes)), ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
     }
 
     @Test
     @DisplayName("S-D0012-14 (store half): a download is reserved with no bytes and sized to what the target announced, before any byte; a download that has received a byte, an upload, a negative size and an unknown id are refused")
     void aDownloadIsSizedToTheAnnouncedSize() {
-        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.download(0), fixtures.at()));
+        ArtifactId id = fixtures.reservedId(reserve(fixtures.download(0)));
         assertThat(registry.budget().chargedBytes()).as("an empty reservation charges one byte").isEqualTo(1);
 
-        assertThat(registry.sizeDownload(id, 10)).isEqualTo(new ArtifactReservation.Reserved(id));
+        assertThat(registry.sizeDownload(id, 10, ArtifactFixtures.UNLIMITED_DISK)).isEqualTo(new ArtifactReservation.Reserved(id));
 
         assertThat(registry.budget().chargedBytes()).isEqualTo(10);
         assertThat(registry.find(id).orElseThrow().spec().sizeBytes()).isEqualTo(10L);
-        assertThat(registry.sizeDownload(id, 12)).as("the size can be set again while no byte came").isEqualTo(new ArtifactReservation.Reserved(id));
-        assertThat(registry.sizeDownload(id, MAX_FILE + 1)).isEqualTo(new ArtifactReservation.FileTooLarge(MAX_FILE + 1, MAX_FILE));
-        assertRefused(() -> registry.sizeDownload(id, -1), ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
-        ArtifactId upload = fixtures.reservedId(registry.reserve(fixtures.upload(4), fixtures.at()));
-        assertRefused(() -> registry.sizeDownload(upload, 1), ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
+        assertThat(registry.sizeDownload(id, 12, ArtifactFixtures.UNLIMITED_DISK)).as("the size can be set again while no byte came").isEqualTo(new ArtifactReservation.Reserved(id));
+        assertThat(registry.sizeDownload(id, MAX_FILE + 1, ArtifactFixtures.UNLIMITED_DISK)).isEqualTo(new ArtifactReservation.FileTooLarge(MAX_FILE + 1, MAX_FILE));
+        assertRefused(() -> registry.sizeDownload(id, -1, ArtifactFixtures.UNLIMITED_DISK), ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
+        ArtifactId upload = fixtures.reservedId(reserve(fixtures.upload(4)));
+        assertRefused(() -> registry.sizeDownload(upload, 1, ArtifactFixtures.UNLIMITED_DISK), ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
         registry.append(id, 0, fixtures.chunk(fixtures.bytes(4, 7)));
-        assertRefused(() -> registry.sizeDownload(id, 4), ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
-        assertRefused(() -> registry.sizeDownload(new ArtifactId("9".repeat(48)), 1), ArtifactErrorCode.ARTIFACT_NOT_FOUND);
+        assertRefused(() -> registry.sizeDownload(id, 4, ArtifactFixtures.UNLIMITED_DISK), ArtifactErrorCode.ARTIFACT_NOT_WRITABLE);
+        assertRefused(() -> registry.sizeDownload(new ArtifactId("9".repeat(48)), 1, ArtifactFixtures.UNLIMITED_DISK), ArtifactErrorCode.ARTIFACT_NOT_FOUND);
         assertThat(registry.budget().chargedBytes()).as("the refusals changed nothing: 12 and 4").isEqualTo(16);
     }
 
@@ -183,7 +187,7 @@ class JdbcArtifactRegistryTest {
     void chunksAreAcknowledgedInOrder() {
         byte[] first = {1, 2};
         byte[] second = {3, 4, 5};
-        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.upload(5), fixtures.at()));
+        ArtifactId id = fixtures.reservedId(reserve(fixtures.upload(5)));
 
         ArtifactRecord afterFirst = registry.append(id, 0, fixtures.chunk(first));
         assertThat(afterFirst.receivedBytes()).isEqualTo(2);
@@ -226,7 +230,7 @@ class JdbcArtifactRegistryTest {
     @Test
     @DisplayName("RC-A-164: the operation made from an upload is bound to it; the same operation is answered again, another one is refused, a partial upload cannot be submitted")
     void theSubmissionIsBoundToTheArtifact() {
-        ArtifactId partial = fixtures.reservedId(registry.reserve(fixtures.upload(4), fixtures.at()));
+        ArtifactId partial = fixtures.reservedId(reserve(fixtures.upload(4)));
         ArtifactId ready = fixtures.readyArtifact(registry, fixtures.upload(4), fixtures.bytes(4, 2));
 
         assertRefused(() -> registry.submit(partial, OPERATION_A), ArtifactErrorCode.ARTIFACT_NOT_READY);
@@ -240,7 +244,7 @@ class JdbcArtifactRegistryTest {
     @Test
     @DisplayName("RC-A-168: an expired partial upload accepts no more bytes once it is marked for deletion, and its release gives the budget back")
     void anExpiredPartialUploadIsReleased() {
-        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.upload(8), fixtures.at()));
+        ArtifactId id = fixtures.reservedId(reserve(fixtures.upload(8)));
         registry.append(id, 0, fixtures.chunk(fixtures.bytes(4, 3)));
 
         assertThat(registry.expired(ArtifactFixtures.T0.plus(Duration.ofMinutes(10)))).extracting(ArtifactRecord::id).containsExactly(id);
@@ -271,7 +275,7 @@ class JdbcArtifactRegistryTest {
         ArtifactId finished = fixtures.readyArtifact(registry, fixtures.upload(4), fixtures.bytes(4, 1));
         ArtifactId pending = fixtures.readyArtifact(registry, fixtures.upload(4), fixtures.bytes(4, 2));
         registry.submit(pending, OPERATION_A);
-        ArtifactId partial = fixtures.reservedId(registry.reserve(fixtures.download(8), fixtures.at()));
+        ArtifactId partial = fixtures.reservedId(reserve(fixtures.download(8)));
         registry.append(partial, 0, fixtures.chunk(fixtures.bytes(4, 3)));
         ArtifactRecord pendingBefore = registry.find(pending).orElseThrow();
         ArtifactRecord partialBefore = registry.find(partial).orElseThrow();
@@ -291,7 +295,7 @@ class JdbcArtifactRegistryTest {
     @Test
     @DisplayName("RC-A-177: releasing an unknown or already released artifact is a repeatable no-op; the artifact is gone from find")
     void releasingAnUnknownArtifactRepeats() {
-        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.upload(4), fixtures.at()));
+        ArtifactId id = fixtures.reservedId(reserve(fixtures.upload(4)));
 
         registry.release(id, ReleaseReason.ABANDONED);
         registry.release(id, ReleaseReason.ABANDONED);
@@ -305,7 +309,7 @@ class JdbcArtifactRegistryTest {
     @DisplayName("RC-A-180: a chunk past the declared size is refused, nothing is written after READY, an empty file is accepted, and a second digest for a READY file is a hash mismatch")
     void binaryAndEmptyUploadsAreBoundToTheirDigest() {
         byte[] bytes = {0, (byte) 255, 13, 10};
-        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.upload(4), fixtures.at()));
+        ArtifactId id = fixtures.reservedId(reserve(fixtures.upload(4)));
 
         assertRefused(() -> registry.append(id, 0, fixtures.chunk(fixtures.bytes(5, 1))), ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
         registry.append(id, 0, fixtures.chunk(bytes));
@@ -322,7 +326,7 @@ class JdbcArtifactRegistryTest {
     @Test
     @DisplayName("RC-A-181: a file that has not received all its bytes cannot be marked ready; a reserved file that received nothing is released with its budget")
     void anIncompleteUploadCannotBeMarkedReady() {
-        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.upload(4), fixtures.at()));
+        ArtifactId id = fixtures.reservedId(reserve(fixtures.upload(4)));
 
         assertRefused(() -> registry.markReady(id, fixtures.digest(fixtures.bytes(4, 1))), ArtifactErrorCode.ARTIFACT_INCOMPLETE);
         assertThat(registry.find(id).orElseThrow().state()).isEqualTo(ArtifactState.STAGING);
@@ -336,7 +340,7 @@ class JdbcArtifactRegistryTest {
     void aStagedFileIsBoundToItsOwnerAndKey() {
         ArtifactUuid uuid = fixtures.nextUuid();
         String key = "opaque-upload-key-0001";
-        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.staged("verified-owner", key, uuid, 4), fixtures.at()));
+        ArtifactId id = fixtures.reservedId(reserve(fixtures.staged("verified-owner", key, uuid, 4)));
 
         ArtifactRecord record = registry.find(id).orElseThrow();
         assertThat(uuid.text()).matches(Pattern.compile("[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}"));
@@ -346,11 +350,11 @@ class JdbcArtifactRegistryTest {
         assertThat(registry.findStaged(uuid)).contains(record);
         assertThat(registry.findStagedByKey(new OwnerId("verified-owner"), key)).contains(record);
 
-        assertRefused(() -> registry.reserve(fixtures.staged("verified-owner", key, fixtures.nextUuid(), 4), fixtures.at()), RequestErrorCode.OPERATION_KEY_CONFLICT);
-        assertRefused(() -> registry.reserve(fixtures.staged("verified-owner", "opaque-upload-key-0002", uuid, 4), fixtures.at()),
+        assertRefused(() -> reserve(fixtures.staged("verified-owner", key, fixtures.nextUuid(), 4)), RequestErrorCode.OPERATION_KEY_CONFLICT);
+        assertRefused(() -> reserve(fixtures.staged("verified-owner", "opaque-upload-key-0002", uuid, 4)),
             RequestErrorCode.OPERATION_KEY_CONFLICT);
         ArtifactUuid otherUuid = fixtures.nextUuid();
-        ArtifactId other = fixtures.reservedId(registry.reserve(fixtures.staged("other-owner", key, otherUuid, 4), fixtures.at()));
+        ArtifactId other = fixtures.reservedId(reserve(fixtures.staged("other-owner", key, otherUuid, 4)));
         assertThat(other).isNotEqualTo(id);
         assertThat(registry.findStagedByKey(new OwnerId("other-owner"), key).orElseThrow().id()).isEqualTo(other);
         assertThat(registry.findStagedByKey(new OwnerId("verified-owner"), key).orElseThrow().id()).isEqualTo(id);
@@ -366,7 +370,7 @@ class JdbcArtifactRegistryTest {
     void lineBreakSuffixesAreRefused() {
         ArtifactUuid uuid = fixtures.nextUuid();
         for (String suffix : List.of("\r", "\n", "\r\n")) {
-            assertRefused(() -> registry.reserve(fixtures.staged("verified-owner", "valid-operation-key" + suffix, fixtures.nextUuid(), 4), fixtures.at()),
+            assertRefused(() -> reserve(fixtures.staged("verified-owner", "valid-operation-key" + suffix, fixtures.nextUuid(), 4)),
                 ArtifactErrorCode.INVALID_OPERATION_KEY);
             assertThatThrownBy(() -> new Digest("a".repeat(64) + suffix)).isInstanceOf(IllegalArgumentException.class);
             assertThatThrownBy(() -> ArtifactUuid.parse(uuid.text() + suffix)).isInstanceOf(IllegalArgumentException.class);
@@ -374,7 +378,7 @@ class JdbcArtifactRegistryTest {
         assertThat(registry.holding()).isEmpty();
         assertThat(registry.budget().chargedBytes()).isZero();
 
-        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.staged("verified-owner", "valid-operation-key", uuid, 4), fixtures.at()));
+        ArtifactId id = fixtures.reservedId(reserve(fixtures.staged("verified-owner", "valid-operation-key", uuid, 4)));
         assertThat(registry.findStaged(uuid).orElseThrow().id()).isEqualTo(id);
     }
 
@@ -428,15 +432,16 @@ class JdbcArtifactRegistryTest {
     }
 
     @Test
-    @DisplayName("RC-B-095: a staging or an already marked-for-deletion file cannot be consumed, and a state that is not CONSUMING cannot be completed")
+    @DisplayName("RC-B-095: a staging file cannot be moved, an already marked-for-deletion file cannot be consumed, a state that is not CONSUMING cannot be completed, and a staging file may begin removal")
     void consumeNeedsAReadyFile() {
-        ArtifactId staging = fixtures.reservedId(registry.reserve(fixtures.stagedFile(4), fixtures.at()));
+        ArtifactId staging = fixtures.reservedId(reserve(fixtures.stagedFile(4)));
         ArtifactId ready = fixtures.readyArtifact(registry, fixtures.stagedFile(4), fixtures.bytes(4, 1));
         registry.beginDelete(ready);
 
-        assertRefused(() -> registry.beginConsume(staging, ConsumeReason.REMOVED), ArtifactErrorCode.ARTIFACT_NOT_READY);
+        assertRefused(() -> registry.beginConsume(staging, ConsumeReason.MOVED), ArtifactErrorCode.ARTIFACT_NOT_READY);
         assertRefused(() -> registry.beginConsume(ready, ConsumeReason.REMOVED), ArtifactErrorCode.ARTIFACT_NOT_READY);
         assertRefused(() -> registry.completeConsume(staging, ConsumeReason.MOVED), ArtifactErrorCode.ARTIFACT_CHANGED);
+        assertThat(registry.beginConsume(staging, ConsumeReason.REMOVED).state()).isEqualTo(ArtifactState.CONSUMING);
     }
 
     @Test
@@ -485,7 +490,7 @@ class JdbcArtifactRegistryTest {
     @Test
     @DisplayName("staged actions: one use per (artifact, operation key), the state moves forward only, an unknown artifact is refused, and the release removes the actions")
     void stagedActionsMoveForwardOnly() {
-        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.stagedFile(0), fixtures.at()));
+        ArtifactId id = fixtures.reservedId(reserve(fixtures.stagedFile(0)));
         StagedAction action = new StagedAction(id, "action-key-0001", new RequestKey("request-key-000001"), fixtures.digest(new byte[] {1}), OPERATION_A,
             StagedActionKind.COPY, StagedActionState.RESERVED, new TargetId("alpha"), TargetRevision.of("b".repeat(64)), new PosixRemotePath("/tmp/out.bin"),
             OverwriteMode.FAIL_IF_EXISTS, Elevation.SUDO);
@@ -511,7 +516,7 @@ class JdbcArtifactRegistryTest {
     @Test
     @DisplayName("staged actions: the use of a staged file is found by the operation it was submitted for; another operation finds nothing, and the release of the artifact takes the answer away")
     void anActionIsFoundByItsOperation() {
-        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.stagedFile(0), fixtures.at()));
+        ArtifactId id = fixtures.reservedId(reserve(fixtures.stagedFile(0)));
         StagedAction action = new StagedAction(id, "action-key-0002", new RequestKey("request-key-000002"), fixtures.digest(new byte[] {2}), OPERATION_A,
             StagedActionKind.MOVE, StagedActionState.RESERVED, new TargetId("alpha"), TargetRevision.of("b".repeat(64)), new PosixRemotePath("/tmp/moved.bin"),
             OverwriteMode.REPLACE, Elevation.NONE);
@@ -538,7 +543,7 @@ class JdbcArtifactRegistryTest {
     @Test
     @DisplayName("S-D0012-08 (D-0012): beginDeleteIfPresent answers an unknown id with false and changes nothing; a STAGING or READY row becomes DELETING; a DELETING row is answered as it is; a row in use or consumed is refused")
     void beginDeleteIfPresentAnswersAnUnknownIdWithoutAnException() {
-        ArtifactId staging = fixtures.reservedId(registry.reserve(fixtures.upload(8), fixtures.at()));
+        ArtifactId staging = fixtures.reservedId(reserve(fixtures.upload(8)));
         ArtifactId ready = fixtures.readyArtifact(registry, fixtures.upload(4), fixtures.bytes(4, 1));
         ArtifactId deleting = fixtures.readyArtifact(registry, fixtures.upload(4), fixtures.bytes(4, 2));
         registry.beginDelete(deleting);

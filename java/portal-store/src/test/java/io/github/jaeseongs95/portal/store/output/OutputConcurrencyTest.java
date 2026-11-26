@@ -19,8 +19,10 @@ import javax.sql.DataSource;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.Import;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.output.OutputFormats;
 import io.github.jaeseongs95.portal.app.output.OutputId;
@@ -48,28 +50,30 @@ class OutputConcurrencyTest {
     private final CommandOutputRowRepository rows;
     private final CommandOutputFormatRowRepository formats;
     private final OutputFixture fixture;
+    private final TransactionTemplate tx;
 
     OutputConcurrencyTest(JdbcOutputManifestStore manifests, OutputPayloadStore payloads, CommandOutputRowRepository rows, CommandOutputFormatRowRepository formats,
-                          DataSource dataSource) {
+                          DataSource dataSource, PlatformTransactionManager transactionManager) {
         this.manifests = manifests;
         this.payloads = payloads;
         this.rows = rows;
         this.formats = formats;
         this.fixture = new OutputFixture(dataSource);
+        this.tx = new TransactionTemplate(transactionManager);
     }
 
     @Test
     @DisplayName("S2-OUT-05: two writers that make the same pending output ready at once: exactly one wins, the other is refused, and the row is ready at version 2")
     void exactlyOneWriterWins() throws Exception {
         try {
-            OutputReservation reservation = manifests.reserve(fixture.unbound(), 1000, T0);
+            OutputReservation reservation = tx.execute(status -> manifests.reserve(fixture.unbound(), 1000, T0, payloads.usable()));
             OutputId id = ((OutputReservation.Reserved) reservation).id();
             OutputFormats finished = payloads.finish(id, "{}".getBytes(StandardCharsets.UTF_8), "text".getBytes(StandardCharsets.UTF_8));
             CyclicBarrier start = new CyclicBarrier(2);
             Callable<Boolean> attempt = () -> {
                 start.await(10, TimeUnit.SECONDS);
                 try {
-                    manifests.markReady(id, finished, 6);
+                    tx.execute(status -> manifests.markReady(id, finished, 6));
                     return true;
                 } catch (RequestRefusedException refused) {
                     // The loser either lost the compare-and-set (OUTPUT_VERSION_CONFLICT, S3-UC-07) or read the row after the winner committed (the row is READY).

@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
+import io.github.jaeseongs95.portal.app.storage.DiskCheck;
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
 import io.github.jaeseongs95.portal.domain.id.ArtifactUuid;
 import io.github.jaeseongs95.portal.domain.id.Digest;
@@ -18,12 +19,10 @@ import io.github.jaeseongs95.portal.domain.id.OwnerId;
 public interface ArtifactRegistry {
 
     /**
-     * Reserves the budget and creates the row in {@code STAGING}. The three refusals are answered, not thrown, and are decided in this order: the size against the
-     * per-file limit, the budget, the disk (defect D-0012). The registry reads the usable disk space through {@link ArtifactPayloadStore#usable()}, which is a read, not
-     * a payload write. A disk that cannot be read is not a refusal: it throws {@code RequestRefusedException(ARTIFACT_STORAGE_IO_ERROR)}, and only when the file was not
-     * already refused for its size or the budget.
+     * Reserves the budget and creates the row in {@code STAGING}. The caller measures free disk space outside the transaction and passes {@code disk} (Principles 4.4);
+     * checks are judged in order: per-file size limit, budget quota, then disk margin.
      */
-    ArtifactReservation reserve(ArtifactSpec spec, Instant at);
+    ArtifactReservation reserve(ArtifactSpec spec, Instant at, DiskCheck disk);
 
     /** Acknowledges the next chunk ({@code chunkNo} is the count so far); a chunk number out of order throws {@code ARTIFACT_CHUNK_CONFLICT}. */
     ArtifactRecord append(ArtifactId id, int chunkNo, ChunkDigest chunk);
@@ -38,13 +37,9 @@ public interface ArtifactRegistry {
     ArtifactRecord completeDownload(ArtifactId id, Digest sha256);
 
     /**
-     * Sets the reservation of a download to {@code sizeBytes}, the size the target announced before the first byte is read (defect D-0012). A download is reserved with no
-     * bytes, because its size is not known before the target is looked at; this call checks the announced size against the file limit, the budget (what the other rows charge)
-     * and the disk, in that order, as {@link #reserve} does, and answers the refusal as the same {@link ArtifactReservation} variants. On {@link ArtifactReservation.Reserved} the
-     * row holds that size; on a refusal it is unchanged and the caller discards the artifact. Only a {@code DOWNLOAD} that is {@code STAGING} and has received no byte can be sized;
-     * any other artifact throws {@code ARTIFACT_NOT_WRITABLE}, a negative size {@code ARTIFACT_SEQUENCE_OR_SIZE} and an unknown id {@code ARTIFACT_NOT_FOUND}.
+     * Sets the reservation of a download to {@code sizeBytes}, using pre-measured {@code disk} space (measured outside the transaction, Principles 4.4).
      */
-    ArtifactReservation sizeDownload(ArtifactId id, long sizeBytes);
+    ArtifactReservation sizeDownload(ArtifactId id, long sizeBytes, DiskCheck disk);
 
     /** {@code Optional} here has the one meaning "no such artifact". */
     Optional<ArtifactRecord> find(ArtifactId id);
@@ -121,4 +116,14 @@ public interface ArtifactRegistry {
     Optional<StagedAction> actionOf(OperationId operation);
 
     void updateAction(ArtifactId id, String operationKey, StagedActionState state);
+
+    /**
+     * Acquires the database row lock on a {@code READY} staged artifact inside the caller's transaction so concurrent actions serialize at the database without JVM locks.
+     */
+    default void lockForAction(ArtifactId id) {
+    }
+
+    /** Reconciles the {@code storage_budget} quota row for artifacts against live rows (called during startup recovery). */
+    default void reconcileBudget() {
+    }
 }

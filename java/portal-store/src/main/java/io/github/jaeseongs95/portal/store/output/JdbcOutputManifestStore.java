@@ -4,14 +4,10 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.data.jdbc.core.JdbcAggregateOperations;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.output.OutputBinding;
 import io.github.jaeseongs95.portal.app.output.OutputBudget;
@@ -20,94 +16,92 @@ import io.github.jaeseongs95.portal.app.output.OutputId;
 import io.github.jaeseongs95.portal.app.output.OutputLookup;
 import io.github.jaeseongs95.portal.app.output.OutputManifest;
 import io.github.jaeseongs95.portal.app.output.OutputManifestStore;
-import io.github.jaeseongs95.portal.app.output.OutputPayloadStore;
 import io.github.jaeseongs95.portal.app.output.OutputReservation;
 import io.github.jaeseongs95.portal.app.output.OutputState;
+import io.github.jaeseongs95.portal.app.output.RetainedBytes;
 import io.github.jaeseongs95.portal.app.output.StreamInfo;
 import io.github.jaeseongs95.portal.app.storage.DiskSpace;
 import io.github.jaeseongs95.portal.domain.error.ExecutionErrorCode;
 import io.github.jaeseongs95.portal.domain.error.OperationErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.OperationIdGenerator;
+import io.github.jaeseongs95.portal.store.storage.StorageBudgetRow;
+import io.github.jaeseongs95.portal.store.storage.StorageBudgetRowRepository;
 
 /**
- * {@link OutputManifestStore} over {@code command_output}, {@code command_output_format} and {@code command_output_page} (design 8.2 V3, 2.x {@code command-output.mjs}
- * table {@code outputs}). The payload bytes are not here: the two methods that need a fact about the files ({@link #reserve} wants the free disk space,
- * {@link #markUnavailable} the bytes the files hold) ask the {@link OutputPayloadStore} <em>before</em> their transaction starts, and the transaction itself does no
- * file I/O (Principles 4.4); every other method is one short {@code @Transactional} method.
- *
- * <p>A change of a row is a compare-and-set on {@code version}: {@link CommandOutputRowRepository#bumpVersion} moves the version in the same transaction, and a
- * writer that lost the race is refused with {@link OperationErrorCode#OUTPUT_VERSION_CONFLICT} (stage 3 design D3-13: another writer changed the record first). A write
- * to an output that is missing or in the wrong state, which includes the loser that reads the row after the winner committed, is refused with
- * {@link ExecutionErrorCode#OUTPUT_CAPTURE_FAILED} (the capture of that output failed). The budget check of {@link #reserve} reads the sum of the charges and writes the new row in one
- * transaction, after the row lock of the output budget gate ({@code budget_gate}, defect D-0058) was taken, so two reservations that run at the same moment are judged one after
- * the other and the count and the budget are never passed by two reservations that read the same figures.
+ * {@link OutputManifestStore} over {@code command_output}, {@code command_output_format}, {@code command_output_page}, and {@code storage_budget} (SSH_PORTAL-D-0058).
+ * Transaction boundaries belong to the calling service (Principles 4.4); this repository opens no transactions and performs no file I/O.
+ * Every quota-changing mutation locks {@code storage_budget} first (Lock Order #1) before mutating {@code command_output}.
  */
 @Repository
 public class JdbcOutputManifestStore implements OutputManifestStore {
 
-    private static final Logger LOG = LoggerFactory.getLogger(JdbcOutputManifestStore.class);
-
-    /** What the files of an output hold, or that this could not be measured safely. */
-    private sealed interface Retained permits Measured, Unmeasured {
-    }
-
-    private record Measured(long bytes) implements Retained {
-    }
-
-    private record Unmeasured() implements Retained {
-    }
+    private static final String SCOPE = StorageBudgetRowRepository.OUTPUT_SCOPE;
 
     private final CommandOutputRowRepository outputs;
     private final CommandOutputFormatRowRepository formats;
     private final CommandOutputPageRowRepository pages;
+    private final StorageBudgetRowRepository budgets;
     private final JdbcAggregateOperations aggregates;
     private final OutputMapper mapper;
     private final OperationIdGenerator ids;
-    private final OutputPayloadStore payloads;
-    private final TransactionTemplate transaction;
     private final OutputLimits limits;
     private final Clock clock;
 
     public JdbcOutputManifestStore(CommandOutputRowRepository outputs, CommandOutputFormatRowRepository formats, CommandOutputPageRowRepository pages,
-                                   JdbcAggregateOperations aggregates, OutputMapper mapper, OperationIdGenerator ids, OutputPayloadStore payloads,
-                                   PlatformTransactionManager transactionManager, OutputLimits limits, Clock clock) {
+                                   StorageBudgetRowRepository budgets, JdbcAggregateOperations aggregates, OutputMapper mapper, OperationIdGenerator ids,
+                                   OutputLimits limits, Clock clock) {
         this.outputs = outputs;
         this.formats = formats;
         this.pages = pages;
+        this.budgets = budgets;
         this.aggregates = aggregates;
         this.mapper = mapper;
         this.ids = ids;
-        this.payloads = payloads;
-        this.transaction = new TransactionTemplate(transactionManager);
         this.limits = limits;
         this.clock = clock;
     }
 
     @Override
-    @Transactional(readOnly = true)
     public OutputLookup find(OutputId id, Instant now) {
         return outputs.findById(id.value()).map(row -> lookup(row, now)).orElseGet(OutputLookup.Missing::new);
     }
 
-    /**
-     * Checks, in this order: the size of one output ({@code TooLarge}), the number of outputs ({@code CountExceeded}), the budget ({@code BudgetExceeded}) and the free
-     * disk space ({@code DiskSpaceInsufficient}: the per-output limit plus the margin, as in 2.x). A refusal creates no row. Rows that have expired but are not removed
-     * yet still count; removing them is the reaper's job ({@link OutputStartupCheck#reap}), which a caller runs first when it is allowed to.
-     */
     @Override
-    public OutputReservation reserve(OutputBinding binding, long expectedBytes, Instant at) {
+    public OutputReservation reserve(OutputBinding binding, long expectedBytes, Instant at, DiskSpace disk) {
         Objects.requireNonNull(binding, "binding");
         Objects.requireNonNull(at, "at");
+        Objects.requireNonNull(disk, "disk");
         if (expectedBytes < 0) {
             throw new IllegalArgumentException("expectedBytes must not be negative: " + expectedBytes);
         }
-        DiskSpace disk = payloads.usable();
-        return Objects.requireNonNull(transaction.execute(status -> reserveRow(binding, expectedBytes, at, disk)));
+        if (expectedBytes > limits.maxOutputBytes()) {
+            return new OutputReservation.TooLarge(limits.maxOutputBytes());
+        }
+        if (expectedBytes > limits.budgetBytes()) {
+            StorageBudgetRow row = budgetRow();
+            if (row.itemCount() >= limits.maxCount()) {
+                return new OutputReservation.CountExceeded(limits.maxCount());
+            }
+            return new OutputReservation.BudgetExceeded(expectedBytes, row.chargedBytes(), limits.budgetBytes());
+        }
+        if (budgets.reserveBytesAndCount(SCOPE, expectedBytes, limits.budgetBytes() - expectedBytes, limits.maxCount()) != 1) {
+            StorageBudgetRow row = budgetRow();
+            if (row.itemCount() >= limits.maxCount()) {
+                return new OutputReservation.CountExceeded(limits.maxCount());
+            }
+            return new OutputReservation.BudgetExceeded(expectedBytes, row.chargedBytes(), limits.budgetBytes());
+        }
+        if (disk.usableBytes() < limits.diskRequiredBytes()) {
+            budgets.adjust(SCOPE, -expectedBytes, -1L);
+            return new OutputReservation.DiskSpaceInsufficient(limits.diskRequiredBytes(), disk.usableBytes());
+        }
+        OutputId id = new OutputId(ids.next().value());
+        aggregates.insert(mapper.newRow(id, binding, at.plus(limits.ttl()), expectedBytes));
+        return new OutputReservation.Reserved(id);
     }
 
     @Override
-    @Transactional
     public OutputManifest recordStream(OutputId id, StreamInfo stream) {
         if (stream instanceof StreamInfo.NoStream) {
             throw new IllegalArgumentException("Record an open or a complete stream; no stream is the state before the first record");
@@ -121,70 +115,85 @@ public class JdbcOutputManifestStore implements OutputManifestStore {
         return mapper.toManifest(next, List.of(), List.of());
     }
 
-    /**
-     * The charge becomes {@code sizeBytes}, the real size of the {@code .out} file (the spool is gone after {@code finish}). The expiry is set again from now: a ready output
-     * is readable for the retention time from the moment it is ready, not from its reservation, which an execution that ran for a while had mostly used up (2.x
-     * {@code command-output.mjs:275}, D-0162). The time comes from the {@link Clock} and the length from the {@link OutputLimits}, as the reservation takes them.
-     */
     @Override
-    @Transactional
     public OutputManifest markReady(OutputId id, OutputFormats formatSpans, long sizeBytes) {
         if (sizeBytes < 0) {
             throw new IllegalArgumentException("sizeBytes must not be negative: " + sizeBytes);
         }
+        lockBudget();
         CommandOutputRow row = requirePending(id);
         List<CommandOutputFormatRow> formatRows = mapper.formatRows(id, formatSpans);
         List<CommandOutputPageRow> pageRows = mapper.pageRows(id, formatSpans);
         CommandOutputRow next = claimVersion(row).withReady(sizeBytes, clock.instant().plus(limits.ttl()));
+        long delta = sizeBytes - row.chargeBytes();
+        if (delta != 0L) {
+            budgets.adjust(SCOPE, delta, 0L);
+        }
         aggregates.update(next);
         aggregates.insertAll(formatRows);
         aggregates.insertAll(pageRows);
         return mapper.toManifest(next, formatRows, pageRows);
     }
 
-    /**
-     * Gives the output up and sets its expiry. The charge becomes the bytes the files hold now (an empty reservation is released, partial or oversize evidence is
-     * charged in full); when the files cannot be measured safely (a link, another owner, an open mode) the charge stays at the larger of the old charge and the
-     * per-output limit, because unmeasurable evidence never proves an empty reservation (2.x {@code retainedCharge}). Calling it again for an output that is already
-     * {@code UNAVAILABLE} measures the files again and applies the given expiry; the start-up check uses this to correct an old charge. A {@code READY} output is
-     * refused.
-     */
     @Override
-    public void markUnavailable(OutputId id, Instant expiresAt) {
+    public void markUnavailable(OutputId id, Instant expiresAt, RetainedBytes retained) {
         Objects.requireNonNull(expiresAt, "expiresAt");
-        Retained retained = measure(id);
-        transaction.executeWithoutResult(status -> settleUnavailable(id, expiresAt, retained));
+        Objects.requireNonNull(retained, "retained");
+        lockBudget();
+        CommandOutputRow row = requireRow(id);
+        if (row.state() == OutputState.READY) {
+            throw new RequestRefusedException(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED);
+        }
+        long charge = switch (retained) {
+            case RetainedBytes.Measured measured -> measured.bytes();
+            case RetainedBytes.Unmeasured unmeasured -> Math.max(row.chargeBytes(), limits.maxOutputBytes());
+        };
+        if (row.state() == OutputState.UNAVAILABLE && row.expiresAt().equals(expiresAt) && row.chargeBytes() == charge) {
+            return;
+        }
+        CommandOutputRow next = claimVersion(row).withUnavailable(expiresAt, charge);
+        long delta = charge - row.chargeBytes();
+        if (delta != 0L) {
+            budgets.adjust(SCOPE, delta, 0L);
+        }
+        aggregates.update(next);
     }
 
     @Override
-    @Transactional(readOnly = true)
     public OutputBudget budget() {
-        return new OutputBudget(limits.budgetBytes(), outputs.totalCharge(), limits.maxCount(), Math.toIntExact(outputs.count()));
+        StorageBudgetRow row = budgetRow();
+        return new OutputBudget(limits.budgetBytes(), row.chargedBytes(), limits.maxCount(), Math.toIntExact(row.itemCount()));
     }
 
-    /** The ready and the given-up outputs whose expiry is not after {@code now}. An output that is still being written ({@code PENDING}) is never listed: the cleaner must not delete what is being appended to (D-0162). */
     @Override
-    @Transactional(readOnly = true)
     public List<OutputManifest> expired(Instant now) {
         return outputs.findByStateNotAndExpiresAtLessThanEqual(OutputState.PENDING, now).stream().map(this::manifest).toList();
     }
 
     @Override
-    @Transactional
     public void delete(OutputId id) {
+        lockBudget();
+        Optional<CommandOutputRow> found = outputs.findById(id.value());
+        if (found.isEmpty()) {
+            return;
+        }
         pages.removeByOutputId(id.value());
         formats.removeByOutputId(id.value());
-        outputs.removeById(id.value());
+        if (outputs.removeById(id.value()) == 1) {
+            budgets.adjust(SCOPE, -found.orElseThrow().chargeBytes(), -1L);
+        }
     }
 
-    /**
-     * The outputs in one stored state: the start-up check needs the {@code PENDING} outputs (they were interrupted by the restart) and the {@code UNAVAILABLE} ones
-     * (their charge is measured again).
-     */
     @Override
-    @Transactional(readOnly = true)
     public List<OutputManifest> inState(OutputState state) {
         return outputs.findByState(state).stream().map(this::manifest).toList();
+    }
+
+    @Override
+    public void reconcileBudget() {
+        if (budgets.reconcileOutput() != 1) {
+            throw new IllegalStateException("The storage_budget row for OUTPUT is missing: the migration V8 was not applied");
+        }
     }
 
     private OutputLookup lookup(CommandOutputRow row, Instant now) {
@@ -202,54 +211,6 @@ public class JdbcOutputManifestStore implements OutputManifestStore {
         return mapper.toManifest(row, formats.findByOutputId(row.id()), pages.findByOutputIdOrderByFormatAscPageNoAsc(row.id()));
     }
 
-    private OutputReservation reserveRow(OutputBinding binding, long expectedBytes, Instant at, DiskSpace disk) {
-        // The gate first: the count and the sum below are read after every reservation that came earlier has committed its row (defect D-0058).
-        if (outputs.takeBudgetGate() != 1) {
-            throw new IllegalStateException("The budget gate of the outputs is missing: the migration V8 was not applied");
-        }
-        if (expectedBytes > limits.maxOutputBytes()) {
-            return new OutputReservation.TooLarge(limits.maxOutputBytes());
-        }
-        if (outputs.count() >= limits.maxCount()) {
-            return new OutputReservation.CountExceeded(limits.maxCount());
-        }
-        long charged = outputs.totalCharge();
-        if (charged + expectedBytes > limits.budgetBytes()) {
-            return new OutputReservation.BudgetExceeded(expectedBytes, charged, limits.budgetBytes());
-        }
-        if (disk.usableBytes() < limits.diskRequiredBytes()) {
-            return new OutputReservation.DiskSpaceInsufficient(limits.diskRequiredBytes(), disk.usableBytes());
-        }
-        // The id has the format of every identifier of the contract, which the operation id generator makes (24 random bytes as 48 hex characters).
-        OutputId id = new OutputId(ids.next().value());
-        aggregates.insert(mapper.newRow(id, binding, at.plus(limits.ttl()), expectedBytes));
-        return new OutputReservation.Reserved(id);
-    }
-
-    private Retained measure(OutputId id) {
-        try {
-            return new Measured(payloads.retainedBytes(id));
-        } catch (RequestRefusedException e) {
-            LOG.warn("The bytes of output {} cannot be measured safely; its charge stays conservative", id.value(), e);
-            return new Unmeasured();
-        }
-    }
-
-    private void settleUnavailable(OutputId id, Instant expiresAt, Retained retained) {
-        CommandOutputRow row = requireRow(id);
-        if (row.state() == OutputState.READY) {
-            throw new RequestRefusedException(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED);
-        }
-        long charge = switch (retained) {
-            case Measured measured -> measured.bytes();
-            case Unmeasured unmeasured -> Math.max(row.chargeBytes(), limits.maxOutputBytes());
-        };
-        if (row.state() == OutputState.UNAVAILABLE && row.expiresAt().equals(expiresAt) && row.chargeBytes() == charge) {
-            return;
-        }
-        aggregates.update(claimVersion(row).withUnavailable(expiresAt, charge));
-    }
-
     private CommandOutputRow requireRow(OutputId id) {
         return outputs.findById(id.value()).orElseThrow(() -> new RequestRefusedException(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED));
     }
@@ -262,12 +223,22 @@ public class JdbcOutputManifestStore implements OutputManifestStore {
         return row;
     }
 
-    /** The compare-and-set: moves the version by one, or refuses with {@code OUTPUT_VERSION_CONFLICT} because another writer changed the row first. */
     private CommandOutputRow claimVersion(CommandOutputRow row) {
         long next = row.version() + 1;
         if (outputs.bumpVersion(row.id(), row.version(), next) != 1) {
             throw new RequestRefusedException(OperationErrorCode.OUTPUT_VERSION_CONFLICT);
         }
         return row.withVersion(next);
+    }
+
+    private void lockBudget() {
+        if (budgets.adjust(SCOPE, 0L, 0L) != 1) {
+            throw new IllegalStateException("The storage_budget row for OUTPUT is missing: the migration V8 was not applied");
+        }
+    }
+
+    private StorageBudgetRow budgetRow() {
+        return budgets.findById(SCOPE)
+            .orElseThrow(() -> new IllegalStateException("The storage_budget row for OUTPUT is missing: the migration V8 was not applied"));
     }
 }

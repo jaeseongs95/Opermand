@@ -2,10 +2,15 @@ package io.github.jaeseongs95.portal.app.operation;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.event.ChangeWaiters;
 import io.github.jaeseongs95.portal.app.event.WaitResult;
@@ -31,9 +36,21 @@ public class OperationsService {
     private final OperationWrites writes;
     private final OutcomeAudit outcomes;
     private final Clock clock;
+    private final TransactionOperations readTx;
+
+    @Autowired
+    public OperationsService(OperationJournal journal, CurrentTargets targets, ChangeWaiters waiters, RunningExecutions running, OperationWrites writes,
+                             OutcomeAudit outcomes, Clock clock, PlatformTransactionManager transactionManager) {
+        this(journal, targets, waiters, running, writes, outcomes, clock, readOnly(transactionManager));
+    }
 
     public OperationsService(OperationJournal journal, CurrentTargets targets, ChangeWaiters waiters, RunningExecutions running, OperationWrites writes,
                              OutcomeAudit outcomes, Clock clock) {
+        this(journal, targets, waiters, running, writes, outcomes, clock, TransactionOperations.withoutTransaction());
+    }
+
+    private OperationsService(OperationJournal journal, CurrentTargets targets, ChangeWaiters waiters, RunningExecutions running, OperationWrites writes,
+                              OutcomeAudit outcomes, Clock clock, TransactionOperations readTx) {
         this.journal = journal;
         this.targets = targets;
         this.waiters = waiters;
@@ -41,6 +58,13 @@ public class OperationsService {
         this.writes = writes;
         this.outcomes = outcomes;
         this.clock = clock;
+        this.readTx = readTx;
+    }
+
+    private static TransactionOperations readOnly(PlatformTransactionManager transactionManager) {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        return tx;
     }
 
     /**
@@ -90,6 +114,7 @@ public class OperationsService {
     }
 
     private Operation require(OperationId id) {
-        return journal.find(id).orElseThrow(() -> new RequestRefusedException(RequestErrorCode.OPERATION_NOT_FOUND));
+        return Objects.requireNonNull(readTx.execute(status -> journal.find(id)
+            .orElseThrow(() -> new RequestRefusedException(RequestErrorCode.OPERATION_NOT_FOUND))), "operation");
     }
 }

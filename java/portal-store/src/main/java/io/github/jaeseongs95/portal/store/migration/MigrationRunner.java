@@ -1,6 +1,5 @@
 package io.github.jaeseongs95.portal.store.migration;
 
-import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -15,17 +14,19 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import javax.sql.DataSource;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.core.io.ByteArrayResource;
+import org.springframework.core.io.support.EncodedResource;
 import org.springframework.dao.DataAccessException;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.jdbc.datasource.init.ScriptException;
+import org.springframework.jdbc.datasource.init.ScriptUtils;
 import org.springframework.jdbc.support.SQLErrorCodeSQLExceptionTranslator;
 import org.springframework.jdbc.support.SQLExceptionTranslator;
 
@@ -99,6 +100,14 @@ final class MigrationRunner {
         }
     }
 
+    private static final Pattern CREATE_TABLE = Pattern.compile("^\\s*CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?([A-Za-z0-9_.\"]+)", Pattern.CASE_INSENSITIVE);
+    private static final Pattern CREATE_INDEX = Pattern.compile("^\\s*CREATE\\s+(?:UNIQUE\\s+)?INDEX\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?([A-Za-z0-9_.\"]+)", Pattern.CASE_INSENSITIVE);
+
+    private enum ObjectKind { TABLE, INDEX }
+
+    private record CreatedObject(ObjectKind kind, String name) {
+    }
+
     private record HistoryRow(long version, int attempt, String script, String digest, Outcome outcome) {
     }
 
@@ -128,7 +137,7 @@ final class MigrationRunner {
             SqlBuilder.Database database = SqlBuilder.ofProductName(productName);
             // Text is UTF-8 from end to end, and a script may hold Korean text: a database in another encoding is refused here, before a script fails half way with an encoding error.
             verifyEncoding(connection, database);
-            ensureHistory(connection, phase);
+            ensureHistory(connection, database, phase);
             // The history is read once: it decides which scripts are pending and also the attempt of each, so that a peer that committed a number after this read is met as a duplicate key.
             List<HistoryRow> history = readHistory(connection, phase);
             List<MigrationScript> pending = pending(scripts, history, phase);
@@ -137,7 +146,8 @@ final class MigrationRunner {
             SQLExceptionTranslator translator = new SQLErrorCodeSQLExceptionTranslator(productName);
             int applied = 0;
             for (MigrationScript script : pending) {
-                if (apply(connection, translator, phase, script, nextAttempt(history, script), longText)) {
+                boolean hadPriorFailure = history.stream().anyMatch(row -> row.version() == script.version() && row.outcome() == Outcome.FAILED);
+                if (apply(connection, database, translator, phase, script, nextAttempt(history, script), hadPriorFailure, longText)) {
                     applied++;
                 }
             }
@@ -192,15 +202,16 @@ final class MigrationRunner {
     // ------------------------------------------------------------------------------------------------------------ history
 
     /** Makes the schema and the history table when they are not there. */
-    private void ensureHistory(Connection connection, Phase phase) throws SQLException {
-        if (!schemaExists(connection)) {
-            create(connection, "CREATE SCHEMA " + Migrations.SCHEMA, () -> schemaExists(connection));
+    private void ensureHistory(Connection connection, SqlBuilder.Database database, Phase phase) throws SQLException {
+        if (!schemaExists(connection, database)) {
+            create(connection, "CREATE SCHEMA " + Migrations.SCHEMA, () -> schemaExists(connection, database));
         }
-        if (!tableExists(connection, phase)) {
+        if (!tableExists(connection, database, phase)) {
+            String timestampType = SqlBuilder.generateHistoryTimestampType(database);
             // No CHECK on outcome (common format edition 4): only the runner writes the table, and readHistory checks the value against the enum.
             create(connection, "CREATE TABLE " + phase.table() + " (version BIGINT NOT NULL, attempt INTEGER NOT NULL, script VARCHAR(255) NOT NULL, digest CHAR(64) NOT NULL, "
-                    + "applied_at TIMESTAMP NOT NULL, outcome VARCHAR(10) NOT NULL, PRIMARY KEY (version, attempt))",
-                    () -> tableExists(connection, phase));
+                    + "applied_at " + timestampType + " NOT NULL, outcome VARCHAR(10) NOT NULL, PRIMARY KEY (version, attempt))",
+                    () -> tableExists(connection, database, phase));
         }
     }
 
@@ -223,18 +234,22 @@ final class MigrationRunner {
         boolean test() throws SQLException;
     }
 
-    /**
-     * Whether the schema is there, asked of the standard catalog ({@code information_schema}) and not of the driver's {@code getSchemas()}: a driver of a database whose schema is its
-     * database (MariaDB, MySQL) lists no schema there. The names are compared in lower case, which is how the scripts write them and how a catalog that folds identifiers spells them
-     * once the case is not the question.
-     */
-    private static boolean schemaExists(Connection connection) throws SQLException {
-        return queryLong(connection, "SELECT COUNT(*) FROM information_schema.schemata WHERE LOWER(schema_name) = ?", Migrations.SCHEMA.toLowerCase(Locale.ROOT)) > 0;
+    private static boolean schemaExists(Connection connection, SqlBuilder.Database database) throws SQLException {
+        return queryLong(connection, SqlBuilder.generateSchemaExistsQuery(database), Migrations.SCHEMA.toLowerCase(Locale.ROOT)) > 0;
     }
 
-    private static boolean tableExists(Connection connection, Phase phase) throws SQLException {
-        return queryLong(connection, "SELECT COUNT(*) FROM information_schema.tables WHERE LOWER(table_schema) = ? AND LOWER(table_name) = ?",
+    private static boolean tableExists(Connection connection, SqlBuilder.Database database, Phase phase) throws SQLException {
+        return queryLong(connection, SqlBuilder.generateTableExistsQuery(database),
                 Migrations.SCHEMA.toLowerCase(Locale.ROOT), phase.tableName().toLowerCase(Locale.ROOT)) > 0;
+    }
+
+    private static boolean currentSchemaTableExists(Connection connection, SqlBuilder.Database database, String tableName) throws SQLException {
+        String bare = tableName.replace("\"", "");
+        int dot = bare.lastIndexOf('.');
+        if (dot >= 0) {
+            bare = bare.substring(dot + 1);
+        }
+        return queryLong(connection, SqlBuilder.generateCurrentSchemaTableExistsQuery(database), bare.toLowerCase(Locale.ROOT)) > 0;
     }
 
     private static List<HistoryRow> readHistory(Connection connection, Phase phase) throws SQLException {
@@ -330,18 +345,36 @@ final class MigrationRunner {
 
     // ------------------------------------------------------------------------------------------------------------ one script
 
-    /**
-     * Applies one script in its own transaction; false when another runner took the number first and applied it. The attempt is claimed first, as FAILED, and turned to SUCCEEDED by the
-     * last statement of the transaction (the row of this attempt only). A database whose DDL is not transactional (MariaDB, MySQL, H2: each DDL statement commits what came before it, the
-     * claim included) so never shows a half-applied script as SUCCEEDED: what it has committed of it says FAILED until the whole script has run.
-     */
-    private boolean apply(Connection connection, SQLExceptionTranslator translator, Phase phase, MigrationScript script, int attempt, String longText) throws SQLException {
+    private boolean apply(Connection connection, SqlBuilder.Database database, SQLExceptionTranslator translator, Phase phase, MigrationScript script, int attempt,
+                          boolean hadPriorFailure, String longText) throws SQLException {
+        boolean transactionalDdl = SqlBuilder.supportsTransactionalDdl(database);
+        List<CreatedObject> createdObjects = new ArrayList<>();
         try {
             record(connection, translator, phase, script, attempt, Outcome.FAILED);
-            ResourceDatabasePopulator populator = new ResourceDatabasePopulator(false, false, StandardCharsets.UTF_8.name(),
-                    new ByteArrayResource(script.text(longText).getBytes(StandardCharsets.UTF_8), script.file()));
-            populator.populate(connection);
-            update(connection, "UPDATE " + phase.table() + " SET outcome = ? WHERE version = ? AND attempt = ?", Outcome.SUCCEEDED.name(), script.version(), attempt);
+            List<String> statements = new ArrayList<>();
+            ScriptUtils.splitSqlScript((EncodedResource) null, script.text(longText), ScriptUtils.DEFAULT_STATEMENT_SEPARATOR,
+                ScriptUtils.DEFAULT_COMMENT_PREFIXES, ScriptUtils.DEFAULT_BLOCK_COMMENT_START_DELIMITER, ScriptUtils.DEFAULT_BLOCK_COMMENT_END_DELIMITER, statements);
+            for (String statement : statements) {
+                String trimmed = statement.trim();
+                if (trimmed.isEmpty()) {
+                    continue;
+                }
+                CreatedObject declared = parseCreatedObject(trimmed);
+                if (!transactionalDdl && hadPriorFailure && declared != null && declared.kind() == ObjectKind.TABLE
+                        && currentSchemaTableExists(connection, database, declared.name())) {
+                    LOG.warn("Resuming migration {} attempt {}: table {} already exists from a prior failed attempt; skipping statement.",
+                        script.file(), attempt, declared.name());
+                    continue;
+                }
+                try (Statement sql = connection.createStatement()) {
+                    sql.execute(trimmed);
+                }
+                if (!transactionalDdl && declared != null) {
+                    createdObjects.add(declared);
+                }
+            }
+            update(connection, "UPDATE " + phase.table() + " SET outcome = ?, applied_at = applied_at WHERE version = ? AND attempt = ?",
+                Outcome.SUCCEEDED.name(), script.version(), attempt);
             connection.commit();
             return true;
         } catch (DuplicateKeyException taken) {
@@ -349,19 +382,51 @@ final class MigrationRunner {
             LOG.debug("Another runner has taken the migration {} ({}), attempt {}.", script.file(), phase, attempt, taken);
             return settleAfterPeer(connection, phase, script);
         } catch (ScriptException | SQLException failure) {
-            // A statement of the script, or the driver on the claim, the last statement (the UPDATE) or the commit, failed: the transaction is rolled back and the attempt is recorded as
-            // FAILED in a transaction of its own, the same for each of them. If that recording fails too (the connection is gone), its error is kept on the failure that is thrown.
-            failAndRecord(connection, translator, phase, script, attempt, failure);
+            failAndRecord(connection, translator, phase, script, attempt, createdObjects, failure);
             throw new MigrationException(Reason.MIGRATION_FAILED, "The migration " + script.file() + " did not apply (" + phase.location() + ").", failure);
         }
     }
 
-    private void failAndRecord(Connection connection, SQLExceptionTranslator translator, Phase phase, MigrationScript script, int attempt, Exception cause) {
+    private static CreatedObject parseCreatedObject(String statement) {
+        Matcher table = CREATE_TABLE.matcher(statement);
+        if (table.find()) {
+            return new CreatedObject(ObjectKind.TABLE, table.group(1));
+        }
+        Matcher index = CREATE_INDEX.matcher(statement);
+        if (index.find()) {
+            return new CreatedObject(ObjectKind.INDEX, index.group(1));
+        }
+        return null;
+    }
+
+    private void failAndRecord(Connection connection, SQLExceptionTranslator translator, Phase phase, MigrationScript script, int attempt,
+                               List<CreatedObject> createdObjects, Exception cause) {
         try {
             connection.rollback();
+            compensateNonTransactionalDdl(connection, script, createdObjects, cause);
             recordFailure(connection, translator, phase, script, attempt, cause);
         } catch (SQLException recording) {
             cause.addSuppressed(recording);
+        }
+    }
+
+    /** Drops objects committed by non-transactional DDL earlier in the same failed attempt, in reverse creation order (defect D-0141). */
+    private static void compensateNonTransactionalDdl(Connection connection, MigrationScript script, List<CreatedObject> createdObjects, Exception cause) {
+        for (int index = createdObjects.size() - 1; index >= 0; index--) {
+            CreatedObject created = createdObjects.get(index);
+            String dropSql = created.kind() == ObjectKind.INDEX ? "DROP INDEX " + created.name() : "DROP TABLE " + created.name();
+            try (Statement statement = connection.createStatement()) {
+                statement.execute(dropSql);
+                connection.commit();
+            } catch (SQLException cleanupFailure) {
+                LOG.warn("Compensating DDL '{}' failed after migration {} error.", dropSql, script.file(), cleanupFailure);
+                cause.addSuppressed(cleanupFailure);
+                try {
+                    connection.rollback();
+                } catch (SQLException rollbackFailure) {
+                    cause.addSuppressed(rollbackFailure);
+                }
+            }
         }
     }
 

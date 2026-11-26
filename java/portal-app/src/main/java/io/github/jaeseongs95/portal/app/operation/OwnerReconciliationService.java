@@ -6,7 +6,11 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.audit.AuditAction;
 import io.github.jaeseongs95.portal.app.audit.AuditEvent;
@@ -38,33 +42,54 @@ public class OwnerReconciliationService implements OwnerReconciliation {
     private final OperationWrites writes;
     private final OutcomeAudit outcomes;
     private final Clock clock;
+    private final TransactionOperations readTx;
+
+    @Autowired
+    public OwnerReconciliationService(OperationJournal journal, OperationQueueView queueView, ConcurrencyLimits limits, OperationWrites writes, OutcomeAudit outcomes,
+                                      Clock clock, PlatformTransactionManager transactionManager) {
+        this(journal, queueView, limits, writes, outcomes, clock, readOnly(transactionManager));
+    }
 
     public OwnerReconciliationService(OperationJournal journal, OperationQueueView queueView, ConcurrencyLimits limits, OperationWrites writes, OutcomeAudit outcomes,
                                       Clock clock) {
+        this(journal, queueView, limits, writes, outcomes, clock, TransactionOperations.withoutTransaction());
+    }
+
+    private OwnerReconciliationService(OperationJournal journal, OperationQueueView queueView, ConcurrencyLimits limits, OperationWrites writes, OutcomeAudit outcomes,
+                                       Clock clock, TransactionOperations readTx) {
         this.journal = journal;
         this.queueView = queueView;
         this.limits = limits;
         this.writes = writes;
         this.outcomes = outcomes;
         this.clock = clock;
+        this.readTx = readTx;
+    }
+
+    private static TransactionOperations readOnly(PlatformTransactionManager transactionManager) {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        return tx;
     }
 
     @Override
     public ReconciliationBacklog backlog() {
-        return new ReconciliationBacklog(queueView.counts().of(OperationState.UNKNOWN), limits.unknownBudgetLimit().value());
+        return Objects.requireNonNull(readTx.execute(status -> new ReconciliationBacklog(queueView.counts().of(OperationState.UNKNOWN), limits.unknownBudgetLimit().value())),
+            "backlog");
     }
 
     @Override
     public List<Operation> awaiting(TargetFilter target, int limit) {
-        return queueView.inStates(Set.of(OperationState.UNKNOWN), Objects.requireNonNull(target, "target"), limit);
+        Objects.requireNonNull(target, "target");
+        return Objects.requireNonNull(readTx.execute(status -> queueView.inStates(Set.of(OperationState.UNKNOWN), target, limit)), "awaiting");
     }
 
     @Override
     public ReconcileOutcome reconcile(OperationId id, ReconciliationEvidence evidence) {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(evidence, "evidence");
-        Optional<Operation> found = journal.find(id);
-        if (found.isEmpty()) {
+        Optional<Operation> found = readTx.execute(status -> journal.find(id));
+        if (found == null || found.isEmpty()) {
             return new ReconcileOutcome.NotFound(id);
         }
         Operation current = found.orElseThrow();
@@ -78,7 +103,8 @@ public class OwnerReconciliationService implements OwnerReconciliation {
             if (e.code() != OperationErrorCode.OPERATION_VERSION_CONFLICT) {
                 throw e;
             }
-            return new ReconcileOutcome.Conflicted(journal.find(id).orElseThrow());
+            Operation latest = Objects.requireNonNull(readTx.execute(status -> journal.find(id).orElseThrow()), "latest");
+            return new ReconcileOutcome.Conflicted(latest);
         }
         outcomes.recordEvent(stored, new AuditEvent(AuditAction.RECONCILED, id, "evidence " + nameOf(evidence) + " state " + stored.state().wire()));
         return new ReconcileOutcome.Reconciled(stored, backlog());

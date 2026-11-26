@@ -3,9 +3,11 @@ package io.github.jaeseongs95.portal.app.execution;
 import java.io.ByteArrayOutputStream;
 import java.time.Clock;
 import java.time.Duration;
+import java.util.Objects;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.transaction.support.TransactionOperations;
 
 import tools.jackson.databind.json.JsonMapper;
 
@@ -13,6 +15,7 @@ import io.github.jaeseongs95.portal.app.output.OutputFormats;
 import io.github.jaeseongs95.portal.app.output.OutputId;
 import io.github.jaeseongs95.portal.app.output.OutputManifestStore;
 import io.github.jaeseongs95.portal.app.output.OutputPayloadStore;
+import io.github.jaeseongs95.portal.app.output.RetainedBytes;
 import io.github.jaeseongs95.portal.app.output.StreamFrame;
 import io.github.jaeseongs95.portal.app.output.StreamInfo;
 import io.github.jaeseongs95.portal.app.remote.OutputSink;
@@ -21,6 +24,7 @@ import io.github.jaeseongs95.portal.domain.error.ExecutionErrorCode;
 import io.github.jaeseongs95.portal.domain.error.ExecutionFailure;
 import io.github.jaeseongs95.portal.domain.error.ExecutionStage;
 import io.github.jaeseongs95.portal.domain.error.RemoteOutcome;
+import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.Digester;
 import io.github.jaeseongs95.portal.domain.operation.CaptureState;
 import io.github.jaeseongs95.portal.domain.operation.ExecutionOutcome;
@@ -51,12 +55,18 @@ public final class OpenOutput implements OutputSink {
     private final OutputRendering rendering;
     private final Digester digester;
     private final Clock clock;
+    private final TransactionOperations writeTx;
     private final ByteArrayOutputStream stdout = new ByteArrayOutputStream();
     private final ByteArrayOutputStream stderr = new ByteArrayOutputStream();
     private final ByteArrayOutputStream arrival = new ByteArrayOutputStream();
 
     OpenOutput(OutputId id, long reservedBytes, OutputPayloadStore payloads, OutputManifestStore manifests, OutputRedactor redactor, JsonMapper json, Digester digester,
                Clock clock) {
+        this(id, reservedBytes, payloads, manifests, redactor, json, digester, clock, TransactionOperations.withoutTransaction());
+    }
+
+    OpenOutput(OutputId id, long reservedBytes, OutputPayloadStore payloads, OutputManifestStore manifests, OutputRedactor redactor, JsonMapper json, Digester digester,
+               Clock clock, TransactionOperations writeTx) {
         this.id = id;
         this.reservedBytes = reservedBytes;
         this.payloads = payloads;
@@ -64,6 +74,7 @@ public final class OpenOutput implements OutputSink {
         this.rendering = new OutputRendering(redactor, json);
         this.digester = digester;
         this.clock = clock;
+        this.writeTx = Objects.requireNonNull(writeTx, "writeTx");
     }
 
     @Override
@@ -93,9 +104,10 @@ public final class OpenOutput implements OutputSink {
             if (size > reservedBytes) {
                 throw new IllegalStateException("The rendering of the output is larger than its reservation");
             }
-            manifests.recordStream(id, completeStream(outcome));
+            StreamInfo.CompleteStream stream = completeStream(outcome);
+            writeTx.executeWithoutResult(status -> manifests.recordStream(id, stream));
             OutputFormats formats = payloads.finish(id, rendered.json(), rendered.text());
-            manifests.markReady(id, formats, size);
+            writeTx.executeWithoutResult(status -> manifests.markReady(id, formats, size));
             return outcome;
         } catch (RuntimeException e) {
             LOG.error("The output of an executed command could not be stored; it is unavailable", e);
@@ -104,12 +116,22 @@ public final class OpenOutput implements OutputSink {
         }
     }
 
-    /** Gives the output up (the command was not run, or its output cannot be kept): it becomes unavailable and keeps its charge until it expires. */
+    /** Measures retained bytes outside any transaction, then marks the output unavailable in a short write transaction. */
     public synchronized void abandon() {
         try {
-            manifests.markUnavailable(id, clock.instant().plus(RETENTION));
+            RetainedBytes retained = measureRetained();
+            writeTx.executeWithoutResult(status -> manifests.markUnavailable(id, clock.instant().plus(RETENTION), retained));
         } catch (RuntimeException e) {
             LOG.error("An unused output could not be marked unavailable", e);
+        }
+    }
+
+    private RetainedBytes measureRetained() {
+        try {
+            return new RetainedBytes.Measured(payloads.retainedBytes(id));
+        } catch (RequestRefusedException e) {
+            LOG.warn("The bytes of output {} cannot be measured safely; its charge stays conservative", id.value(), e);
+            return new RetainedBytes.Unmeasured();
         }
     }
 

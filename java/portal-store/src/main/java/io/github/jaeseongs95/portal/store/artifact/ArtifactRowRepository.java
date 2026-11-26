@@ -40,12 +40,15 @@ interface ArtifactRowRepository extends CrudRepository<ArtifactRow, String> {
     int markDeleting(@Param("id") String id);
 
     /**
-     * Takes the row lock of the artifact budget until the transaction ends (defect D-0058): the reservation that holds it is the only one that reads the sum of the charges and
-     * writes its row, and the next one reads the sum after that row is committed. It changes the one row of the budget, and none when the script of the gate was not applied.
+     * Acquires the row lock on a {@code READY} artifact by advancing its version (used to serialize concurrent staged-file actions without JVM locks).
      */
     @Modifying
-    @Query("UPDATE budget_gate SET version = version + 1 WHERE scope = 'ARTIFACT'")
-    int takeBudgetGate();
+    @Query("UPDATE artifact SET version = version + 1 WHERE id = :id AND state = 'READY'")
+    int lockReadyForAction(@Param("id") String id);
+
+    @Modifying
+    @Query("DELETE FROM artifact WHERE id = :id")
+    int removeById(@Param("id") String id);
 
     /**
      * What the rows charge now: a consumed row and an empty file charge one byte each (2.x {@code artifacts.mjs:18}). A row in {@code DELETING} or {@code CONSUMING} charges nothing: its bytes

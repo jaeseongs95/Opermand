@@ -2,12 +2,17 @@ package io.github.jaeseongs95.portal.app.recovery;
 
 import java.time.Clock;
 import java.util.List;
+import java.util.Objects;
 import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.event.OperationEvents;
 import io.github.jaeseongs95.portal.app.execution.ExecutionDispatcher;
@@ -55,9 +60,25 @@ public class StartupRecovery implements StartupStep {
     private final ExecutionDispatcher dispatcher;
     private final ConcurrencyLimits limits;
     private final Clock clock;
+    private final TransactionOperations readTx;
+    private final TransactionOperations writeTx;
+
+    @Autowired
+    public StartupRecovery(RestartRecovery recovery, OperationQueueView queueView, OperationEvents events, TerminalNotifier terminal, SettlementRecovery settlements,
+                           ExpiryTimers timers, ExecutionDispatcher dispatcher, ConcurrencyLimits limits, Clock clock, PlatformTransactionManager transactionManager) {
+        this(recovery, queueView, events, terminal, settlements, timers, dispatcher, limits, clock,
+            readOnly(transactionManager), new TransactionTemplate(transactionManager));
+    }
 
     public StartupRecovery(RestartRecovery recovery, OperationQueueView queueView, OperationEvents events, TerminalNotifier terminal, SettlementRecovery settlements,
                            ExpiryTimers timers, ExecutionDispatcher dispatcher, ConcurrencyLimits limits, Clock clock) {
+        this(recovery, queueView, events, terminal, settlements, timers, dispatcher, limits, clock,
+            TransactionOperations.withoutTransaction(), TransactionOperations.withoutTransaction());
+    }
+
+    private StartupRecovery(RestartRecovery recovery, OperationQueueView queueView, OperationEvents events, TerminalNotifier terminal, SettlementRecovery settlements,
+                            ExpiryTimers timers, ExecutionDispatcher dispatcher, ConcurrencyLimits limits, Clock clock,
+                            TransactionOperations readTx, TransactionOperations writeTx) {
         this.recovery = recovery;
         this.queueView = queueView;
         this.events = events;
@@ -67,6 +88,14 @@ public class StartupRecovery implements StartupStep {
         this.dispatcher = dispatcher;
         this.limits = limits;
         this.clock = clock;
+        this.readTx = readTx;
+        this.writeTx = writeTx;
+    }
+
+    private static TransactionOperations readOnly(PlatformTransactionManager transactionManager) {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        return tx;
     }
 
     @Override
@@ -74,11 +103,11 @@ public class StartupRecovery implements StartupStep {
         recover();
     }
 
-    /** Recovers the journal, announces what changed, settles what is left half done, and opens the dispatcher. Returns the operations the recovery changed, in their new state. */
+    /** Recovers the journal in one write transaction, announces what changed, settles leftovers, and opens the dispatcher. */
     public List<Operation> recover() {
         List<Operation> changed;
         try {
-            changed = recovery.recoverAfterRestart(clock.instant());
+            changed = Objects.requireNonNull(writeTx.execute(status -> recovery.recoverAfterRestart(clock.instant())), "changed");
         } catch (PortalException e) {
             throw e;
         } catch (RuntimeException e) {
@@ -91,8 +120,10 @@ public class StartupRecovery implements StartupStep {
             }
         }
         settlements.settleAfterRestart();
-        for (Operation queued : queueView.inStates(Set.of(OperationState.QUEUED), new TargetFilter.AnyTarget(), limits.queueCapacity().value())) {
-            timers.arm(queued);
+        List<Operation> queued = Objects.requireNonNull(
+            readTx.execute(status -> queueView.inStates(Set.of(OperationState.QUEUED), new TargetFilter.AnyTarget(), limits.queueCapacity().value())), "queued");
+        for (Operation item : queued) {
+            timers.arm(item);
         }
         LOG.info("The journal was recovered after the start: {} operation(s) were in flight and are closed; none is sent again", changed.size());
         dispatcher.open();

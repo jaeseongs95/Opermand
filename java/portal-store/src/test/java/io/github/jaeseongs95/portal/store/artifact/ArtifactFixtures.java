@@ -16,6 +16,8 @@ import io.github.jaeseongs95.portal.app.artifact.ArtifactRetention;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactSpec;
 import io.github.jaeseongs95.portal.app.artifact.BindingKind;
 import io.github.jaeseongs95.portal.app.artifact.ChunkDigest;
+import io.github.jaeseongs95.portal.app.storage.DiskCheck;
+import io.github.jaeseongs95.portal.app.storage.DiskSpace;
 import io.github.jaeseongs95.portal.domain.file.FileName;
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
 import io.github.jaeseongs95.portal.domain.id.ArtifactUuid;
@@ -36,6 +38,7 @@ final class ArtifactFixtures {
 
     static final Instant T0 = Instant.parse("2026-11-12T00:00:00Z");
     static final Duration ONE_HOUR = Duration.ofHours(1);
+    static final DiskCheck UNLIMITED_DISK = new DiskCheck.Available(new DiskSpace(Long.MAX_VALUE));
 
     private final Clock clock = Clock.fixed(T0, ZoneOffset.UTC);
     private final Sha256Digester digester = new Sha256Digester();
@@ -89,7 +92,7 @@ final class ArtifactFixtures {
 
     /** Reserves {@code spec}, acknowledges {@code bytes} as one chunk (none for an empty file) and makes the artifact {@code READY}. */
     ArtifactId readyArtifact(ArtifactRegistry registry, ArtifactSpec spec, byte[] bytes) {
-        ArtifactId id = reservedId(registry.reserve(spec, at()));
+        ArtifactId id = reservedId(registry.reserve(spec, at(), UNLIMITED_DISK));
         if (bytes.length > 0) {
             registry.append(id, 0, chunk(bytes));
         }

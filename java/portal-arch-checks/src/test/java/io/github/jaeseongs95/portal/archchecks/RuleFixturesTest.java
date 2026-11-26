@@ -37,7 +37,7 @@ class RuleFixturesTest {
         Map.of("domain", Set.of(), "app", Set.of("domain"), "store", Set.of("app", "domain"), "ssh", Set.of("app", "domain")));
     private static final ModuleTable PRODUCT_TABLE = ModuleTable.product();
     private static final Set<String> NEVER_FLAGGED = Set.of("Clean", "GoodApp", "PureDomain", "Counter", "GoodAdvice", "GoodController", "Answer", "Order", "GammaUser",
-        "MinaAdapter", "PlainExec", "PosixPlatform", "GoodPort", "CancelToken", "ConvertsAuditFailure");
+        "MinaAdapter", "PlainExec", "PosixPlatform", "GoodPort", "CancelToken", "ConvertsAuditFailure", "CleanStore");
     /** The sub-packages {@code alpha} and {@code beta} of this package depend on each other on purpose; {@code gamma} only uses {@code alpha}. */
     private static final String CYCLE_FIXTURES = FIXTURES + ".cycle";
 
@@ -240,6 +240,12 @@ class RuleFixturesTest {
     }
 
     @Test
+    @DisplayName("D-0114: A-TX-BOUNDARY names portal-store classes using @Transactional, TransactionTemplate, or PlatformTransactionManager and spares CleanStore")
+    void a_txBoundary() {
+        assertFlagsAndSparesCleanClasses(PortalRules.transactionBoundary(S3_TABLE), "TransactionalStore", "TemplateStore", "TxManagerStore");
+    }
+
+    @Test
     void cleanClassesAreNeverFlaggedByAnyRule() {
         List<ArchRule> all = new java.util.ArrayList<>();
         all.addAll(PortalRules.out());
@@ -274,6 +280,7 @@ class RuleFixturesTest {
         all.addAll(PortalRules.noPlatformBranch(S3_TABLE));
         all.addAll(PortalRules.remoteResult(S3_TABLE));
         all.addAll(PortalRules.auditBoundary(S3_TABLE));
+        all.addAll(PortalRules.transactionBoundary(S3_TABLE));
         assertThat(flagged(all)).doesNotContainAnyElementsOf(NEVER_FLAGGED);
     }
 

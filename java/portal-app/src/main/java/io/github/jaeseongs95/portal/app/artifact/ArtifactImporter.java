@@ -7,10 +7,15 @@ import java.util.Objects;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.remote.PayloadSource;
 import io.github.jaeseongs95.portal.app.remote.SinkResult;
+import io.github.jaeseongs95.portal.app.storage.DiskCheck;
 import io.github.jaeseongs95.portal.app.storage.PayloadRead;
 import io.github.jaeseongs95.portal.domain.error.ArtifactErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
@@ -39,12 +44,24 @@ public class ArtifactImporter {
     private final ArtifactPayloadStore payloads;
     private final Digester digester;
     private final Clock clock;
+    private final TransactionOperations writeTx;
+
+    @Autowired
+    public ArtifactImporter(ArtifactRegistry registry, ArtifactPayloadStore payloads, Digester digester, Clock clock,
+                            PlatformTransactionManager transactionManager) {
+        this(registry, payloads, digester, clock, new TransactionTemplate(transactionManager));
+    }
 
     public ArtifactImporter(ArtifactRegistry registry, ArtifactPayloadStore payloads, Digester digester, Clock clock) {
+        this(registry, payloads, digester, clock, TransactionOperations.withoutTransaction());
+    }
+
+    private ArtifactImporter(ArtifactRegistry registry, ArtifactPayloadStore payloads, Digester digester, Clock clock, TransactionOperations writeTx) {
         this.registry = registry;
         this.payloads = payloads;
         this.digester = digester;
         this.clock = clock;
+        this.writeTx = writeTx;
     }
 
     /** Imports {@code source} as an artifact of {@code spec}; the digest is whatever the bytes hash to. */
@@ -62,7 +79,8 @@ public class ArtifactImporter {
     private ImportResult run(ArtifactSpec spec, PayloadSource source, Digest expected) {
         Objects.requireNonNull(spec, "spec");
         Objects.requireNonNull(source, "source");
-        ArtifactReservation reservation = registry.reserve(spec, clock.instant());
+        DiskCheck disk = DiskCheck.measure(payloads::usable);
+        ArtifactReservation reservation = Objects.requireNonNull(writeTx.execute(status -> registry.reserve(spec, clock.instant(), disk)), "reservation");
         if (!(reservation instanceof ArtifactReservation.Reserved reserved)) {
             return new ImportResult.Refused(ArtifactRefusal.of(reservation));
         }
@@ -80,7 +98,7 @@ public class ArtifactImporter {
     }
 
     private ImportResult copy(ArtifactId id, ArtifactSpec spec, PayloadSource source, Digest expected) {
-        ArtifactSink sink = ArtifactSink.declared(id, payloads, registry, digester);
+        ArtifactSink sink = ArtifactSink.declared(id, payloads, registry, digester, writeTx);
         PayloadRead read;
         try {
             read = source.open();
@@ -110,7 +128,8 @@ public class ArtifactImporter {
         if (expected != null && !expected.equals(actual)) {
             return new ImportResult.Failed(ImportResult.Reason.DIGEST_MISMATCH);
         }
-        return new ImportResult.Imported(registry.markReady(id, actual));
+        ArtifactRecord ready = Objects.requireNonNull(writeTx.execute(status -> registry.markReady(id, actual)), "ready");
+        return new ImportResult.Imported(ready);
     }
 
     /** More bytes than declared are refused by the registry as {@code ARTIFACT_SEQUENCE_OR_SIZE}: that is a size failure, any other failure of the store is local. */
@@ -124,9 +143,9 @@ public class ArtifactImporter {
     /** Removes the bytes and the row, and so the charge. A failure is logged: the row is {@code DELETING} and the start-up check finishes the removal. */
     private void discard(ArtifactId id) {
         try {
-            registry.beginDelete(id);
+            writeTx.executeWithoutResult(status -> registry.beginDelete(id));
             payloads.delete(id);
-            registry.release(id, ReleaseReason.REFUSED);
+            writeTx.executeWithoutResult(status -> registry.release(id, ReleaseReason.REFUSED));
         } catch (RuntimeException e) {
             LOG.warn("The imported artifact {} could not be discarded; the start-up check removes it", id.value(), e);
         }

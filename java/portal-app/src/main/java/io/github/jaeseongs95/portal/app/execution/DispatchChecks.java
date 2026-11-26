@@ -2,8 +2,13 @@ package io.github.jaeseongs95.portal.app.execution;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.Objects;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.audit.AuditAction;
 import io.github.jaeseongs95.portal.app.audit.AuditEvent;
@@ -14,6 +19,7 @@ import io.github.jaeseongs95.portal.app.operation.AuditGate;
 import io.github.jaeseongs95.portal.app.operation.MaintenanceView;
 import io.github.jaeseongs95.portal.app.target.TargetSource;
 import io.github.jaeseongs95.portal.domain.approval.ApprovalPolicy;
+import io.github.jaeseongs95.portal.domain.approval.MaintenanceState;
 import io.github.jaeseongs95.portal.domain.approval.StartDecision;
 import io.github.jaeseongs95.portal.domain.error.DispatchFailure;
 import io.github.jaeseongs95.portal.domain.error.DispatchReason;
@@ -50,9 +56,23 @@ public class DispatchChecks {
     private final AuditGate audit;
     private final OperationEvents events;
     private final Clock clock;
+    private final TransactionOperations readTx;
+    private final TransactionOperations writeTx;
+
+    @Autowired
+    public DispatchChecks(OperationJournal journal, TargetSource targets, MaintenanceView maintenance, ApprovalPolicy approvalPolicy, ApprovalJudge judge,
+                          AuditGate audit, OperationEvents events, Clock clock, PlatformTransactionManager transactionManager) {
+        this(journal, targets, maintenance, approvalPolicy, judge, audit, events, clock, readOnly(transactionManager), new TransactionTemplate(transactionManager));
+    }
 
     public DispatchChecks(OperationJournal journal, TargetSource targets, MaintenanceView maintenance, ApprovalPolicy approvalPolicy, ApprovalJudge judge,
                           AuditGate audit, OperationEvents events, Clock clock) {
+        this(journal, targets, maintenance, approvalPolicy, judge, audit, events, clock,
+            TransactionOperations.withoutTransaction(), TransactionOperations.withoutTransaction());
+    }
+
+    private DispatchChecks(OperationJournal journal, TargetSource targets, MaintenanceView maintenance, ApprovalPolicy approvalPolicy, ApprovalJudge judge,
+                           AuditGate audit, OperationEvents events, Clock clock, TransactionOperations readTx, TransactionOperations writeTx) {
         this.journal = journal;
         this.targets = targets;
         this.maintenance = maintenance;
@@ -61,6 +81,14 @@ public class DispatchChecks {
         this.audit = audit;
         this.events = events;
         this.clock = clock;
+        this.readTx = readTx;
+        this.writeTx = writeTx;
+    }
+
+    private static TransactionOperations readOnly(PlatformTransactionManager transactionManager) {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        return tx;
     }
 
     /** Creates a stateful guard for one execution of {@code id}, so multi-step runners check and record the start once before the first remote step (defect D-0149). */
@@ -70,7 +98,12 @@ public class DispatchChecks {
 
     /** @throws DispatchRefusedException a guard refused: the operation was cancelled meanwhile, the target or the policy changed, maintenance began, or the start could not be stored */
     public void beforeDispatch(OperationId id) {
-        Operation operation = journal.find(id).orElseThrow(() -> refused(DispatchReason.REQUEST_STATE, DispatchStage.REQUEST_STATE));
+        record DispatchSnapshot(Operation operation, MaintenanceState maintenance) {
+        }
+        DispatchSnapshot snapshot = Objects.requireNonNull(readTx.execute(status -> new DispatchSnapshot(
+            journal.find(id).orElseThrow(() -> refused(DispatchReason.REQUEST_STATE, DispatchStage.REQUEST_STATE)),
+            maintenance.state())), "snapshot");
+        Operation operation = snapshot.operation();
         Instant now = clock.instant();
         if (operation.state() != OperationState.STARTING) {
             throw refused(DispatchReason.REQUEST_STATE, DispatchStage.REQUEST_STATE);
@@ -79,7 +112,7 @@ public class DispatchChecks {
         if (!(lookup instanceof TargetLookup.Found found) || !found.target().revision().equals(operation.targetRevision())) {
             throw refused(DispatchReason.TARGET_CHANGED, DispatchStage.TARGET_GUARD);
         }
-        if (approvalPolicy.checkDispatch(operation, maintenance.state(), now) instanceof StartDecision.Refused refusedStart) {
+        if (approvalPolicy.checkDispatch(operation, snapshot.maintenance(), now) instanceof StartDecision.Refused refusedStart) {
             throw new DispatchRefusedException(refusedStart.failure());
         }
         judge.checkBeforeDispatch(operation, found.target());
@@ -87,7 +120,7 @@ public class DispatchChecks {
             : AuditAction.APPROVED, id, "start"));
         Operation stored;
         try {
-            stored = journal.save(operation.markRunning(now), operation.version());
+            stored = Objects.requireNonNull(writeTx.execute(status -> journal.save(operation.markRunning(now), operation.version())), "stored");
         } catch (RequestRefusedException e) {
             if (e.code() == OperationErrorCode.OPERATION_VERSION_CONFLICT) {
                 throw refused(DispatchReason.REQUEST_STATE, DispatchStage.REQUEST_STATE);

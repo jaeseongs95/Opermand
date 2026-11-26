@@ -2,6 +2,7 @@ package io.github.jaeseongs95.portal.store.output;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,6 +14,7 @@ import io.github.jaeseongs95.portal.app.output.OutputManifest;
 import io.github.jaeseongs95.portal.app.output.OutputManifestStore;
 import io.github.jaeseongs95.portal.app.output.OutputPayloadStore;
 import io.github.jaeseongs95.portal.app.output.OutputState;
+import io.github.jaeseongs95.portal.app.output.RetainedBytes;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 
 /**
@@ -38,36 +40,46 @@ public class OutputStartupCheck {
 
     /** {@link #recover} and then {@link #reap}. */
     public void reconcile(Instant now) {
-        recover(now);
-        reap(now);
+        reconcile(now, Runnable::run);
     }
 
-    /**
-     * Payload files without a manifest row go to the quarantine folder (a crash can precede the reservation row; file existence never rebuilds an output). Outputs
-     * that were {@code PENDING} when the process stopped are given up with their expiry unchanged (a restart does not renew the retention), and the charge of every
-     * {@code UNAVAILABLE} output is measured again from the files it holds. Nothing is deleted.
-     */
+    /** {@link #recover} and then {@link #reap}, wrapping each short database mutation in {@code inTransaction}. */
+    public void reconcile(Instant now, Consumer<Runnable> inTransaction) {
+        recover(now, inTransaction);
+        reap(now, inTransaction);
+    }
+
     public void recover(Instant now) {
+        recover(now, Runnable::run);
+    }
+
+    public void recover(Instant now, Consumer<Runnable> inTransaction) {
         quarantineOrphans(now);
         List<OutputManifest> unavailable = manifests.inState(OutputState.UNAVAILABLE);
         for (OutputManifest interrupted : manifests.inState(OutputState.PENDING)) {
-            giveUp(interrupted);
+            giveUp(interrupted, inTransaction);
         }
         for (OutputManifest old : unavailable) {
-            giveUp(old);
+            giveUp(old, inTransaction);
         }
+        inTransaction.accept(manifests::reconcileBudget);
     }
 
     /** Deletes the bytes and then the row of every output whose expiry is not after {@code now}. A failed delete keeps the row, so the next run tries again. */
     public void reap(Instant now) {
+        reap(now, Runnable::run);
+    }
+
+    public void reap(Instant now, Consumer<Runnable> inTransaction) {
         for (OutputManifest expired : manifests.expired(now)) {
             try {
                 payloads.delete(expired.id());
-                manifests.delete(expired.id());
+                inTransaction.accept(() -> manifests.delete(expired.id()));
             } catch (RequestRefusedException e) {
                 LOG.error("The expired output {} could not be removed; it stays until the next run", expired.id().value(), e);
             }
         }
+        inTransaction.accept(manifests::reconcileBudget);
     }
 
     private void quarantineOrphans(Instant now) {
@@ -82,12 +94,22 @@ public class OutputStartupCheck {
         }
     }
 
-    /** {@code markUnavailable} with the expiry the row already has: it settles the state and measures the charge, and changes nothing else. */
-    private void giveUp(OutputManifest output) {
+    /** Measures retained bytes outside any transaction, then updates the manifest row inside {@code inTransaction}. */
+    private void giveUp(OutputManifest output, Consumer<Runnable> inTransaction) {
         try {
-            manifests.markUnavailable(output.id(), output.expiresAt());
+            RetainedBytes retained = measure(output.id());
+            inTransaction.accept(() -> manifests.markUnavailable(output.id(), output.expiresAt(), retained));
         } catch (RequestRefusedException e) {
             LOG.error("The output {} could not be settled at start-up", output.id().value(), e);
+        }
+    }
+
+    private RetainedBytes measure(OutputId id) {
+        try {
+            return new RetainedBytes.Measured(payloads.retainedBytes(id));
+        } catch (RequestRefusedException e) {
+            LOG.warn("The bytes of output {} cannot be measured safely; its charge stays conservative", id.value(), e);
+            return new RetainedBytes.Unmeasured();
         }
     }
 }

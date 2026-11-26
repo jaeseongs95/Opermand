@@ -16,9 +16,12 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.capacity.CapacityState;
 import io.github.jaeseongs95.portal.domain.capacity.Capacity;
@@ -26,8 +29,8 @@ import io.github.jaeseongs95.portal.domain.error.CapacityErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.TargetId;
 import io.github.jaeseongs95.portal.domain.target.CapacityOverride;
-import io.github.jaeseongs95.portal.store.Savepoints;
 import io.github.jaeseongs95.portal.store.StoreTest;
+import io.github.jaeseongs95.portal.store.TestSavepoints;
 
 /**
  * TC-D0124-03/04 & RC-B-405..409: single optimistic lock via Spring Data JDBC {@code @Version} on {@code runtime_capacity}.
@@ -40,12 +43,14 @@ class JdbcRuntimeCapacityStoreTest {
 
     private final JdbcRuntimeCapacityStore store;
     private final JdbcTemplate jdbc;
-    private final Savepoints savepoints;
+    private final TestSavepoints savepoints;
+    private final TransactionTemplate tx;
 
-    JdbcRuntimeCapacityStoreTest(JdbcRuntimeCapacityStore store, JdbcTemplate jdbc, Savepoints savepoints) {
+    JdbcRuntimeCapacityStoreTest(JdbcRuntimeCapacityStore store, JdbcTemplate jdbc, TestSavepoints savepoints, PlatformTransactionManager transactionManager) {
         this.store = store;
         this.jdbc = jdbc;
         this.savepoints = savepoints;
+        this.tx = new TransactionTemplate(transactionManager);
     }
 
     private void refused(String sql, Object... arguments) {
@@ -106,7 +111,7 @@ class JdbcRuntimeCapacityStoreTest {
         CapacityState stateB = state(1L, 5, 2, explicit("alpha", 3, null));
         CapacityState stateC = state(1L, 6, 3, explicit("beta", null, 2));
         try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
-            store.initialize(first);
+            tx.execute(status -> store.initialize(first));
             CyclicBarrier barrier = new CyclicBarrier(2);
             Future<Throwable> resultB = pool.submit(attempt(barrier, stateB));
             Future<Throwable> resultC = pool.submit(attempt(barrier, stateC));
@@ -116,7 +121,7 @@ class JdbcRuntimeCapacityStoreTest {
             assertThat(List.of(failureB == null, failureC == null)).containsExactlyInAnyOrder(true, false);
             assertThat(failureB == null ? failureC : failureB).isInstanceOfSatisfying(RequestRefusedException.class,
                 e -> assertThat(e.code()).isEqualTo(CapacityErrorCode.CAPACITY_REVISION_CONFLICT));
-            CapacityState stored = store.read().orElseThrow();
+            CapacityState stored = tx.execute(status -> store.read().orElseThrow());
             assertThat(stored.version()).isEqualTo(2L);
             CapacityState expectedWinner = failureB == null ? state(2L, 5, 2, explicit("alpha", 3, null)) : state(2L, 6, 3, explicit("beta", null, 2));
             assertThat(stored).isEqualTo(expectedWinner);
@@ -181,14 +186,18 @@ class JdbcRuntimeCapacityStoreTest {
     private Callable<Throwable> attempt(CyclicBarrier barrier, CapacityState next) {
         return () -> {
             barrier.await(WAIT_SECONDS, TimeUnit.SECONDS);
-            return catchThrowable(() -> store.compareAndSet(1L, next));
+            return catchThrowable(() -> tx.execute(status -> store.compareAndSet(1L, next)));
         };
     }
 
     private Callable<CapacityState> initialization(CyclicBarrier barrier, CapacityState initial) {
         return () -> {
             barrier.await(WAIT_SECONDS, TimeUnit.SECONDS);
-            return store.initialize(initial);
+            try {
+                return tx.execute(status -> store.initialize(initial));
+            } catch (DuplicateKeyException e) {
+                return tx.execute(status -> store.read().orElseThrow());
+            }
         };
     }
 

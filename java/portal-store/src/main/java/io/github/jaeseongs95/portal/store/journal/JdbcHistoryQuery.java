@@ -8,7 +8,6 @@ import java.util.Optional;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Transactional;
 
 import io.github.jaeseongs95.portal.app.journal.HistoryCursor;
 import io.github.jaeseongs95.portal.app.journal.HistoryFilter;
@@ -38,7 +37,6 @@ public class JdbcHistoryQuery implements HistoryQuery {
     }
 
     @Override
-    @Transactional(readOnly = true)
     public HistoryPage page(HistoryFilter filter, HistoryCursor after, int pageSize) {
         Collection<OperationState> states = filter.states().isEmpty() ? EnumSet.allOf(OperationState.class) : filter.states();
         int fetch = pageSize + 1;
@@ -55,7 +53,6 @@ public class JdbcHistoryQuery implements HistoryQuery {
     }
 
     @Override
-    @Transactional(readOnly = true)
     public Optional<Operation> publicMetadata(OperationId id) {
         return operations.findById(id.value()).map(storage::load);
     }

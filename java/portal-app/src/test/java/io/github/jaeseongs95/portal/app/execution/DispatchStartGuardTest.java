@@ -467,23 +467,23 @@ class DispatchStartGuardTest {
     }
 
     @Test
-    @DisplayName("S-D0051-01 D-0051 a refusal before dispatch that loses the version race every time is not dropped: it is logged as OPERATION_DISPATCH_PERSISTENCE_FAILED and the operation stays for the recovery; a race that is won on the third try settles it")
+    @DisplayName("S-D0051-01 D-0051 a refusal before dispatch makes a single write attempt (Principles 4.4 no whole-TX retry): a version conflict is logged as OPERATION_DISPATCH_PERSISTENCE_FAILED and leaves the operation for recovery")
     void aRefusalThatLosesTheRaceEveryTimeIsNotDroppedInSilence() {
         OperationId won = journal.enqueueOwnerApproved(spec(WRITE_PROFILE, new CommandInput(new CommandText("id"), new Utf8Text(""), new Utf8Text(""))));
-        journal.conflictOnFailedSaves(2);
+        journal.conflictOnFailedSaves(0);
 
         dispatcher(List.of()).open();
 
-        assertThat(journal.require(won).state()).as("the third try wins the race").isEqualTo(OperationState.FAILED);
+        assertThat(journal.require(won).state()).as("the single attempt settles cleanly when uncontended").isEqualTo(OperationState.FAILED);
         assertThat(dispatcherLogs.list.stream().filter(event -> event.getLevel().isGreaterOrEqual(Level.ERROR)).toList()).isEmpty();
         audits.clear();
 
         OperationId lost = journal.enqueueOwnerApproved(spec(WRITE_PROFILE, new CommandInput(new CommandText("id"), new Utf8Text(""), new Utf8Text(""))));
-        journal.conflictOnFailedSaves(3);
+        journal.conflictOnFailedSaves(1);
 
         dispatcher(List.of()).open();
 
-        assertThat(journal.require(lost).state()).as("nothing was stored, so the operation is as the journal has it").isEqualTo(OperationState.STARTING);
+        assertThat(journal.require(lost).state()).as("nothing was stored on conflict (no retry loop), so the operation stays for recovery").isEqualTo(OperationState.STARTING);
         List<ILoggingEvent> errors = dispatcherLogs.list.stream().filter(event -> event.getLevel().isGreaterOrEqual(Level.ERROR)).toList();
         assertThat(errors).as("the failure is told to the log, not swallowed").hasSize(1);
         assertThat(errors.get(0).getThrowableProxy()).isNotNull();

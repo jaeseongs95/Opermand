@@ -2,7 +2,11 @@ package io.github.jaeseongs95.portal.app.file;
 
 import java.util.Objects;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.artifact.ArtifactDestination;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactPayloadStore;
@@ -55,15 +59,34 @@ public class UploadService {
     private final TransferSupport support;
     private final TransferOutcomes outcomes;
     private final TransferLimits limits;
+    private final TransactionOperations readTx;
+
+    @Autowired
+    public UploadService(ArtifactRegistry registry, ArtifactPayloadStore payloads, RemoteFileTransfer transfer, TransferSupport support, TransferOutcomes outcomes,
+                         TransferLimits limits, PlatformTransactionManager transactionManager) {
+        this(registry, payloads, transfer, support, outcomes, limits, readOnly(transactionManager));
+    }
 
     public UploadService(ArtifactRegistry registry, ArtifactPayloadStore payloads, RemoteFileTransfer transfer, TransferSupport support, TransferOutcomes outcomes,
                          TransferLimits limits) {
+        this(registry, payloads, transfer, support, outcomes, limits, TransactionOperations.withoutTransaction());
+    }
+
+    private UploadService(ArtifactRegistry registry, ArtifactPayloadStore payloads, RemoteFileTransfer transfer, TransferSupport support, TransferOutcomes outcomes,
+                          TransferLimits limits, TransactionOperations readTx) {
         this.registry = registry;
         this.payloads = payloads;
         this.transfer = transfer;
         this.support = support;
         this.outcomes = outcomes;
         this.limits = limits;
+        this.readTx = readTx;
+    }
+
+    private static TransactionOperations readOnly(PlatformTransactionManager transactionManager) {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        return tx;
     }
 
     /**
@@ -76,7 +99,8 @@ public class UploadService {
         Objects.requireNonNull(control, "control");
         UploadInput input = job.input();
         TargetPlatform platform = support.platformOf(job.target());
-        requireApproved(registry.find(input.artifactId()).orElseThrow(this::fileGuardRefusal), input);
+        ArtifactRecord stored = Objects.requireNonNull(readTx.execute(status -> registry.find(input.artifactId()).orElseThrow(this::fileGuardRefusal)), "stored");
+        requireApproved(stored, input);
         FileAccess access = support.accessOf(platform, input.elevation());
         PermissionSupport permissionSupport = platform.permissionSupport();
         if (job.permission() instanceof FilePermission.Explicit && permissionSupport instanceof PermissionSupport.Unsupported) {

@@ -3,11 +3,16 @@ package io.github.jaeseongs95.portal.app.artifact;
 import java.time.Clock;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.storage.ReapGate;
 import io.github.jaeseongs95.portal.app.storage.ReapPermission;
@@ -34,13 +39,34 @@ public class ArtifactReaper {
     private final ReapGate gate;
     private final Clock clock;
     private final QuarantineNotice quarantine;
+    private final TransactionOperations readTx;
+    private final TransactionOperations writeTx;
+
+    @Autowired
+    public ArtifactReaper(ArtifactRegistry registry, ArtifactPayloadStore payloads, ReapGate gate, Clock clock, QuarantineNotice quarantine,
+                          PlatformTransactionManager transactionManager) {
+        this(registry, payloads, gate, clock, quarantine, readOnly(transactionManager), new TransactionTemplate(transactionManager));
+    }
 
     public ArtifactReaper(ArtifactRegistry registry, ArtifactPayloadStore payloads, ReapGate gate, Clock clock, QuarantineNotice quarantine) {
+        this(registry, payloads, gate, clock, quarantine, TransactionOperations.withoutTransaction(), TransactionOperations.withoutTransaction());
+    }
+
+    private ArtifactReaper(ArtifactRegistry registry, ArtifactPayloadStore payloads, ReapGate gate, Clock clock, QuarantineNotice quarantine,
+                           TransactionOperations readTx, TransactionOperations writeTx) {
         this.registry = registry;
         this.payloads = payloads;
         this.gate = gate;
         this.clock = clock;
         this.quarantine = quarantine;
+        this.readTx = readTx;
+        this.writeTx = writeTx;
+    }
+
+    private static TransactionOperations readOnly(PlatformTransactionManager transactionManager) {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        return tx;
     }
 
     /** One run. The scheduler calls {@link #reapOnSchedule()}; a caller that wants the report (a test, the lifecycle) calls this. */
@@ -50,17 +76,17 @@ public class ArtifactReaper {
         }
         int removed = 0;
         int failed = 0;
-        // The rows that a removal left in DELETING come first, whatever their expiry: they hold a charge for bytes nobody uses (defect D-0012).
-        List<ArtifactRecord> due = new ArrayList<>(registry.deleting());
-        // The uses that began and did not finish (a settlement that failed after the move, a crash) are files that are as good as gone and would stay for good: they are finished with their own reason.
-        due.addAll(registry.consuming());
-        due.addAll(registry.expired(clock.instant()));
+        List<ArtifactRecord> due = Objects.requireNonNull(readTx.execute(status -> {
+            List<ArtifactRecord> items = new ArrayList<>(registry.deleting());
+            items.addAll(registry.consuming());
+            items.addAll(registry.expired(clock.instant()));
+            return items;
+        }), "due");
         for (ArtifactRecord artifact : due) {
             try {
                 remove(artifact);
                 removed++;
             } catch (RuntimeException e) {
-                // One artifact that cannot be removed (a locked file, a conflicting writer) must not stop the others; it is listed again by the next run.
                 failed++;
                 LOG.warn("The artifact {} could not be removed and stays until the next run", artifact.id().value(), e);
             }
@@ -75,30 +101,20 @@ public class ArtifactReaper {
         reap();
     }
 
-    /**
-     * Removes one listed artifact. A row that is {@code CONSUMING} is finished: the bytes are deleted (they may be gone already) and the row becomes the tombstone for the reason it recorded; the move or the removal that began it is already
-     * past the point where the file was needed, and both steps repeat without harm if the use that began it is still finishing. A row that is {@code DELETING} did not expire: a removal began and did not finish, so it is released as {@link ReleaseReason#ABANDONED}
-     * (the reason the start-up check gives it); only a row that was listed because its expiry passed is released as {@link ReleaseReason#EXPIRED}.
-     *
-     * <p>The row may be gone between the list and the start of the removal: the discard that left it {@code DELETING} can still be running and finish first. That is the
-     * outcome the run wanted, so it is no failure and no retry (Principles 4.4: the one who lost the race is not run again). The registry tells it by the answer of
-     * {@link ArtifactRegistry#beginDeleteIfPresent}, not by an exception, so every refusal that is thrown, {@code ARTIFACT_NOT_FOUND} included, is counted as a failure with
-     * its cause.
-     */
     private void remove(ArtifactRecord due) {
         if (due.state() == ArtifactState.CONSUMING && due.consumption() instanceof ConsumeState.Consuming consuming) {
             payloads.delete(due.id());
-            registry.completeConsume(due.id(), consuming.reason());
+            writeTx.executeWithoutResult(status -> registry.completeConsume(due.id(), consuming.reason()));
             return;
         }
         ReleaseReason reason = due.state() == ArtifactState.DELETING ? ReleaseReason.ABANDONED : ReleaseReason.EXPIRED;
         if (due.state() != ArtifactState.CONSUMED) {
-            if (!registry.beginDeleteIfPresent(due.id())) {
+            if (!Boolean.TRUE.equals(writeTx.execute(status -> registry.beginDeleteIfPresent(due.id())))) {
                 LOG.debug("The artifact {} was removed by another use case before the reap took it", due.id().value());
                 return;
             }
             payloads.delete(due.id());
         }
-        registry.release(due.id(), reason);
+        writeTx.executeWithoutResult(status -> registry.release(due.id(), reason));
     }
 }

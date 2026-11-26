@@ -11,7 +11,11 @@ import java.util.Optional;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.artifact.ArtifactDestination;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactDirection;
@@ -38,6 +42,7 @@ import io.github.jaeseongs95.portal.app.artifact.StagedActionState;
 import io.github.jaeseongs95.portal.app.artifact.StagingTimes;
 import io.github.jaeseongs95.portal.app.journal.OperationJournal;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
+import io.github.jaeseongs95.portal.app.storage.DiskCheck;
 import io.github.jaeseongs95.portal.app.storage.PayloadRead;
 import io.github.jaeseongs95.portal.app.storage.RunningDigest;
 import io.github.jaeseongs95.portal.domain.error.ArtifactErrorCode;
@@ -97,11 +102,26 @@ public class StagedFileService {
     private final OperationIdGenerator operationIds;
     private final Digester digester;
     private final Clock clock;
-    /** The one lock of the step that checks the actions of a staged file and records a new one. */
-    private final Object reservations = new Object();
+    private final TransactionOperations readTx;
+    private final TransactionOperations writeTx;
+
+    @Autowired
+    public StagedFileService(ArtifactRegistry registry, ArtifactPayloadStore payloads, ArtifactImporter importer, MaintenanceStore maintenance, UploadAdmission admission,
+                             OperationJournal journal, StagingTimes times, ArtifactUuidGenerator uuids, OperationIdGenerator operationIds, Digester digester, Clock clock,
+                             PlatformTransactionManager transactionManager) {
+        this(registry, payloads, importer, maintenance, admission, journal, times, uuids, operationIds, digester, clock,
+            readOnly(transactionManager), new TransactionTemplate(transactionManager));
+    }
 
     public StagedFileService(ArtifactRegistry registry, ArtifactPayloadStore payloads, ArtifactImporter importer, MaintenanceStore maintenance, UploadAdmission admission,
                              OperationJournal journal, StagingTimes times, ArtifactUuidGenerator uuids, OperationIdGenerator operationIds, Digester digester, Clock clock) {
+        this(registry, payloads, importer, maintenance, admission, journal, times, uuids, operationIds, digester, clock,
+            TransactionOperations.withoutTransaction(), TransactionOperations.withoutTransaction());
+    }
+
+    private StagedFileService(ArtifactRegistry registry, ArtifactPayloadStore payloads, ArtifactImporter importer, MaintenanceStore maintenance, UploadAdmission admission,
+                              OperationJournal journal, StagingTimes times, ArtifactUuidGenerator uuids, OperationIdGenerator operationIds, Digester digester, Clock clock,
+                              TransactionOperations readTx, TransactionOperations writeTx) {
         this.registry = registry;
         this.payloads = payloads;
         this.importer = importer;
@@ -113,17 +133,31 @@ public class StagedFileService {
         this.operationIds = operationIds;
         this.digester = digester;
         this.clock = clock;
+        this.readTx = readTx;
+        this.writeTx = writeTx;
+    }
+
+    private static TransactionOperations readOnly(PlatformTransactionManager transactionManager) {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        return tx;
     }
 
     // ---- begin, append, complete, stat ----
 
     /** Starts a staged upload, or answers the one that the same owner and key started before (RC-B-091: the retry of a begin gets the same UUID). */
     public StagedBegin begin(OwnerId owner, String operationKey, FileName fileName, long sizeBytes) {
-        requireOpen();
         Objects.requireNonNull(owner, "owner");
         Objects.requireNonNull(fileName, "fileName");
         RequestKey key = requestKey(operationKey);
-        return registry.findStagedByKey(owner, key.value()).map(existing -> sameBegin(existing, fileName, sizeBytes)).orElseGet(() -> reserve(owner, key, fileName, sizeBytes));
+        Optional<ArtifactRecord> existing = readTx.execute(status -> {
+            requireOpen();
+            return registry.findStagedByKey(owner, key.value());
+        });
+        if (existing != null && existing.isPresent()) {
+            return sameBegin(existing.orElseThrow(), fileName, sizeBytes);
+        }
+        return reserve(owner, key, fileName, sizeBytes);
     }
 
     private StagedBegin sameBegin(ArtifactRecord existing, FileName fileName, long sizeBytes) {
@@ -137,7 +171,8 @@ public class StagedFileService {
         ArtifactUuid uuid = uuids.next();
         ArtifactSpec spec = new ArtifactSpec(ArtifactDirection.UPLOAD, fileName, sizeBytes, new ArtifactOrigin.Staged(uuid, owner, key.value()), new ArtifactDestination.Unassigned(),
             OverwriteMode.REPLACE, Elevation.NONE, UploadProtocol.MCP_JSON_V1, ArtifactRetention.RELEASABLE, times.upload());
-        ArtifactReservation reservation = registry.reserve(spec, clock.instant());
+        DiskCheck disk = DiskCheck.measure(payloads::usable);
+        ArtifactReservation reservation = Objects.requireNonNull(writeTx.execute(status -> registry.reserve(spec, clock.instant(), disk)), "reservation");
         if (reservation instanceof ArtifactReservation.Reserved) {
             return new StagedBegin.Begun(uuid);
         }
@@ -146,17 +181,19 @@ public class StagedFileService {
 
     /**
      * Takes the next chunk: its digest must be the one the client gave (a wrong one changes nothing, RC-B-137), its number the next one, and the file must still be
-     * staging and not expired. The bytes are written and forced to disk before the registry acknowledges them.
+     * staging and not expired. The bytes are written and forced to disk outside any transaction before the registry acknowledges them in a short write transaction.
      */
     public void append(OwnerId owner, ArtifactUuid uuid, int sequence, byte[] bytes, Digest claimed) {
-        requireOpen();
         Objects.requireNonNull(bytes, "bytes");
         Objects.requireNonNull(claimed, "claimed");
         Digest actual = digester.digest(bytes);
         if (!actual.equals(claimed)) {
             throw new RequestRefusedException(ArtifactErrorCode.CHUNK_HASH_MISMATCH);
         }
-        ArtifactRecord record = owned(owner, uuid);
+        ArtifactRecord record = Objects.requireNonNull(readTx.execute(status -> {
+            requireOpen();
+            return owned(owner, uuid);
+        }), "record");
         if (bytes.length < 1 || bytes.length > ChunkDigest.MAX_CHUNK_BYTES) {
             throw new RequestRefusedException(ArtifactErrorCode.INVALID_ARTIFACT_CHUNK);
         }
@@ -171,13 +208,15 @@ public class StagedFileService {
             throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
         }
         payloads.append(record.id(), record.receivedBytes(), bytes);
-        registry.append(record.id(), sequence, new ChunkDigest(bytes.length, actual));
+        writeTx.executeWithoutResult(status -> registry.append(record.id(), sequence, new ChunkDigest(bytes.length, actual)));
     }
 
-    /** Ends the upload: every byte must be there; the whole file is hashed from the stored bytes and the file is {@code READY}. Asking again answers the ready file. */
+    /** Ends the upload: every byte must be there; the whole file is hashed outside any transaction and marked {@code READY} in a short write transaction. */
     public ArtifactRecord complete(OwnerId owner, ArtifactUuid uuid) {
-        requireOpen();
-        ArtifactRecord record = owned(owner, uuid);
+        ArtifactRecord record = Objects.requireNonNull(readTx.execute(status -> {
+            requireOpen();
+            return owned(owner, uuid);
+        }), "record");
         if (record.state() == ArtifactState.READY) {
             return record;
         }
@@ -185,40 +224,48 @@ public class StagedFileService {
         if (record.receivedBytes() != record.spec().sizeBytes()) {
             throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_INCOMPLETE);
         }
-        return registry.markReady(record.id(), hashOfStoredBytes(record));
+        Digest wholeDigest = hashOfStoredBytes(record);
+        return Objects.requireNonNull(writeTx.execute(status -> registry.markReady(record.id(), wholeDigest)), "ready");
     }
 
     /** The staged file and the actions made on it. */
     public StagedFileView stat(OwnerId owner, ArtifactUuid uuid) {
-        ArtifactRecord record = owned(owner, uuid);
-        return new StagedFileView(record, registry.actions(record.id()));
+        return Objects.requireNonNull(readTx.execute(status -> {
+            ArtifactRecord record = owned(owner, uuid);
+            return new StagedFileView(record, registry.actions(record.id()));
+        }), "view");
     }
 
     // ---- remove ----
 
     /**
-     * Removes the staged bytes (no SSH): the file is consumed with the reason {@code REMOVED}, its bytes are deleted and the row stays as a tombstone that charges one
-     * byte. A second call answers the tombstone. A file that an action still depends on is {@code ARTIFACT_BUSY} (RC-B-130, RC-B-134); one that was moved is
-     * {@code STAGED_FILE_CONSUMED}.
+     * Removes the staged bytes (no SSH): TX #1 validates and moves the row to {@code CONSUMING(REMOVED)}, bytes are deleted outside any transaction, and TX #2 finishes the
+     * tombstone ({@code CONSUMED(REMOVED)}).
      */
     public ArtifactRecord remove(OwnerId owner, ArtifactUuid uuid) {
-        requireOpen();
-        ArtifactRecord record = owned(owner, uuid);
-        if (record.consumption() instanceof ConsumeState.ConsumedBecause done) {
-            if (done.reason() == ConsumeReason.REMOVED) {
-                return record;
+        ArtifactRecord prepared = Objects.requireNonNull(writeTx.execute(status -> {
+            requireOpen();
+            ArtifactRecord record = owned(owner, uuid);
+            if (record.consumption() instanceof ConsumeState.ConsumedBecause done) {
+                if (done.reason() == ConsumeReason.REMOVED) {
+                    return record;
+                }
+                throw new RequestRefusedException(ArtifactErrorCode.STAGED_FILE_CONSUMED);
             }
-            throw new RequestRefusedException(ArtifactErrorCode.STAGED_FILE_CONSUMED);
+            if (registry.actions(record.id()).stream().anyMatch(this::dependsOnTheFile)
+                || record.consumption() instanceof ConsumeState.Consuming consuming && consuming.reason() == ConsumeReason.MOVED) {
+                throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_BUSY);
+            }
+            if (record.state() == ArtifactState.READY || record.state() == ArtifactState.STAGING) {
+                return registry.beginConsume(record.id(), ConsumeReason.REMOVED);
+            }
+            return record;
+        }), "prepared");
+        if (prepared.consumption() instanceof ConsumeState.ConsumedBecause) {
+            return prepared;
         }
-        if (registry.actions(record.id()).stream().anyMatch(this::dependsOnTheFile)
-            || record.consumption() instanceof ConsumeState.Consuming consuming && consuming.reason() == ConsumeReason.MOVED) {
-            throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_BUSY);
-        }
-        if (record.state() == ArtifactState.READY) {
-            registry.beginConsume(record.id(), ConsumeReason.REMOVED);
-        }
-        payloads.delete(record.id());
-        return registry.completeConsume(record.id(), ConsumeReason.REMOVED);
+        payloads.delete(prepared.id());
+        return Objects.requireNonNull(writeTx.execute(status -> registry.completeConsume(prepared.id(), ConsumeReason.REMOVED)), "removed");
     }
 
     private boolean dependsOnTheFile(StagedAction action) {
@@ -227,34 +274,28 @@ public class StagedFileService {
 
     // ---- copy and move ----
 
-    /**
-     * Copies or moves a staged file to a path on a target. The checks come first and change nothing: maintenance, the key, the owner, the revision the client saw, the
-     * state and the expiry of the file, an earlier action with the same key and, for a move, an earlier action whose outcome is not known.
-     *
-     * <p><b>The order is the one of 2.x</b> ({@code reserveStagedAction}; defects D-0155 and D-0156): the action is recorded first, as {@code RESERVED}, with the id the
-     * operation will have; then the bytes are copied into a new artifact bound to the target (a refusal of the budget or the disk is the answer, with its numbers); the upload
-     * of that copy is admitted under the reserved id; the operation pins the copy; and the action becomes {@code SUBMITTED}. A crash or a failure between two of these steps
-     * leaves a record that says where it stopped, and the same key again goes on from there and never starts a second operation: when the operation reached the journal the
-     * action is submitted now ({@link #adopt}), when it did not the answer is the reserved action, and at the next start it is refused ({@link #recoverReservations}). If
-     * the admission fails for sure, the action is refused and the copy is removed.
-     */
     public StagedPlacement place(StagedPlacementRequest request) {
         Objects.requireNonNull(request, "request");
-        requireOpen();
         RequestKey key = requestKey(request.operationKey());
-        ArtifactRecord source = owned(request.owner(), request.uuid());
+        record PlaceLookup(ArtifactRecord source, Optional<StagedAction> earlier) {
+        }
+        PlaceLookup lookup = Objects.requireNonNull(readTx.execute(status -> {
+            requireOpen();
+            ArtifactRecord source = owned(request.owner(), request.uuid());
+            Optional<StagedAction> earlier = registry.actions(source.id()).stream().filter(action -> action.operationKey().equals(key.value())).findFirst();
+            return new PlaceLookup(source, earlier);
+        }), "lookup");
+        ArtifactRecord source = lookup.source();
         if (!request.expectedRevision().equals(request.target().revision())) {
             throw new RequestRefusedException(RequestErrorCode.TARGET_REVISION_CONFLICT);
         }
         Digest inputDigest = inputDigestOf(request);
-        return registry.actions(source.id()).stream().filter(action -> action.operationKey().equals(key.value())).findFirst()
-            .map(earlier -> answerEarlier(earlier, inputDigest)).orElseGet(() -> reserveAndPublish(request, key, source, inputDigest));
+        if (lookup.earlier().isPresent()) {
+            return answerEarlier(lookup.earlier().orElseThrow(), inputDigest);
+        }
+        return reserveAndPublish(request, key, source, inputDigest);
     }
 
-    /**
-     * The same key with the same content is the first action, not a second one; with other content it is a conflict. A reserved action whose operation is in the journal is
-     * submitted now (the first call was cut off after the admission); a reserved one whose operation is not there says so by its state: the admission is not confirmed.
-     */
     private StagedPlacement answerEarlier(StagedAction earlier, Digest inputDigest) {
         if (!earlier.inputDigest().equals(inputDigest)) {
             throw new RequestRefusedException(RequestErrorCode.OPERATION_KEY_CONFLICT);
@@ -269,39 +310,40 @@ public class StagedFileService {
         return new StagedPlacement.Placed(earlier.requestId(), earlier.state());
     }
 
-    /** The operation in the journal that a reserved action was admitted as, if the admission got that far. */
     private Optional<Operation> acceptedBy(StagedAction action) {
-        return journal.findByRequestKey(action.requestKey()).filter(operation -> operation.id().equals(action.requestId()));
+        Optional<Operation> found = readTx.execute(status -> journal.findByRequestKey(action.requestKey()));
+        return found == null ? Optional.empty() : found.filter(operation -> operation.id().equals(action.requestId()));
     }
 
-    /**
-     * The operation of a reserved action is in the journal: the copy it was made for is pinned by it and the action is {@code SUBMITTED}. Repeating it is harmless, so a
-     * retry, the start-up check and the first call that was cut off may all do it.
-     */
     private void adopt(StagedAction reserved, Operation accepted) {
-        if (accepted.input() instanceof UploadInput input) {
-            registry.submit(input.artifactId(), accepted.id());
-        }
-        registry.updateAction(reserved.artifactId(), reserved.operationKey(), StagedActionState.SUBMITTED);
+        writeTx.executeWithoutResult(status -> {
+            if (accepted.input() instanceof UploadInput input) {
+                registry.submit(input.artifactId(), accepted.id());
+            }
+            registry.updateAction(reserved.artifactId(), reserved.operationKey(), StagedActionState.SUBMITTED);
+        });
     }
 
     private StagedPlacement reserveAndPublish(StagedPlacementRequest request, RequestKey key, ArtifactRecord source, Digest inputDigest) {
         requireUsable(source);
         StagedAction reserved = new StagedAction(source.id(), key.value(), requestKeyOf(request.owner(), key), inputDigest, operationIds.next(), request.kind(),
             StagedActionState.RESERVED, request.target().target().id(), request.target().revision(), request.remotePath(), request.overwrite(), request.elevation());
-        synchronized (reservations) {
-            // The check and the record are one step for this installation: two moves, or a move and a copy that is in doubt, never both pass the check.
-            requireNoOpenDoubt(source, request.kind());
-            try {
+        try {
+            // Serialize concurrent actions on the same staged file via the artifact row lock in the database (no JVM locks, Principles 4.4).
+            writeTx.executeWithoutResult(status -> {
+                registry.lockForAction(source.id());
+                requireNoOpenDoubt(source, request.kind());
                 registry.addAction(reserved);
-            } catch (RequestRefusedException e) {
-                if (e.code() != ArtifactErrorCode.OPAQUE_ACTION_CONFLICT) {
-                    throw e;
-                }
-                // The same key came twice at once and the other call recorded it first: the answer is the first one's.
-                return registry.actions(source.id()).stream().filter(action -> action.operationKey().equals(key.value())).findFirst()
-                    .map(earlier -> answerEarlier(earlier, inputDigest)).orElseThrow(() -> e);
+            });
+        } catch (RequestRefusedException e) {
+            if (e.code() != ArtifactErrorCode.OPAQUE_ACTION_CONFLICT) {
+                throw e;
             }
+            // The write transaction rolled back cleanly (PostgreSQL-safe, no 25P02): read the winning action in a fresh read-only transaction.
+            Optional<StagedAction> earlier = readTx.execute(status -> registry.actions(source.id()).stream()
+                .filter(action -> action.operationKey().equals(key.value())).findFirst());
+            return (earlier == null ? Optional.<StagedAction>empty() : earlier)
+                .map(found -> answerEarlier(found, inputDigest)).orElseThrow(() -> e);
         }
         return publishCopy(request, key, source, reserved);
     }
@@ -350,8 +392,10 @@ public class StagedFileService {
             if (!admitted.equals(reserved.requestId())) {
                 throw new RequestRefusedException(RequestErrorCode.OPERATION_KEY_CONFLICT);
             }
-            registry.submit(copy.id(), admitted);
-            registry.updateAction(reserved.artifactId(), reserved.operationKey(), StagedActionState.SUBMITTED);
+            writeTx.executeWithoutResult(status -> {
+                registry.submit(copy.id(), admitted);
+                registry.updateAction(reserved.artifactId(), reserved.operationKey(), StagedActionState.SUBMITTED);
+            });
             return new StagedPlacement.Placed(admitted, StagedActionState.SUBMITTED);
         } catch (RuntimeException failure) {
             return afterFailure(reserved, copyId, failure);
@@ -391,41 +435,39 @@ public class StagedFileService {
     /** Ends a reserved action that no operation will ever answer to. A failure is logged: the action stays reserved and the start-up check refuses it. */
     private void refuse(StagedAction reserved) {
         try {
-            registry.updateAction(reserved.artifactId(), reserved.operationKey(), StagedActionState.REFUSED);
+            writeTx.executeWithoutResult(status -> registry.updateAction(reserved.artifactId(), reserved.operationKey(), StagedActionState.REFUSED));
         } catch (RuntimeException e) {
             LOG.warn("The action {} of a staged file could not be refused; the start-up check refuses it", reserved.operationKey(), e);
         }
     }
 
-    /**
-     * Settles, once at the start, the actions that a stop of the application cut off between the record and the submission: a {@code RESERVED} action whose operation is in the
-     * journal is submitted (the copy it needs is pinned by it), one whose operation is not is refused, because the admission never reached the journal and nothing is sent
-     * again. The copy such an action may have left was never pinned and is removed when its time is over. A failure of one action is logged and does not stop the others.
-     * The caller runs this before the dispatcher opens and before a request is served, so no admission is in flight.
-     *
-     * @return how many actions were settled
-     */
     public int recoverReservations() {
-        int settled = 0;
-        for (ArtifactRecord record : registry.holding()) {
-            if (!(record.spec().origin() instanceof ArtifactOrigin.Staged)) {
-                continue;
-            }
-            for (StagedAction action : registry.actions(record.id())) {
-                if (action.state() != StagedActionState.RESERVED) {
+        List<StagedAction> reservedActions = Objects.requireNonNull(readTx.execute(status -> {
+            List<StagedAction> found = new java.util.ArrayList<>();
+            for (ArtifactRecord record : registry.holding()) {
+                if (!(record.spec().origin() instanceof ArtifactOrigin.Staged)) {
                     continue;
                 }
-                try {
-                    Optional<Operation> accepted = acceptedBy(action);
-                    if (accepted.isPresent()) {
-                        adopt(action, accepted.orElseThrow());
-                    } else {
-                        registry.updateAction(action.artifactId(), action.operationKey(), StagedActionState.REFUSED);
+                for (StagedAction action : registry.actions(record.id())) {
+                    if (action.state() == StagedActionState.RESERVED) {
+                        found.add(action);
                     }
-                    settled++;
-                } catch (RuntimeException e) {
-                    LOG.warn("The reserved action {} of a staged file could not be settled at the start; it is tried again at the next start", action.operationKey(), e);
                 }
+            }
+            return found;
+        }), "reservedActions");
+        int settled = 0;
+        for (StagedAction action : reservedActions) {
+            try {
+                Optional<Operation> accepted = acceptedBy(action);
+                if (accepted.isPresent()) {
+                    adopt(action, accepted.orElseThrow());
+                } else {
+                    writeTx.executeWithoutResult(status -> registry.updateAction(action.artifactId(), action.operationKey(), StagedActionState.REFUSED));
+                }
+                settled++;
+            } catch (RuntimeException e) {
+                LOG.warn("The reserved action {} of a staged file could not be settled at the start; it is tried again at the next start", action.operationKey(), e);
             }
         }
         return settled;
@@ -439,29 +481,32 @@ public class StagedFileService {
         return payloads.open(source.id());
     }
 
-    /**
-     * The operation of a staged file ended. A move consumes the staged file only when the operation completed with {@code FilePublished} of this very content
-     * (RC-B-130 to RC-B-132: a completion without the publication evidence consumes nothing); every final state settles the action; an {@code UNKNOWN} operation leaves it open.
-     */
     public void operationSettled(OwnerId owner, ArtifactUuid uuid, String operationKey, OperationState state, CompletionEvidence evidence) {
         Objects.requireNonNull(state, "state");
         Objects.requireNonNull(evidence, "evidence");
-        ArtifactRecord record = owned(owner, uuid);
-        StagedAction action = registry.actions(record.id()).stream().filter(candidate -> candidate.operationKey().equals(operationKey)).findFirst()
-            .orElseThrow(() -> new RequestRefusedException(ArtifactErrorCode.ARTIFACT_NOT_FOUND));
-        settle(record, action, state, evidence);
+        record ActionTarget(ArtifactRecord record, StagedAction action) {
+        }
+        ActionTarget target = Objects.requireNonNull(readTx.execute(status -> {
+            ArtifactRecord record = owned(owner, uuid);
+            StagedAction action = registry.actions(record.id()).stream().filter(candidate -> candidate.operationKey().equals(operationKey)).findFirst()
+                .orElseThrow(() -> new RequestRefusedException(ArtifactErrorCode.ARTIFACT_NOT_FOUND));
+            return new ActionTarget(record, action);
+        }), "target");
+        settle(target.record(), target.action(), state, evidence);
     }
 
-    /**
-     * The operation ended, told by what the operation is and not by who asked: finds the use of a staged file that the operation was submitted for and settles it as
-     * {@link #operationSettled(OwnerId, ArtifactUuid, String, OperationState, CompletionEvidence)} does. An operation that is not the operation of a staged file, or whose
-     * staged file is gone, is none of this service's business and changes nothing. Telling it twice is harmless (the settlement after a start, and every minute after it, tells an ended operation again when its action is still submitted).
-     */
     public void operationSettled(OperationId operation, OperationState state, CompletionEvidence evidence) {
         Objects.requireNonNull(operation, "operation");
         Objects.requireNonNull(state, "state");
         Objects.requireNonNull(evidence, "evidence");
-        registry.actionOf(operation).ifPresent(action -> registry.find(action.artifactId()).ifPresent(record -> settle(record, action, state, evidence)));
+        record ActionTarget(ArtifactRecord record, StagedAction action) {
+        }
+        Optional<ActionTarget> target = readTx.execute(status -> registry.actionOf(operation)
+            .flatMap(action -> registry.find(action.artifactId()).map(record -> new ActionTarget(record, action))));
+        if (target != null && target.isPresent()) {
+            ActionTarget found = target.orElseThrow();
+            settle(found.record(), found.action(), state, evidence);
+        }
     }
 
     private void settle(ArtifactRecord record, StagedAction action, OperationState state, CompletionEvidence evidence) {
@@ -469,23 +514,22 @@ public class StagedFileService {
             return;
         }
         if (action.kind() == StagedActionKind.MOVE && state == OperationState.COMPLETED && publishedThisFile(record, evidence)) {
-            consume(record);
+            if (record.state() == ArtifactState.READY) {
+                writeTx.executeWithoutResult(status -> registry.beginConsume(record.id(), ConsumeReason.MOVED));
+            }
+            payloads.delete(record.id());
+            writeTx.executeWithoutResult(status -> {
+                registry.completeConsume(record.id(), ConsumeReason.MOVED);
+                registry.updateAction(record.id(), action.operationKey(), StagedActionState.SETTLED);
+            });
+            return;
         }
-        registry.updateAction(record.id(), action.operationKey(), StagedActionState.SETTLED);
+        writeTx.executeWithoutResult(status -> registry.updateAction(record.id(), action.operationKey(), StagedActionState.SETTLED));
     }
 
     private boolean publishedThisFile(ArtifactRecord record, CompletionEvidence evidence) {
         return evidence instanceof CompletionEvidence.FilePublished published && record.content() instanceof ContentDigest.Sealed sealed
             && sealed.sha256().equals(published.sha256());
-    }
-
-    /** Moved: the reason is recorded when the use starts, the bytes are deleted, and the row ends as a tombstone. A crash in between is resumed with the same reason. */
-    private void consume(ArtifactRecord record) {
-        if (record.state() == ArtifactState.READY) {
-            registry.beginConsume(record.id(), ConsumeReason.MOVED);
-        }
-        payloads.delete(record.id());
-        registry.completeConsume(record.id(), ConsumeReason.MOVED);
     }
 
     // ---- helpers ----
@@ -574,9 +618,9 @@ public class StagedFileService {
     /** Removes a copy that no operation will ever use. A failure is logged: the row is {@code DELETING} and the start-up check finishes the removal. */
     private void discard(ArtifactId id) {
         try {
-            registry.beginDelete(id);
+            writeTx.executeWithoutResult(status -> registry.beginDelete(id));
             payloads.delete(id);
-            registry.release(id, ReleaseReason.REFUSED);
+            writeTx.executeWithoutResult(status -> registry.release(id, ReleaseReason.REFUSED));
         } catch (RuntimeException e) {
             LOG.warn("The copy {} of a staged file could not be discarded; the start-up check removes it", id.value(), e);
         }

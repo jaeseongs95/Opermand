@@ -143,6 +143,67 @@ public class SqlBuilder {
         };
     }
 
+    /**
+     * Catalog query returning 1+ when a schema/owner (lower-cased parameter {@code ?}) exists (SSH_PORTAL-D-0109).
+     * Oracle has no {@code information_schema} (uses {@code all_users}); Db2 uses {@code syscat.schemata}.
+     */
+    public static String generateSchemaExistsQuery(Database database) {
+        return switch (database) {
+            case ORACLE -> "SELECT COUNT(*) FROM all_users WHERE LOWER(username) = ?";
+            case DB2 -> "SELECT COUNT(*) FROM syscat.schemata WHERE LOWER(schemaname) = ?";
+            case H2, POSTGRESQL, MARIADB, MYSQL, SQLSERVER -> "SELECT COUNT(*) FROM information_schema.schemata WHERE LOWER(schema_name) = ?";
+        };
+    }
+
+    /**
+     * Catalog query returning 1+ when a table (lower-cased schema {@code ?}, lower-cased table name {@code ?}) exists (SSH_PORTAL-D-0109).
+     * Oracle has no {@code information_schema} (uses {@code all_tables}); Db2 uses {@code syscat.tables}.
+     */
+    public static String generateTableExistsQuery(Database database) {
+        return switch (database) {
+            case ORACLE -> "SELECT COUNT(*) FROM all_tables WHERE LOWER(owner) = ? AND LOWER(table_name) = ?";
+            case DB2 -> "SELECT COUNT(*) FROM syscat.tables WHERE LOWER(tabschema) = ? AND LOWER(tabname) = ?";
+            case H2, POSTGRESQL, MARIADB, MYSQL, SQLSERVER -> "SELECT COUNT(*) FROM information_schema.tables WHERE LOWER(table_schema) = ? AND LOWER(table_name) = ?";
+        };
+    }
+
+    /**
+     * Catalog query returning 1+ when a table (lower-cased table name {@code ?}) exists in the current default schema (SSH_PORTAL-D-0141).
+     */
+    public static String generateCurrentSchemaTableExistsQuery(Database database) {
+        return switch (database) {
+            case ORACLE -> "SELECT COUNT(*) FROM user_tables WHERE LOWER(table_name) = ?";
+            case DB2 -> "SELECT COUNT(*) FROM syscat.tables WHERE tabschema = CURRENT SCHEMA AND LOWER(tabname) = ?";
+            case H2 -> "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA AND LOWER(table_name) = ?";
+            case POSTGRESQL -> "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = CURRENT_SCHEMA() AND LOWER(table_name) = ?";
+            case MARIADB, MYSQL -> "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND LOWER(table_name) = ?";
+            case SQLSERVER -> "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = SCHEMA_NAME() AND LOWER(table_name) = ?";
+        };
+    }
+
+    /**
+     * Timestamp column declaration for migration history tables (SSH_PORTAL-D-0109).
+     * MariaDB and MySQL default the first {@code TIMESTAMP NOT NULL} column to {@code ON UPDATE CURRENT_TIMESTAMP} when {@code explicit_defaults_for_timestamp=OFF},
+     * silently corrupting {@code applied_at} when {@code outcome} is updated; {@code DATETIME(6)} stores exact UTC without auto-update or 2038 truncation.
+     */
+    public static String generateHistoryTimestampType(Database database) {
+        return switch (database) {
+            case MARIADB, MYSQL -> "DATETIME(6)";
+            case H2, POSTGRESQL, ORACLE, DB2, SQLSERVER -> "TIMESTAMP";
+        };
+    }
+
+    /**
+     * Whether DDL statements participate in transaction rollback (SSH_PORTAL-D-0141).
+     * H2, MariaDB, MySQL, and Oracle implicitly commit on DDL, so mid-script failures require compensating cleanup or resume of already-created objects.
+     */
+    public static boolean supportsTransactionalDdl(Database database) {
+        return switch (database) {
+            case POSTGRESQL, DB2, SQLSERVER -> true;
+            case H2, ORACLE, MARIADB, MYSQL -> false;
+        };
+    }
+
     /** Appends the dialect's row limit to an otherwise complete query. */
     public String applyLimit(String statement, String parameter) {
         return statement + " " + generateLimit(parameter);

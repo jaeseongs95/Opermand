@@ -3,6 +3,7 @@ package io.github.jaeseongs95.portal.app.artifact;
 import java.util.Objects;
 
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
 import io.github.jaeseongs95.portal.domain.operation.OperationState;
@@ -25,6 +26,7 @@ public class ArtifactPinning {
     }
 
     /** Unpins {@code artifact} when {@code state} is final; does nothing otherwise. Repeating it is harmless. */
+    @Transactional
     public void operationSettled(ArtifactId artifact, OperationState state) {
         Objects.requireNonNull(artifact, "artifact");
         Objects.requireNonNull(state, "state");

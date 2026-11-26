@@ -1,6 +1,8 @@
 package io.github.jaeseongs95.portal.app.operation;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
+import org.springframework.transaction.annotation.Transactional;
 
 import io.github.jaeseongs95.portal.app.policy.CommandPolicyStore;
 import io.github.jaeseongs95.portal.app.target.TargetPlatform;
@@ -58,6 +60,7 @@ public class ApprovalJudge {
     }
 
     /** The admission of {@code spec}, whose target is {@code target} at the revision the request holds. */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public Admission judge(NewOperation spec, ResolvedTarget target) {
         TargetPolicy policy = policies.targetPolicy(spec.targetId());
         RuleLookup lookup = policy.ruleFor(spec.targetId(), target.connection(), target.target().writeProfile(), target.target().os());
@@ -70,6 +73,7 @@ public class ApprovalJudge {
      * Checks the current target policy before the owner approves a pending operation (defect D-0121, RC-A-433): if the target's current rule now denies the operation
      * (and {@code testServer} is off), refuses with {@code POLICY_DENIED} at {@code POLICY_GUARD}.
      */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public void checkBeforeOwnerApprove(Operation operation, ResolvedTarget target) {
         DecisionReason currentReason = reevaluate(operation, target);
         if (currentReason == DecisionReason.POLICY_DENIED) {
@@ -86,6 +90,7 @@ public class ApprovalJudge {
      *       {@code POLICY_GUARD}. Unrelated edits (another target's rule or adding another allowed command) continue to pass.</li>
      * </ul>
      */
+    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public void checkBeforeDispatch(Operation operation, ResolvedTarget target) {
         DecisionReason currentReason = reevaluate(operation, target);
         if (currentReason == DecisionReason.POLICY_DENIED) {

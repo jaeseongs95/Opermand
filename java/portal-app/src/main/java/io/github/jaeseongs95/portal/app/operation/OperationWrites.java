@@ -1,15 +1,20 @@
 package io.github.jaeseongs95.portal.app.operation;
 
+import java.util.Objects;
+
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.event.OperationEvents;
 import io.github.jaeseongs95.portal.app.journal.OperationJournal;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
 
 /**
- * Stores a new version of an operation and tells everyone who has to know: the event that wakes the waiters and the dispatcher, the listeners of a terminal operation,
- * and the timer of a waiting one. Every use case that changes an operation goes through here, so no change is stored without being announced. The journal checks the
- * version (compare-and-set); a lost race is its {@code OPERATION_VERSION_CONFLICT}, which the caller handles. The audit of an outcome is {@link OutcomeAudit}'s.
+ * Stores a new version of an operation inside a short write transaction and announces it only after the transaction commits: the event that wakes the waiters and the
+ * dispatcher, the listeners of a terminal operation, and the timer of a waiting one.
  */
 @Component
 public class OperationWrites {
@@ -18,22 +23,34 @@ public class OperationWrites {
     private final OperationEvents events;
     private final TerminalNotifier terminal;
     private final ExpiryTimers timers;
+    private final TransactionOperations writeTx;
+
+    @Autowired
+    public OperationWrites(OperationJournal journal, OperationEvents events, TerminalNotifier terminal, ExpiryTimers timers,
+                           PlatformTransactionManager transactionManager) {
+        this(journal, events, terminal, timers, new TransactionTemplate(transactionManager));
+    }
 
     public OperationWrites(OperationJournal journal, OperationEvents events, TerminalNotifier terminal, ExpiryTimers timers) {
+        this(journal, events, terminal, timers, TransactionOperations.withoutTransaction());
+    }
+
+    private OperationWrites(OperationJournal journal, OperationEvents events, TerminalNotifier terminal, ExpiryTimers timers, TransactionOperations writeTx) {
         this.journal = journal;
         this.events = events;
         this.terminal = terminal;
         this.timers = timers;
+        this.writeTx = writeTx;
     }
 
-    /** Stores {@code next} when the stored version is {@code expectedVersion}, then announces it. Returns the stored operation. */
+    /** Stores {@code next} when the stored version is {@code expectedVersion}, then announces it after commit. Returns the stored operation. */
     public Operation store(Operation next, long expectedVersion) {
         return store(next, expectedVersion, () -> { });
     }
 
     /** The same, with a check that runs inside the transaction of the write, before it (the room in the queue; see {@link OperationJournal#save(Operation, long, Runnable)}). */
     public Operation store(Operation next, long expectedVersion, Runnable beforeWrite) {
-        Operation stored = journal.save(next, expectedVersion, beforeWrite);
+        Operation stored = Objects.requireNonNull(writeTx.execute(status -> journal.save(next, expectedVersion, beforeWrite)), "stored");
         announce(stored);
         return stored;
     }

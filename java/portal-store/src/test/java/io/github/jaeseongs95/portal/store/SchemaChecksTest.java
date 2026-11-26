@@ -41,9 +41,9 @@ class SchemaChecksTest {
     private static final String STAMP = "TIMESTAMP '2026-11-12 00:00:00'";
 
     private final JdbcTemplate jdbc;
-    private final Savepoints savepoints;
+    private final TestSavepoints savepoints;
 
-    SchemaChecksTest(JdbcTemplate jdbc, Savepoints savepoints) {
+    SchemaChecksTest(JdbcTemplate jdbc, TestSavepoints savepoints) {
         this.jdbc = jdbc;
         this.savepoints = savepoints;
     }

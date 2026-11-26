@@ -509,6 +509,40 @@ final class PortalRules {
             .as("A-SLEEP: no class calls Thread.sleep (anti-patterns D3)"));
     }
 
+    /**
+     * A-TX-BOUNDARY (SSH_PORTAL-D-0114), Principles 4.4: transaction boundaries belong to the service layer, never to portal-store adapters. No class or method of
+     * {@code portal.store..} may be annotated with {@code @Transactional} (Spring or Jakarta) or depend on {@code TransactionTemplate}, {@code TransactionOperations},
+     * {@code PlatformTransactionManager}, or {@code TransactionManager}.
+     */
+    static List<ArchRule> transactionBoundary(ModuleTable table) {
+        String store = table.packageOf("store") + "..";
+        String springTx = "org.springframework.transaction.annotation.Transactional";
+        String jakartaTx = "jakarta.transaction.Transactional";
+        Set<String> txBoundaryTypes = Set.of(
+            "org.springframework.transaction.support.TransactionTemplate",
+            "org.springframework.transaction.support.TransactionOperations",
+            "org.springframework.transaction.PlatformTransactionManager",
+            "org.springframework.transaction.TransactionManager");
+        DescribedPredicate<JavaClass> isTxBoundaryType = DescribedPredicate.describe("are Spring transaction boundary types",
+            type -> txBoundaryTypes.contains(type.getName()));
+        return List.of(
+            ArchRuleDefinition.noClasses().that().resideInAPackage(store)
+                .should().beAnnotatedWith(springTx)
+                .as("A-TX-BOUNDARY: no class of portal-store is annotated with Spring @Transactional (Principles 4.4, D-0114)"),
+            ArchRuleDefinition.noClasses().that().resideInAPackage(store)
+                .should().beAnnotatedWith(jakartaTx)
+                .as("A-TX-BOUNDARY: no class of portal-store is annotated with Jakarta @Transactional (Principles 4.4, D-0114)"),
+            ArchRuleDefinition.noMethods().that().areDeclaredInClassesThat().resideInAPackage(store)
+                .should().beAnnotatedWith(springTx)
+                .as("A-TX-BOUNDARY: no method of portal-store is annotated with Spring @Transactional (Principles 4.4, D-0114)"),
+            ArchRuleDefinition.noMethods().that().areDeclaredInClassesThat().resideInAPackage(store)
+                .should().beAnnotatedWith(jakartaTx)
+                .as("A-TX-BOUNDARY: no method of portal-store is annotated with Jakarta @Transactional (Principles 4.4, D-0114)"),
+            ArchRuleDefinition.noClasses().that().resideInAPackage(store)
+                .should().dependOnClassesThat(isTxBoundaryType)
+                .as("A-TX-BOUNDARY: no class of portal-store depends on TransactionTemplate, TransactionOperations, or PlatformTransactionManager (Principles 4.4, D-0114)"));
+    }
+
     private static DescribedPredicate<JavaCall<?>> call(String description, Predicate<JavaCall<?>> predicate) {
         return DescribedPredicate.describe(description, predicate);
     }

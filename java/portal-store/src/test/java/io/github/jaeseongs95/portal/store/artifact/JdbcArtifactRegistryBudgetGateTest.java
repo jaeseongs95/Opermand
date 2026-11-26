@@ -66,6 +66,7 @@ class JdbcArtifactRegistryBudgetGateTest {
     @AfterEach
     void removeRows() {
         artifacts.deleteAll();
+        new TransactionTemplate(transactions).executeWithoutResult(status -> registry.reconcileBudget());
     }
 
     @Test
@@ -75,7 +76,7 @@ class JdbcArtifactRegistryBudgetGateTest {
         CountDownLatch release = new CountDownLatch(1);
         try (ExecutorService pool = Executors.newFixedThreadPool(2)) {
             Future<ArtifactReservation> first = pool.submit(() -> new TransactionTemplate(transactions).execute(status -> {
-                ArtifactReservation reservation = registry.reserve(fixtures.upload(FILE), fixtures.at());
+                ArtifactReservation reservation = registry.reserve(fixtures.upload(FILE), fixtures.at(), ArtifactFixtures.UNLIMITED_DISK);
                 held.countDown();
                 try {
                     release.await();
@@ -86,7 +87,8 @@ class JdbcArtifactRegistryBudgetGateTest {
                 return reservation;
             }));
             assertThat(held.await(DEADLINE.toSeconds(), TimeUnit.SECONDS)).as("the first reservation holds its row, uncommitted").isTrue();
-            Future<ArtifactReservation> second = pool.submit(() -> registry.reserve(fixtures.upload(FILE), fixtures.at()));
+            Future<ArtifactReservation> second = pool.submit(() -> new TransactionTemplate(transactions).execute(status ->
+                registry.reserve(fixtures.upload(FILE), fixtures.at(), ArtifactFixtures.UNLIMITED_DISK)));
 
             await().atMost(DEADLINE).untilAsserted(() -> assertThat(blockedSessions()).as("a session that the database shows as blocked by the first reservation").isPositive());
             assertThat(second.isDone()).as("the second reservation is still waiting for the first one").isFalse();

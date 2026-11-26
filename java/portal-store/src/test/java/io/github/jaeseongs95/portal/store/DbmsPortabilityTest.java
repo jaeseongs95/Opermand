@@ -53,9 +53,9 @@ class DbmsPortabilityTest {
     private final JdbcTemplate jdbc;
     private final JdbcAggregateOperations aggregates;
     private final PlatformTransactionManager transactions;
-    private final Savepoints savepoints;
+    private final TestSavepoints savepoints;
 
-    DbmsPortabilityTest(JdbcTemplate jdbc, JdbcAggregateOperations aggregates, PlatformTransactionManager transactions, Savepoints savepoints) {
+    DbmsPortabilityTest(JdbcTemplate jdbc, JdbcAggregateOperations aggregates, PlatformTransactionManager transactions, TestSavepoints savepoints) {
         this.savepoints = savepoints;
         this.jdbc = jdbc;
         this.aggregates = aggregates;

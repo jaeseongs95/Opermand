@@ -19,14 +19,15 @@ import io.github.jaeseongs95.portal.app.artifact.ArtifactPayloadStore;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRegistry;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactReservation;
 import io.github.jaeseongs95.portal.app.artifact.ReleaseReason;
+import io.github.jaeseongs95.portal.app.storage.DiskCheck;
 import io.github.jaeseongs95.portal.app.storage.DiskSpace;
 import io.github.jaeseongs95.portal.app.storage.PayloadRead;
 import io.github.jaeseongs95.portal.app.storage.PayloadWrite;
 import io.github.jaeseongs95.portal.domain.error.ArtifactErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
-import io.github.jaeseongs95.portal.store.Savepoints;
 import io.github.jaeseongs95.portal.store.StoreTest;
+import io.github.jaeseongs95.portal.store.TestSavepoints;
 
 /**
  * The three refusals of {@code reserve} on a disk that the test controls (defect D-0012, design 5.2, cases S3-AR-01 to S3-AR-05): the budget is 10,000 bytes, one file
@@ -61,13 +62,17 @@ class ArtifactReservationOrderTest {
     private final ArtifactFixtures fixtures = new ArtifactFixtures();
     private final ArtifactRegistry registry;
     private final ScriptedDisk disk;
-    private final Savepoints savepoints;
+    private final TestSavepoints savepoints;
 
-    ArtifactReservationOrderTest(ArtifactRegistry registry, ScriptedDisk disk, Savepoints savepoints) {
+    ArtifactReservationOrderTest(ArtifactRegistry registry, ScriptedDisk disk, TestSavepoints savepoints) {
         this.registry = registry;
         this.disk = disk;
         this.savepoints = savepoints;
         disk.reset();
+    }
+
+    private DiskCheck diskCheck() {
+        return DiskCheck.measure(disk::usable);
     }
 
     @ParameterizedTest
@@ -76,7 +81,7 @@ class ArtifactReservationOrderTest {
     void theDefectSizeIsAcceptedWhenTheBudgetHasRoom(long usableBytes) {
         disk.usable(usableBytes);
 
-        ArtifactReservation reservation = registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at());
+        ArtifactReservation reservation = registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at(), diskCheck());
 
         assertThat(reservation).isInstanceOf(ArtifactReservation.Reserved.class);
         assertThat(registry.budget().chargedBytes()).isEqualTo(THE_DEFECT_SIZE);
@@ -86,11 +91,11 @@ class ArtifactReservationOrderTest {
     @DisplayName("S3-AR-02: a refusal by the budget is BudgetExceeded with the live rows, the request and the budget; the bytes held in quarantine are no part of it")
     void aBudgetRefusalShowsTheLiveBytes() {
         disk.usable(1_000_000_000_000L);
-        fixtures.reservedId(registry.reserve(fixtures.upload(6_000L), fixtures.at()));
-        fixtures.reservedId(registry.reserve(fixtures.upload(3_000L), fixtures.at()));
+        fixtures.reservedId(registry.reserve(fixtures.upload(6_000L), fixtures.at(), diskCheck()));
+        fixtures.reservedId(registry.reserve(fixtures.upload(3_000L), fixtures.at(), diskCheck()));
         disk.retained(3_500L);
 
-        ArtifactReservation refused = registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at());
+        ArtifactReservation refused = registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at(), diskCheck());
 
         assertThat(refused).isEqualTo(new ArtifactReservation.BudgetExceeded(THE_DEFECT_SIZE, 9_000L, BUDGET));
         assertThat(registry.holding()).hasSize(2);
@@ -100,10 +105,10 @@ class ArtifactReservationOrderTest {
     @ValueSource(longs = {0L, 1_000_000_000_000L, Long.MAX_VALUE})
     @DisplayName("S3-AR-03: the budget's verdict does not depend on the disk: the same refusal for a disk with no room, a big one and an unreadable-by-size one")
     void theBudgetVerdictIgnoresTheDisk(long usableBytes) {
-        fixtures.reservedId(registry.reserve(fixtures.upload(FILE_LIMIT), fixtures.at()));
+        fixtures.reservedId(registry.reserve(fixtures.upload(FILE_LIMIT), fixtures.at(), diskCheck()));
         disk.usable(usableBytes);
 
-        assertThat(registry.reserve(fixtures.upload(2_500L), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(2_500L, FILE_LIMIT, BUDGET));
+        assertThat(registry.reserve(fixtures.upload(2_500L), fixtures.at(), diskCheck())).isEqualTo(new ArtifactReservation.BudgetExceeded(2_500L, FILE_LIMIT, BUDGET));
     }
 
     @Test
@@ -111,7 +116,7 @@ class ArtifactReservationOrderTest {
     void aDiskRefusalIsAnotherVariantWithItsOwnValues() {
         disk.usable(THE_DEFECT_SIZE + MARGIN - 1);
 
-        ArtifactReservation refused = registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at());
+        ArtifactReservation refused = registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at(), diskCheck());
 
         assertThat(refused).isEqualTo(new ArtifactReservation.DiskSpaceInsufficient(THE_DEFECT_SIZE, THE_DEFECT_SIZE + MARGIN - 1, MARGIN));
         assertThat(refused).isNotInstanceOf(ArtifactReservation.BudgetExceeded.class);
@@ -123,18 +128,18 @@ class ArtifactReservationOrderTest {
     @DisplayName("S-D0012-15 (store half): the size a target announced for a download is judged by the disk with the scripted usable space: one byte short is DiskSpaceInsufficient (not a budget refusal) and the row keeps its empty reservation; with the margin kept it is Reserved")
     void anAnnouncedSizeIsJudgedByTheDisk() {
         disk.usable(1_000_000_000_000L);
-        ArtifactId download = fixtures.reservedId(registry.reserve(fixtures.download(0), fixtures.at()));
+        ArtifactId download = fixtures.reservedId(registry.reserve(fixtures.download(0), fixtures.at(), diskCheck()));
         long announced = 5_000L;
         disk.usable(announced + MARGIN - 1);
 
-        ArtifactReservation refused = registry.sizeDownload(download, announced);
+        ArtifactReservation refused = registry.sizeDownload(download, announced, diskCheck());
 
         assertThat(refused).isEqualTo(new ArtifactReservation.DiskSpaceInsufficient(announced, announced + MARGIN - 1, MARGIN));
         assertThat(registry.find(download).orElseThrow().spec().sizeBytes()).isZero();
         assertThat(registry.budget().chargedBytes()).isEqualTo(1);
 
         disk.usable(announced + MARGIN);
-        assertThat(registry.sizeDownload(download, announced)).isEqualTo(new ArtifactReservation.Reserved(download));
+        assertThat(registry.sizeDownload(download, announced, diskCheck())).isEqualTo(new ArtifactReservation.Reserved(download));
         assertThat(registry.budget().chargedBytes()).isEqualTo(announced);
     }
 
@@ -143,7 +148,7 @@ class ArtifactReservationOrderTest {
     void anUnreadableDiskIsAnIoErrorAndNotARefusal() {
         disk.failToRead(new UncheckedIOException(new IOException("the volume is gone")));
 
-        assertThatThrownBy(() -> savepoints.run(() -> registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at()))).isInstanceOfSatisfying(RequestRefusedException.class, e -> {
+        assertThatThrownBy(() -> savepoints.run(() -> registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at(), diskCheck()))).isInstanceOfSatisfying(RequestRefusedException.class, e -> {
             assertThat(e.code()).isEqualTo(ArtifactErrorCode.ARTIFACT_STORAGE_IO_ERROR);
             assertThat(e.getCause()).isInstanceOf(UncheckedIOException.class);
         });
@@ -154,18 +159,18 @@ class ArtifactReservationOrderTest {
     @DisplayName("S3-AR-04: the order is the file limit, then the budget, then the disk, and one answer at a time, also when the disk cannot be read")
     void theOrderIsLimitBudgetDisk() {
         disk.usable(1_000_000_000_000L);
-        ArtifactId filler = fixtures.reservedId(registry.reserve(fixtures.upload(FILE_LIMIT), fixtures.at()));
+        ArtifactId filler = fixtures.reservedId(registry.reserve(fixtures.upload(FILE_LIMIT), fixtures.at(), diskCheck()));
         disk.failToRead(new UncheckedIOException(new IOException("the volume is gone")));
 
         // 9,000 is over the file limit, over the budget with the filler, and the disk is unreadable: the limit speaks first.
-        assertThat(registry.reserve(fixtures.upload(9_000L), fixtures.at())).isEqualTo(new ArtifactReservation.FileTooLarge(9_000L, FILE_LIMIT));
+        assertThat(registry.reserve(fixtures.upload(9_000L), fixtures.at(), diskCheck())).isEqualTo(new ArtifactReservation.FileTooLarge(9_000L, FILE_LIMIT));
         // 2,500 is within the limit, over the budget with the filler, and the disk is unreadable: the budget speaks before the disk is asked.
-        assertThat(registry.reserve(fixtures.upload(2_500L), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(2_500L, FILE_LIMIT, BUDGET));
+        assertThat(registry.reserve(fixtures.upload(2_500L), fixtures.at(), diskCheck())).isEqualTo(new ArtifactReservation.BudgetExceeded(2_500L, FILE_LIMIT, BUDGET));
 
         registry.release(filler, ReleaseReason.REFUSED);
         disk.usable(0L);
         // the budget has room again and the disk is short: only now the disk speaks.
-        assertThat(registry.reserve(fixtures.upload(2_500L), fixtures.at())).isEqualTo(new ArtifactReservation.DiskSpaceInsufficient(2_500L, 0L, MARGIN));
+        assertThat(registry.reserve(fixtures.upload(2_500L), fixtures.at(), diskCheck())).isEqualTo(new ArtifactReservation.DiskSpaceInsufficient(2_500L, 0L, MARGIN));
     }
 
     @Test
@@ -174,7 +179,7 @@ class ArtifactReservationOrderTest {
         disk.usable(1_000_000_000_000L);
         disk.retained(BUDGET + 5_000L);
 
-        ArtifactReservation reservation = registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at());
+        ArtifactReservation reservation = registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at(), diskCheck());
 
         assertThat(reservation).isInstanceOf(ArtifactReservation.Reserved.class);
         assertThat(registry.budget().chargedBytes()).as("only the live row is charged").isEqualTo(THE_DEFECT_SIZE);

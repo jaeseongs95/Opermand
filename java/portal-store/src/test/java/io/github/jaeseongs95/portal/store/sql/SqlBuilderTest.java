@@ -198,6 +198,48 @@ class SqlBuilderTest {
                 failure -> assertThat(failure.reason()).isEqualTo(Reason.DATABASE_PRODUCT_MISMATCH));
     }
 
+    @Test
+    @DisplayName("S-D0109-29: each of the seven products renders its catalog existence queries, migration history timestamp type, and transactional DDL capability")
+    void rendersCatalogQueriesHistoryTimestampAndDdlCapabilityForAllSevenProducts() {
+        assertThat(SqlBuilder.generateSchemaExistsQuery(SqlBuilder.Database.ORACLE)).isEqualTo("SELECT COUNT(*) FROM all_users WHERE LOWER(username) = ?");
+        assertThat(SqlBuilder.generateSchemaExistsQuery(SqlBuilder.Database.DB2)).isEqualTo("SELECT COUNT(*) FROM syscat.schemata WHERE LOWER(schemaname) = ?");
+        for (SqlBuilder.Database db : new SqlBuilder.Database[] {SqlBuilder.Database.H2, SqlBuilder.Database.POSTGRESQL, SqlBuilder.Database.MARIADB,
+                SqlBuilder.Database.MYSQL, SqlBuilder.Database.SQLSERVER}) {
+            assertThat(SqlBuilder.generateSchemaExistsQuery(db)).as(db.name())
+                .isEqualTo("SELECT COUNT(*) FROM information_schema.schemata WHERE LOWER(schema_name) = ?");
+        }
+
+        assertThat(SqlBuilder.generateTableExistsQuery(SqlBuilder.Database.ORACLE)).isEqualTo("SELECT COUNT(*) FROM all_tables WHERE LOWER(owner) = ? AND LOWER(table_name) = ?");
+        assertThat(SqlBuilder.generateTableExistsQuery(SqlBuilder.Database.DB2)).isEqualTo("SELECT COUNT(*) FROM syscat.tables WHERE LOWER(tabschema) = ? AND LOWER(tabname) = ?");
+        for (SqlBuilder.Database db : new SqlBuilder.Database[] {SqlBuilder.Database.H2, SqlBuilder.Database.POSTGRESQL, SqlBuilder.Database.MARIADB,
+                SqlBuilder.Database.MYSQL, SqlBuilder.Database.SQLSERVER}) {
+            assertThat(SqlBuilder.generateTableExistsQuery(db)).as(db.name())
+                .isEqualTo("SELECT COUNT(*) FROM information_schema.tables WHERE LOWER(table_schema) = ? AND LOWER(table_name) = ?");
+        }
+
+        assertThat(SqlBuilder.generateCurrentSchemaTableExistsQuery(SqlBuilder.Database.ORACLE)).contains("user_tables");
+        assertThat(SqlBuilder.generateCurrentSchemaTableExistsQuery(SqlBuilder.Database.DB2)).contains("syscat.tables").contains("CURRENT SCHEMA");
+        assertThat(SqlBuilder.generateCurrentSchemaTableExistsQuery(SqlBuilder.Database.H2)).contains("CURRENT_SCHEMA");
+        assertThat(SqlBuilder.generateCurrentSchemaTableExistsQuery(SqlBuilder.Database.POSTGRESQL)).contains("CURRENT_SCHEMA()");
+        assertThat(SqlBuilder.generateCurrentSchemaTableExistsQuery(SqlBuilder.Database.MARIADB)).contains("DATABASE()");
+        assertThat(SqlBuilder.generateCurrentSchemaTableExistsQuery(SqlBuilder.Database.MYSQL)).contains("DATABASE()");
+        assertThat(SqlBuilder.generateCurrentSchemaTableExistsQuery(SqlBuilder.Database.SQLSERVER)).contains("SCHEMA_NAME()");
+
+        assertThat(SqlBuilder.generateHistoryTimestampType(SqlBuilder.Database.MARIADB)).isEqualTo("DATETIME(6)");
+        assertThat(SqlBuilder.generateHistoryTimestampType(SqlBuilder.Database.MYSQL)).isEqualTo("DATETIME(6)");
+        for (SqlBuilder.Database db : new SqlBuilder.Database[] {SqlBuilder.Database.H2, SqlBuilder.Database.POSTGRESQL, SqlBuilder.Database.ORACLE,
+                SqlBuilder.Database.DB2, SqlBuilder.Database.SQLSERVER}) {
+            assertThat(SqlBuilder.generateHistoryTimestampType(db)).as(db.name()).isEqualTo("TIMESTAMP");
+        }
+
+        for (SqlBuilder.Database db : new SqlBuilder.Database[] {SqlBuilder.Database.POSTGRESQL, SqlBuilder.Database.DB2, SqlBuilder.Database.SQLSERVER}) {
+            assertThat(SqlBuilder.supportsTransactionalDdl(db)).as(db.name()).isTrue();
+        }
+        for (SqlBuilder.Database db : new SqlBuilder.Database[] {SqlBuilder.Database.H2, SqlBuilder.Database.ORACLE, SqlBuilder.Database.MARIADB, SqlBuilder.Database.MYSQL}) {
+            assertThat(SqlBuilder.supportsTransactionalDdl(db)).as(db.name()).isFalse();
+        }
+    }
+
     /** The builder the application has: the bean of the context, over the context's one DataSource (a pool of an in-memory H2), as the product wires it. */
     private SqlBuilder h2Builder() {
         return context.getBean(SqlBuilder.class);

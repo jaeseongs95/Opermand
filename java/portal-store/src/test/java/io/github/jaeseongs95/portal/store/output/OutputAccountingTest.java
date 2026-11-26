@@ -109,7 +109,7 @@ class OutputAccountingTest {
         for (int i = 0; i < 12; i++) {
             OutputId id = w.reserve(binding, 1024, T0);
             assertThat(w.charge(id)).as("work in flight reserves its maximum").isEqualTo(1024L);
-            w.manifests.markUnavailable(id, T0.plusMillis(50));
+            w.markUnavailable(id, T0.plusMillis(50));
             assertThat(w.charge(id)).isZero();
             assertThat(w.row(id).state()).isEqualTo(OutputState.UNAVAILABLE);
             assertThat(w.row(id).executionId()).as("the binding is kept").isEqualTo(binding.executionId().value());
@@ -143,7 +143,7 @@ class OutputAccountingTest {
         assertThat(w.payloads.append(id, new StreamFrame(StreamKind.STDOUT, utf8("ab")))).as("5 header bytes and 2 data bytes").isEqualTo(7L);
         byte[] bytes = Files.readAllBytes(w.file(id, PayloadKind.STREAM));
         if (giveUpRecorded) {
-            w.manifests.markUnavailable(id, T0.plusMillis(50));
+            w.markUnavailable(id, T0.plusMillis(50));
             assertThat(w.charge(id)).isEqualTo(7L);
         } else {
             assertThat(w.row(id).state()).as("the persistence of the give-up failed: the row is still pending").isEqualTo(OutputState.PENDING);
@@ -168,7 +168,7 @@ class OutputAccountingTest {
         w.payloads.finish(id, utf8("{\"failed\":true}"), utf8("complete retained payload"));
         byte[] bytes = Files.readAllBytes(w.file(id, PayloadKind.OUT));
 
-        w.manifests.markUnavailable(id, T0.plusMillis(50));
+        w.markUnavailable(id, T0.plusMillis(50));
 
         assertThat(w.charge(id)).isEqualTo(bytes.length);
         OutputWorld restarted = factory.create(folder, LIMITS);
@@ -186,7 +186,7 @@ class OutputAccountingTest {
         OutputId old = w.reserve(binding, 1024, T0);
         OutputId interrupted = w.reserve(binding, 1024, T0);
         Instant expiry = T0.plusMillis(50);
-        w.manifests.markUnavailable(old, expiry);
+        w.markUnavailable(old, expiry);
         w.plant(w.file(old, PayloadKind.STREAM), utf8("partial evidence"));
         w.plant(w.file(old, PayloadKind.OUT), utf8("published evidence"));
         w.plant(w.file(interrupted, PayloadKind.STREAM), utf8("interrupted evidence"));
@@ -223,10 +223,10 @@ class OutputAccountingTest {
         OutputWorld w = factory.create(folder, ONE);
         OutputBinding binding = fixture.unbound();
         OutputId old = w.reserve(binding, 1024, T0);
-        w.manifests.markUnavailable(old, T0.plusMillis(50));
+        w.markUnavailable(old, T0.plusMillis(50));
         w.forceCharge(old, 1024);
 
-        assertThat(w.manifests.reserve(binding, 1024, T0)).isInstanceOf(OutputReservation.BudgetExceeded.class);
+        assertThat(w.manifests.reserve(binding, 1024, T0, w.payloads.usable())).isInstanceOf(OutputReservation.BudgetExceeded.class);
         w.startup.recover(T0);
         OutputId next = w.reserve(binding, 1024, T0);
 
@@ -240,7 +240,7 @@ class OutputAccountingTest {
         OutputWorld w = factory.create(folder, LIMITS);
         OutputId id = w.reserve(fixture.unbound(), 1024, T0);
 
-        w.manifests.markUnavailable(id, T0.plusMillis(50));
+        w.markUnavailable(id, T0.plusMillis(50));
 
         assertChargeAcrossRestart(folder, w, id, 0L);
     }
@@ -253,7 +253,7 @@ class OutputAccountingTest {
         w.append(id, StreamKind.STDOUT, "x");
         Files.createLink(folder.resolve("unsafe-extra-link"), w.file(id, PayloadKind.STREAM));
 
-        w.manifests.markUnavailable(id, T0.plusMillis(50));
+        w.markUnavailable(id, T0.plusMillis(50));
 
         assertChargeAcrossRestart(folder, w, id, 6L);
     }
@@ -267,7 +267,7 @@ class OutputAccountingTest {
         Arrays.fill(bytes, (byte) 'x');
         w.plant(w.file(id, PayloadKind.STREAM), bytes);
 
-        w.manifests.markUnavailable(id, T0.plusMillis(50));
+        w.markUnavailable(id, T0.plusMillis(50));
 
         assertChargeAcrossRestart(folder, w, id, 1031L);
     }
@@ -283,11 +283,11 @@ class OutputAccountingTest {
             e -> assertThat(e.code()).isEqualTo(ExecutionErrorCode.OUTPUT_CAPACITY));
         assertThat(Files.exists(w.file(id, PayloadKind.OUT))).isFalse();
         assertThat(Files.exists(w.file(id, PayloadKind.PART))).isFalse();
-        w.manifests.markUnavailable(id, T0.plusMillis(50));
+        w.markUnavailable(id, T0.plusMillis(50));
         assertThat(w.charge(id)).isZero();
 
         w.reserve(fixture.unbound(), 1024, T0);
-        OutputReservation second = w.manifests.reserve(fixture.unbound(), 1024, T0);
+        OutputReservation second = w.manifests.reserve(fixture.unbound(), 1024, T0, w.payloads.usable());
         assertThat(second).isEqualTo(new OutputReservation.BudgetExceeded(1024L, 1024L, 1024L));
     }
 
@@ -353,7 +353,7 @@ class OutputAccountingTest {
         w.append(id, StreamKind.STDOUT, "before transport loss");
         byte[] before = Files.readAllBytes(w.file(id, PayloadKind.STREAM));
 
-        w.manifests.markUnavailable(id, T0.plusMillis(50));
+        w.markUnavailable(id, T0.plusMillis(50));
 
         assertThat(Files.readAllBytes(w.file(id, PayloadKind.STREAM))).isEqualTo(before);
         assertThat(w.charge(id)).isEqualTo(26L);
@@ -367,7 +367,7 @@ class OutputAccountingTest {
         OutputWorld w = factory.create(folder, LIMITS);
         OutputId id = w.reserve(fixture.unbound(), 1024, T0);
         w.append(id, StreamKind.STDERR, "retain under maintenance");
-        w.manifests.markUnavailable(id, T0.plusMillis(50));
+        w.markUnavailable(id, T0.plusMillis(50));
         CommandOutputRow row = w.row(id);
         byte[] bytes = Files.readAllBytes(w.file(id, PayloadKind.STREAM));
         Instant now = T0.plusMillis(51);
@@ -388,7 +388,7 @@ class OutputAccountingTest {
     void capacityAndExpiryAreIndependentOfTheExecution(@TempDir Path folder) {
         OutputWorld w = factory.create(folder, ONE);
         OutputId interrupted = w.reserve(fixture.unbound(), 1024, T0);
-        assertThat(w.manifests.reserve(fixture.unbound(), 1024, T0)).isInstanceOf(OutputReservation.BudgetExceeded.class);
+        assertThat(w.manifests.reserve(fixture.unbound(), 1024, T0, w.payloads.usable())).isInstanceOf(OutputReservation.BudgetExceeded.class);
 
         OutputWorld restarted = factory.create(folder, ONE);
         restarted.startup.reconcile(T0);
@@ -400,7 +400,7 @@ class OutputAccountingTest {
         OutputId oversize = restarted.reserve(fixture.unbound(), 1024, later);
         assertThatThrownBy(() -> restarted.payloads.finish(oversize, utf8("{}"), utf8("x".repeat(2048)))).isInstanceOfSatisfying(RequestRefusedException.class,
             e -> assertThat(e.code()).isEqualTo(ExecutionErrorCode.OUTPUT_CAPACITY));
-        restarted.manifests.markUnavailable(oversize, later.plusMillis(50));
+        restarted.markUnavailable(oversize, later.plusMillis(50));
         assertThat(restarted.charge(oversize)).isZero();
         assertThat(restarted.manifests.find(oversize, later)).isInstanceOf(OutputLookup.Unavailable.class);
     }
@@ -421,7 +421,7 @@ class OutputAccountingTest {
 
         assertThat(allRows(w)).isEqualTo(rowsBefore);
         assertThat(Files.readAllBytes(w.file(id, PayloadKind.OUT))).isEqualTo(bytes);
-        assertThat(w.manifests.reserve(binding, 1024, now)).as("the expired baseline is not cleared by a reservation").isInstanceOf(OutputReservation.BudgetExceeded.class);
+        assertThat(w.manifests.reserve(binding, 1024, now, w.payloads.usable())).as("the expired baseline is not cleared by a reservation").isInstanceOf(OutputReservation.BudgetExceeded.class);
         assertThat(w.manifests.find(id, now)).as("retention never extends read authority").isInstanceOf(OutputLookup.Expired.class);
         OutputWorld restarted = factory.create(folder, ONE);
         restarted.startup.recover(now);
@@ -431,7 +431,7 @@ class OutputAccountingTest {
 
         assertThat(allRows(restarted)).isEmpty();
         assertThat(Files.exists(restarted.file(id, PayloadKind.OUT))).isFalse();
-        assertThat(restarted.manifests.reserve(binding, 1024, now)).isInstanceOf(OutputReservation.Reserved.class);
+        assertThat(restarted.manifests.reserve(binding, 1024, now, restarted.payloads.usable())).isInstanceOf(OutputReservation.Reserved.class);
     }
 
     @Test

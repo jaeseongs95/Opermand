@@ -144,6 +144,7 @@ class AssemblyContextTest {
         jdbc.update("DELETE FROM staged_action");
         jdbc.update("DELETE FROM artifact_chunk");
         jdbc.update("DELETE FROM artifact");
+        jdbc.update("UPDATE storage_budget SET charged_bytes = 0, item_count = 0 WHERE scope = 'ARTIFACT'");
     }
 
     @Test

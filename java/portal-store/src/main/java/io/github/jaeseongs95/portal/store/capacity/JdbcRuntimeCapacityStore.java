@@ -4,33 +4,24 @@ import java.util.HashSet;
 import java.util.Optional;
 import java.util.Set;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.data.jdbc.core.JdbcAggregateOperations;
 import org.springframework.data.relational.core.conversion.DbActionExecutionException;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.annotation.Isolation;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.capacity.CapacityState;
 import io.github.jaeseongs95.portal.app.capacity.RuntimeCapacityStore;
 import io.github.jaeseongs95.portal.domain.error.CapacityErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
-import io.github.jaeseongs95.portal.store.Savepoints;
 
 /**
  * {@link RuntimeCapacityStore} over {@code runtime_capacity} (one row, Spring Data JDBC {@code @Version}) and {@code runtime_capacity_target} (SSH_PORTAL-D-0124).
- * {@link #compareAndSet} delegates optimistic locking to Spring Data JDBC {@code @Version}: the winner increments {@code version} and replaces override rows in one transaction,
- * while a stale writer receives {@link OptimisticLockingFailureException} translated to {@code CAPACITY_REVISION_CONFLICT}.
+ * Transaction boundaries belong to the calling service (Principles 4.4); this repository opens no transactions and uses no savepoints.
+ * {@link #initialize} lets {@link org.springframework.dao.DuplicateKeyException} propagate so the caller rolls back the transaction and reads the winner in a fresh read-only transaction.
  */
 @Repository
 public class JdbcRuntimeCapacityStore implements RuntimeCapacityStore {
 
-    private static final Logger LOG = LoggerFactory.getLogger(JdbcRuntimeCapacityStore.class);
     private static final int THE_ROW = 1;
     private static final long FIRST_VERSION = 1L;
 
@@ -38,22 +29,16 @@ public class JdbcRuntimeCapacityStore implements RuntimeCapacityStore {
     private final RuntimeCapacityTargetRowRepository targets;
     private final JdbcAggregateOperations aggregates;
     private final CapacityMapper mapper;
-    private final TransactionTemplate transactions;
-    private final Savepoints savepoints;
 
     public JdbcRuntimeCapacityStore(RuntimeCapacityRowRepository capacities, RuntimeCapacityTargetRowRepository targets, JdbcAggregateOperations aggregates,
-                                    CapacityMapper mapper, PlatformTransactionManager transactionManager, Savepoints savepoints) {
+                                    CapacityMapper mapper) {
         this.capacities = capacities;
         this.targets = targets;
         this.aggregates = aggregates;
         this.mapper = mapper;
-        this.transactions = new TransactionTemplate(transactionManager);
-        this.savepoints = savepoints;
     }
 
-    /** The global row and the override rows are read in one snapshot so that a write that commits in between cannot mix two states. */
     @Override
-    @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
     public Optional<CapacityState> read() {
         return load();
     }
@@ -61,22 +46,15 @@ public class JdbcRuntimeCapacityStore implements RuntimeCapacityStore {
     @Override
     public CapacityState initialize(CapacityState initial) {
         requireDistinctTargets(initial);
-        Optional<CapacityState> existing = transactions.execute(status -> load());
-        if (existing != null && existing.isPresent()) {
+        Optional<CapacityState> existing = load();
+        if (existing.isPresent()) {
             return existing.orElseThrow();
         }
-        try {
-            savepoints.run(() -> insertFirst(initial));
-            return new CapacityState(FIRST_VERSION, initial.queueCapacity(), initial.maxConcurrency(), initial.targets());
-        } catch (DuplicateKeyException e) {
-            LOG.info("Another writer initialized the runtime capacity first; the stored state is used", e);
-            Optional<CapacityState> winner = transactions.execute(status -> load());
-            return winner == null ? initial : winner.orElseThrow(() -> new IllegalStateException("The runtime capacity row vanished after a duplicate insert", e));
-        }
+        insertFirst(initial);
+        return new CapacityState(FIRST_VERSION, initial.queueCapacity(), initial.maxConcurrency(), initial.targets());
     }
 
     @Override
-    @Transactional
     public CapacityState compareAndSet(long expectedVersion, CapacityState next) {
         requireDistinctTargets(next);
         if (expectedVersion < FIRST_VERSION) {

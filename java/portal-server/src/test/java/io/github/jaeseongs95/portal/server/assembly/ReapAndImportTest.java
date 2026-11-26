@@ -32,6 +32,7 @@ import io.github.jaeseongs95.portal.app.artifact.ChunkDigest;
 import io.github.jaeseongs95.portal.app.artifact.ImportResult;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
 import io.github.jaeseongs95.portal.app.remote.PayloadSource;
+import io.github.jaeseongs95.portal.app.storage.DiskCheck;
 import io.github.jaeseongs95.portal.app.storage.PayloadRead;
 import io.github.jaeseongs95.portal.app.storage.ReapPermission;
 import io.github.jaeseongs95.portal.app.storage.ReapReport;
@@ -81,6 +82,7 @@ class ReapAndImportTest {
         jdbc.update("DELETE FROM staged_action");
         jdbc.update("DELETE FROM artifact_chunk");
         jdbc.update("DELETE FROM artifact");
+        jdbc.update("UPDATE storage_budget SET charged_bytes = 0, item_count = 0 WHERE scope = 'ARTIFACT'");
         jdbc.update("DELETE FROM maintenance_reservation");
     }
 
@@ -152,7 +154,7 @@ class ReapAndImportTest {
     @DisplayName("RC-A-182 / S3-AR-02: an import that the budget refuses never opens its source and answers the refusal with its numbers")
     void anImportThatTheBudgetRefusesNeverOpensItsSource() {
         for (int i = 0; i < 10; i++) {
-            assertThat(registry.reserve(spec(9_500), clock.instant())).isInstanceOf(ArtifactReservation.Reserved.class);
+            assertThat(registry.reserve(spec(9_500), clock.instant(), DiskCheck.measure(payloads::usable))).isInstanceOf(ArtifactReservation.Reserved.class);
         }
         AtomicInteger opened = new AtomicInteger();
 
@@ -204,7 +206,7 @@ class ReapAndImportTest {
     private ArtifactId expiredArtifact(byte[] bytes) {
         ArtifactSpec expired = new ArtifactSpec(ArtifactDirection.UPLOAD, new FileName("old.bin"), bytes.length, new ArtifactOrigin.Transfer(), new ArtifactDestination.Unassigned(),
             OverwriteMode.REPLACE, Elevation.NONE, UploadProtocol.UNSPECIFIED, ArtifactRetention.RELEASABLE, Duration.ofNanos(1_000));
-        ArtifactId id = ((ArtifactReservation.Reserved) registry.reserve(expired, clock.instant())).id();
+        ArtifactId id = ((ArtifactReservation.Reserved) registry.reserve(expired, clock.instant(), DiskCheck.measure(payloads::usable))).id();
         payloads.append(id, 0, bytes);
         registry.append(id, 0, new ChunkDigest(bytes.length, DIGEST.digest(bytes)));
         registry.markReady(id, DIGEST.digest(bytes));

@@ -91,9 +91,9 @@ class MigrationFailureRecordTest {
     }
 
     @Test
-    @DisplayName("S-D0109-28: a script that failed after its DDL keeps the claim the DDL committed (no second row, the duplicate key is logged), the retry fails on the object that is there, and the operator's repair lets attempt 3 succeed")
-    void aHalfAppliedDdlScriptIsRepairedByTheOperator() {
-        String halfApplied = "CREATE TABLE half (n INTEGER NOT NULL); INSERT INTO no_such_table (n) VALUES (1)";
+    @DisplayName("S-D0109-28 / D-0141: a non-transactional DDL failure compensates created objects in reverse order so the next attempt with a fixed script succeeds automatically")
+    void aHalfAppliedDdlScriptIsCompensatedAutomatically() {
+        String halfApplied = "CREATE TABLE half (n INTEGER NOT NULL); CREATE INDEX ix_half_n ON half (n); INSERT INTO no_such_table (n) VALUES (1)";
         ch.qos.logback.classic.Logger runnerLog = (ch.qos.logback.classic.Logger) LoggerFactory.getLogger(MigrationRunner.class);
         ListAppender<ILoggingEvent> logged = new ListAppender<>();
         logged.start();
@@ -105,20 +105,28 @@ class MigrationFailureRecordTest {
             runnerLog.detachAppender(logged);
         }
         assertThat(history(jdbc, Phase.EXPAND)).as("the claim was committed by the DDL; the failure adds no second row").containsExactly("1/1/FAILED");
-        assertThat(tableExists(jdbc, "PUBLIC", "half")).as("the DDL stayed: the script is half applied").isTrue();
+        assertThat(tableExists(jdbc, "PUBLIC", "half")).as("compensating DROP TABLE cleaned up the partial DDL automatically (D-0141)").isFalse();
         assertThat(logged.list).as("the duplicate key of the failure record is logged, not swallowed").anySatisfy(event -> {
             assertThat(event.getLevel()).isEqualTo(Level.WARN);
             assertThat(event.getFormattedMessage()).contains("its attempt is in the history already");
         });
 
-        assertThatThrownBy(() -> new MigrationRunner(CLOCK, database).run(Phase.EXPAND, List.of(script(1, halfApplied)))).isInstanceOfSatisfying(MigrationException.class,
-            failure -> assertThat(failure.reason()).isEqualTo(Reason.MIGRATION_FAILED));
-        assertThat(history(jdbc, Phase.EXPAND)).as("the retry fails on the table that is there").containsExactly("1/1/FAILED", "1/2/FAILED");
-
-        // The operator's repair: drop what the script made, fix the script, start again. No history row is deleted or changed.
-        jdbc.execute("DROP TABLE half");
-        assertThat(new MigrationRunner(CLOCK, database).run(Phase.EXPAND, List.of(script(1, "CREATE TABLE half (n INTEGER NOT NULL); INSERT INTO half (n) VALUES (1)")))).isEqualTo(1);
-        assertThat(history(jdbc, Phase.EXPAND)).containsExactly("1/1/FAILED", "1/2/FAILED", "1/3/SUCCEEDED");
+        String fixed = "CREATE TABLE half (n INTEGER NOT NULL); CREATE INDEX ix_half_n ON half (n); INSERT INTO half (n) VALUES (1)";
+        assertThat(new MigrationRunner(CLOCK, database).run(Phase.EXPAND, List.of(script(1, fixed)))).isEqualTo(1);
+        assertThat(history(jdbc, Phase.EXPAND)).containsExactly("1/1/FAILED", "1/2/SUCCEEDED");
         assertThat(count(jdbc, "SELECT COUNT(*) FROM half")).isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("D-0141 crash-resume: if a prior crashed attempt left a FAILED history row and an already-created table, the next attempt resumes cleanly")
+    void aCrashedNonTransactionalDdlAttemptResumesCleanly() {
+        MigrationScript fixed = script(1, "CREATE TABLE crashed_half (n INTEGER NOT NULL); INSERT INTO crashed_half (n) VALUES (42)");
+        jdbc.execute("CREATE TABLE crashed_half (n INTEGER NOT NULL)");
+        jdbc.update("INSERT INTO portal_meta.expand_history (version, attempt, script, digest, applied_at, outcome) VALUES (1, 1, ?, ?, TIMESTAMP '2026-11-12 00:00:00', 'FAILED')",
+            fixed.file(), fixed.digest());
+
+        assertThat(new MigrationRunner(CLOCK, database).run(Phase.EXPAND, List.of(fixed))).isEqualTo(1);
+        assertThat(history(jdbc, Phase.EXPAND)).containsExactly("1/1/FAILED", "1/2/SUCCEEDED");
+        assertThat(count(jdbc, "SELECT COUNT(*) FROM crashed_half")).isEqualTo(1);
     }
 }

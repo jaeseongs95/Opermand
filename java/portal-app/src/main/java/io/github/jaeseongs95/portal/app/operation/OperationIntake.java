@@ -8,7 +8,12 @@ import java.util.function.Supplier;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.admission.AdmissionGate;
 import io.github.jaeseongs95.portal.app.audit.AuditAction;
@@ -17,11 +22,14 @@ import io.github.jaeseongs95.portal.app.journal.JournalInsert;
 import io.github.jaeseongs95.portal.app.journal.OperationJournal;
 import io.github.jaeseongs95.portal.app.journal.OperationQueueView;
 import io.github.jaeseongs95.portal.domain.approval.ApprovalPolicy;
+import io.github.jaeseongs95.portal.domain.approval.MaintenanceState;
 import io.github.jaeseongs95.portal.domain.approval.StartDecision;
 import io.github.jaeseongs95.portal.domain.error.DispatchFailure;
 import io.github.jaeseongs95.portal.domain.error.DispatchReason;
 import io.github.jaeseongs95.portal.domain.error.DispatchRefusedException;
 import io.github.jaeseongs95.portal.domain.error.DispatchStage;
+import io.github.jaeseongs95.portal.domain.error.ExecutionAttempt;
+import io.github.jaeseongs95.portal.domain.error.OperationErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
@@ -68,9 +76,26 @@ public class OperationIntake {
     private final OutcomeAudit outcomes;
     private final OperationWrites writes;
     private final Clock clock;
+    private final TransactionOperations readTx;
+    private final TransactionOperations writeTx;
+
+    @Autowired
+    public OperationIntake(OperationJournal journal, OperationQueueView queueView, MaintenanceView maintenance, CurrentTargets targets, ApprovalPolicy approvalPolicy,
+                           ApprovalJudge judge, OperationIdGenerator ids, OperationScheduler scheduler, ConcurrencyLimits limits, AdmissionGate gate, AuditGate audit,
+                           OutcomeAudit outcomes, OperationWrites writes, Clock clock, PlatformTransactionManager transactionManager) {
+        this(journal, queueView, maintenance, targets, approvalPolicy, judge, ids, scheduler, limits, gate, audit, outcomes, writes, clock,
+            readOnly(transactionManager), new TransactionTemplate(transactionManager));
+    }
 
     public OperationIntake(OperationJournal journal, OperationQueueView queueView, MaintenanceView maintenance, CurrentTargets targets, ApprovalPolicy approvalPolicy,
                            ApprovalJudge judge, OperationIdGenerator ids, OperationScheduler scheduler, ConcurrencyLimits limits, AdmissionGate gate, AuditGate audit, OutcomeAudit outcomes, OperationWrites writes, Clock clock) {
+        this(journal, queueView, maintenance, targets, approvalPolicy, judge, ids, scheduler, limits, gate, audit, outcomes, writes, clock,
+            TransactionOperations.withoutTransaction(), TransactionOperations.withoutTransaction());
+    }
+
+    private OperationIntake(OperationJournal journal, OperationQueueView queueView, MaintenanceView maintenance, CurrentTargets targets, ApprovalPolicy approvalPolicy,
+                            ApprovalJudge judge, OperationIdGenerator ids, OperationScheduler scheduler, ConcurrencyLimits limits, AdmissionGate gate, AuditGate audit,
+                            OutcomeAudit outcomes, OperationWrites writes, Clock clock, TransactionOperations readTx, TransactionOperations writeTx) {
         this.journal = journal;
         this.queueView = queueView;
         this.maintenance = maintenance;
@@ -85,6 +110,14 @@ public class OperationIntake {
         this.outcomes = outcomes;
         this.writes = writes;
         this.clock = clock;
+        this.readTx = readTx;
+        this.writeTx = writeTx;
+    }
+
+    private static TransactionOperations readOnly(PlatformTransactionManager transactionManager) {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        return tx;
     }
 
     /**
@@ -123,23 +156,40 @@ public class OperationIntake {
 
     private Operation accept(NewOperation spec, Supplier<OperationId> newId) {
         ResolvedTarget target = targets.requireAt(spec.targetId(), spec.targetRevision());
-        Optional<Operation> known = journal.findByRequestKey(spec.requestKey());
-        if (known.isPresent()) {
+        Optional<Operation> known = readTx.execute(status -> journal.findByRequestKey(spec.requestKey()));
+        if (known != null && known.isPresent()) {
             if (!known.orElseThrow().hasContract(spec.contractDigest())) {
                 throw new RequestRefusedException(RequestErrorCode.OPERATION_KEY_CONFLICT);
             }
             return known.orElseThrow();
         }
-        gate.require(approvalPolicy.admit(maintenance.state(), queueView.counts()));
+        readTx.executeWithoutResult(status -> gate.require(approvalPolicy.admit(maintenance.state(), queueView.counts())));
         Admission admission = judge.judge(spec, target);
         Runnable room = admission instanceof Admission.Queue ? () -> requireRoomInQueue(spec.targetId()) : () -> { };
-        room.run();
+        if (admission instanceof Admission.Queue) {
+            readTx.executeWithoutResult(status -> room.run());
+        }
         OperationId id = newId.get();
         Instant at = clock.instant();
         auditBeforeStoring(id, spec, admission);
         JournalInsert inserted;
         try {
-            inserted = journal.accept(spec, admission, id, at, room);
+            inserted = Objects.requireNonNull(writeTx.execute(status -> journal.accept(spec, admission, id, at, room)), "insert");
+        } catch (DuplicateKeyException e) {
+            // The write transaction rolled back cleanly (PostgreSQL-safe, no 25P02): check whether a peer won the request_key or ready_sequence in a fresh read-only transaction.
+            Optional<Operation> winner = readTx.execute(status -> journal.findByRequestKey(spec.requestKey()));
+            if (winner == null || winner.isEmpty()) {
+                RequestRefusedException conflict = new RequestRefusedException(OperationErrorCode.OPERATION_VERSION_CONFLICT, true, ExecutionAttempt.NOT_ATTEMPTED, e);
+                endAuditLines(DispatchStage.DECISION_AUDIT, id, conflict);
+                throw conflict;
+            }
+            Operation storedWinner = winner.orElseThrow();
+            if (!storedWinner.hasContract(spec.contractDigest())) {
+                RequestRefusedException keyConflict = new RequestRefusedException(RequestErrorCode.OPERATION_KEY_CONFLICT, e);
+                endAuditLines(DispatchStage.DECISION_AUDIT, id, keyConflict);
+                throw keyConflict;
+            }
+            inserted = new JournalInsert.Existing(storedWinner);
         } catch (RuntimeException e) {
             endAuditLines(DispatchStage.DECISION_AUDIT, id, e);
             throw e;
@@ -212,23 +262,23 @@ public class OperationIntake {
      */
     public Operation approve(OperationId id) {
         StartAuthority authority = new StartAuthority.Owner();
-        Operation operation = require(id);
+        record ApproveSnapshot(Operation operation, MaintenanceState maintenance) {
+        }
+        ApproveSnapshot snapshot = Objects.requireNonNull(readTx.execute(status -> new ApproveSnapshot(require(id), maintenance.state())), "snapshot");
+        Operation operation = snapshot.operation();
         ResolvedTarget target = targets.requireAt(operation.targetId(), operation.targetRevision());
         Instant now = clock.instant();
-        if (approvalPolicy.checkStart(operation, authority, maintenance.state(), now) instanceof StartDecision.Refused refused) {
+        if (approvalPolicy.checkStart(operation, authority, snapshot.maintenance(), now) instanceof StartDecision.Refused refused) {
             throw new DispatchRefusedException(refused.failure());
         }
         judge.checkBeforeOwnerApprove(operation, target);
-        requireRoomInQueue(operation.targetId());
+        readTx.executeWithoutResult(status -> requireRoomInQueue(operation.targetId()));
         audit.appendBefore(DispatchStage.START_AUDIT, new AuditEvent(AuditAction.EXECUTION_QUEUED, id, "authority " + authority.mode().wire()));
-        // The room is counted again inside the transaction of the write, after the place in the queue was read: an approval, or an intake, that commits in between cannot
-        // push the queue over its room. The one that loses the place is told OPERATION_VERSION_CONFLICT (retryable, not attempted) and the operation stays pending.
         Operation stored;
         try {
-            stored = journal.save(operation.enqueue(authority, now), operation.version(), () -> requireRoomInQueue(operation.targetId()));
+            stored = Objects.requireNonNull(writeTx.execute(status -> journal.save(operation.enqueue(authority, now), operation.version(),
+                () -> requireRoomInQueue(operation.targetId()))), "stored");
         } catch (RuntimeException e) {
-            // The line execution-queued is durable and the operation is not queued: it stays pending, and the line gets its end (the journal wins over the audit log). Only the
-            // write is inside the try: what follows the commit (the announcement) never ends the lines of an operation that is stored.
             endAuditLines(DispatchStage.START_AUDIT, id, e);
             throw e;
         }
@@ -238,7 +288,7 @@ public class OperationIntake {
 
     /** The owner refuses a pending operation; nothing ran. Any other state is refused at {@code REQUEST_STATE}: a queued operation is cancelled, not denied. */
     public Operation deny(OperationId id) {
-        Operation operation = require(id);
+        Operation operation = Objects.requireNonNull(readTx.execute(status -> require(id)), "operation");
         if (operation.state() != OperationState.PENDING) {
             throw new DispatchRefusedException(DispatchFailure.refused(DispatchReason.REQUEST_STATE, DispatchStage.REQUEST_STATE));
         }

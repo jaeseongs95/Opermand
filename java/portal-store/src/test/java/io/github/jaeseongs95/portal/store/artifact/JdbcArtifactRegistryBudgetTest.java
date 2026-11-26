@@ -45,15 +45,19 @@ class JdbcArtifactRegistryBudgetTest {
         this.registry = registry;
     }
 
+    private ArtifactReservation reserve(io.github.jaeseongs95.portal.app.artifact.ArtifactSpec spec) {
+        return registry.reserve(spec, fixtures.at(), ArtifactFixtures.UNLIMITED_DISK);
+    }
+
     @Test
     @DisplayName("RC-A-160 / S3-AR-02 (store half): when the budget is used up even a 1 byte file is refused as BudgetExceeded, with the numbers (the live rows), and no row is created")
     void aSmallFileIsRefusedByTheBudgetAndNothingIsStored() {
         for (int i = 0; i < 4; i++) {
-            fixtures.reservedId(registry.reserve(fixtures.upload(32), fixtures.at()));
+            fixtures.reservedId(reserve(fixtures.upload(32)));
         }
         List<ArtifactRecord> before = registry.holding();
 
-        ArtifactReservation refused = registry.reserve(fixtures.upload(1), fixtures.at());
+        ArtifactReservation refused = reserve(fixtures.upload(1));
 
         assertThat(refused).isEqualTo(new ArtifactReservation.BudgetExceeded(1, 128, 128));
         assertThat(registry.holding()).containsExactlyInAnyOrderElementsOf(before);
@@ -63,14 +67,14 @@ class JdbcArtifactRegistryBudgetTest {
     @Test
     @DisplayName("S-D0012-11 (store half): a row in DELETING charges nothing, so a file that cannot be deleted does not refuse new transfers; the same reservation is refused while the row is live")
     void aRowBeingDeletedChargesNothing() {
-        ArtifactId dying = fixtures.reservedId(registry.reserve(fixtures.upload(64), fixtures.at()));
-        fixtures.reservedId(registry.reserve(fixtures.upload(32), fixtures.at()));
-        assertThat(registry.reserve(fixtures.upload(64), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(64, 96, 128));
+        ArtifactId dying = fixtures.reservedId(reserve(fixtures.upload(64)));
+        fixtures.reservedId(reserve(fixtures.upload(32)));
+        assertThat(reserve(fixtures.upload(64))).isEqualTo(new ArtifactReservation.BudgetExceeded(64, 96, 128));
 
         registry.beginDelete(dying);
 
         assertThat(registry.budget().chargedBytes()).isEqualTo(32);
-        assertThat(registry.reserve(fixtures.upload(64), fixtures.at())).isInstanceOf(ArtifactReservation.Reserved.class);
+        assertThat(reserve(fixtures.upload(64))).isInstanceOf(ArtifactReservation.Reserved.class);
         assertThat(registry.deleting()).extracting(ArtifactRecord::id).containsExactly(dying);
     }
 
@@ -91,13 +95,13 @@ class JdbcArtifactRegistryBudgetTest {
     @Test
     @DisplayName("S-D0012-14 (store half): the announced size of a download is judged by the budget without the download's own charge: a 1 KB-like small file fits where the largest file would not, a size that does not fit is BudgetExceeded and changes nothing")
     void anAnnouncedSizeIsJudgedByTheBudget() {
-        ArtifactId download = fixtures.reservedId(registry.reserve(fixtures.download(0), fixtures.at()));
-        fixtures.reservedId(registry.reserve(fixtures.upload(60), fixtures.at()));
-        fixtures.reservedId(registry.reserve(fixtures.upload(40), fixtures.at()));
+        ArtifactId download = fixtures.reservedId(reserve(fixtures.download(0)));
+        fixtures.reservedId(reserve(fixtures.upload(60)));
+        fixtures.reservedId(reserve(fixtures.upload(40)));
 
-        assertThat(registry.sizeDownload(download, 28)).as("100 + 28 = 128 fits, although a whole file (64) would not").isEqualTo(new ArtifactReservation.Reserved(download));
+        assertThat(registry.sizeDownload(download, 28, ArtifactFixtures.UNLIMITED_DISK)).as("100 + 28 = 128 fits, although a whole file (64) would not").isEqualTo(new ArtifactReservation.Reserved(download));
         assertThat(registry.budget().chargedBytes()).isEqualTo(128);
-        assertThat(registry.sizeDownload(download, 29)).as("the own charge of 28 is not counted twice; 29 does not fit").isEqualTo(new ArtifactReservation.BudgetExceeded(29, 100, 128));
+        assertThat(registry.sizeDownload(download, 29, ArtifactFixtures.UNLIMITED_DISK)).as("the own charge of 28 is not counted twice; 29 does not fit").isEqualTo(new ArtifactReservation.BudgetExceeded(29, 100, 128));
         assertThat(registry.find(download).orElseThrow().spec().sizeBytes()).as("a refusal changes nothing").isEqualTo(28L);
         assertThat(registry.budget().chargedBytes()).isEqualTo(128);
     }
@@ -105,15 +109,15 @@ class JdbcArtifactRegistryBudgetTest {
     @Test
     @DisplayName("RC-B-063 (budget half): two 64 byte files fill a 128 byte budget across targets, the third is refused, a release lets it in, releasing all returns the budget to zero")
     void theBudgetIsGlobalAcrossTargets() {
-        ArtifactId alpha = fixtures.reservedId(registry.reserve(fixtures.upload(64, new PosixRemotePath("/tmp/a.bin"), new TargetId("alpha")), fixtures.at()));
-        ArtifactId beta = fixtures.reservedId(registry.reserve(fixtures.upload(64, new PosixRemotePath("/tmp/b.bin"), new TargetId("beta")), fixtures.at()));
+        ArtifactId alpha = fixtures.reservedId(reserve(fixtures.upload(64, new PosixRemotePath("/tmp/a.bin"), new TargetId("alpha"))));
+        ArtifactId beta = fixtures.reservedId(reserve(fixtures.upload(64, new PosixRemotePath("/tmp/b.bin"), new TargetId("beta"))));
 
-        assertThat(registry.reserve(fixtures.upload(64, new PosixRemotePath("/tmp/c.bin"), new TargetId("gamma")), fixtures.at()))
+        assertThat(reserve(fixtures.upload(64, new PosixRemotePath("/tmp/c.bin"), new TargetId("gamma"))))
             .isEqualTo(new ArtifactReservation.BudgetExceeded(64, 128, 128));
         assertThat(registry.holding()).hasSize(2);
 
         registry.release(alpha, ReleaseReason.REFUSED);
-        ArtifactId gamma = fixtures.reservedId(registry.reserve(fixtures.upload(64, new PosixRemotePath("/tmp/c.bin"), new TargetId("gamma")), fixtures.at()));
+        ArtifactId gamma = fixtures.reservedId(reserve(fixtures.upload(64, new PosixRemotePath("/tmp/c.bin"), new TargetId("gamma"))));
         registry.release(beta, ReleaseReason.REFUSED);
         registry.release(gamma, ReleaseReason.REFUSED);
         assertThat(registry.budget().chargedBytes()).isZero();
@@ -123,16 +127,16 @@ class JdbcArtifactRegistryBudgetTest {
     @Test
     @DisplayName("RC-B-068 (store half): a refused reservation changes nothing, a released one gives its bytes back at once, and the remaining budget is what the next request sees")
     void aRefusedReservationLeavesTheBudgetAlone() {
-        ArtifactId first = fixtures.reservedId(registry.reserve(fixtures.upload(64), fixtures.at()));
-        ArtifactId second = fixtures.reservedId(registry.reserve(fixtures.upload(64), fixtures.at()));
+        ArtifactId first = fixtures.reservedId(reserve(fixtures.upload(64)));
+        ArtifactId second = fixtures.reservedId(reserve(fixtures.upload(64)));
         long charged = registry.budget().chargedBytes();
 
-        assertThat(registry.reserve(fixtures.upload(1), fixtures.at())).isInstanceOf(ArtifactReservation.BudgetExceeded.class);
+        assertThat(reserve(fixtures.upload(1))).isInstanceOf(ArtifactReservation.BudgetExceeded.class);
         assertThat(registry.budget().chargedBytes()).isEqualTo(charged);
 
         registry.release(first, ReleaseReason.REFUSED);
         assertThat(registry.budget().remainingBytes()).isEqualTo(64);
-        assertThat(fixtures.reservedId(registry.reserve(fixtures.upload(64), fixtures.at()))).isNotEqualTo(second);
+        assertThat(fixtures.reservedId(reserve(fixtures.upload(64)))).isNotEqualTo(second);
     }
 
     @Test
@@ -140,34 +144,34 @@ class JdbcArtifactRegistryBudgetTest {
     void emptyFilesChargeOneByteEach() {
         List<ArtifactId> ids = new ArrayList<>();
         for (int i = 0; i < 128; i++) {
-            ids.add(fixtures.reservedId(registry.reserve(fixtures.upload(0), fixtures.at())));
+            ids.add(fixtures.reservedId(reserve(fixtures.upload(0))));
         }
 
         assertThat(ids).hasSize(128);
         assertThat(registry.budget().chargedBytes()).isEqualTo(128);
-        assertThat(registry.reserve(fixtures.upload(0), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(0, 128, 128));
+        assertThat(reserve(fixtures.upload(0))).isEqualTo(new ArtifactReservation.BudgetExceeded(0, 128, 128));
     }
 
     @Test
     @DisplayName("RC-A-180: a file over the per-file limit is refused as FileTooLarge with the limit, even when the budget has room")
     void aFileOverTheLimitIsRefused() {
-        assertThat(registry.reserve(fixtures.upload(65), fixtures.at())).isEqualTo(new ArtifactReservation.FileTooLarge(65, 64));
+        assertThat(reserve(fixtures.upload(65))).isEqualTo(new ArtifactReservation.FileTooLarge(65, 64));
         assertThat(registry.holding()).isEmpty();
-        assertThat(fixtures.reservedId(registry.reserve(fixtures.upload(64), fixtures.at()))).isNotNull();
+        assertThat(fixtures.reservedId(reserve(fixtures.upload(64)))).isNotNull();
     }
 
     @Test
     @DisplayName("RC-A-181: with the budget full a further begin is refused; once the expired partial upload is released the capacity is free again")
     void releasingAnExpiredUploadFreesTheCapacity() {
-        ArtifactId filler = fixtures.reservedId(registry.reserve(fixtures.upload(64), fixtures.at()));
-        ArtifactId partial = fixtures.reservedId(registry.reserve(fixtures.upload(64), fixtures.at()));
-        assertThat(registry.reserve(fixtures.upload(4), fixtures.at())).isInstanceOf(ArtifactReservation.BudgetExceeded.class);
+        ArtifactId filler = fixtures.reservedId(reserve(fixtures.upload(64)));
+        ArtifactId partial = fixtures.reservedId(reserve(fixtures.upload(64)));
+        assertThat(reserve(fixtures.upload(4))).isInstanceOf(ArtifactReservation.BudgetExceeded.class);
 
         List<ArtifactRecord> expired = registry.expired(ArtifactFixtures.T0.plus(Duration.ofMinutes(10)));
         assertThat(expired).extracting(ArtifactRecord::id).containsExactlyInAnyOrder(filler, partial);
         expired.forEach(record -> registry.release(record.id(), ReleaseReason.EXPIRED));
 
         assertThat(registry.budget().chargedBytes()).isZero();
-        assertThat(registry.reserve(fixtures.upload(4), fixtures.at())).isInstanceOf(ArtifactReservation.Reserved.class);
+        assertThat(reserve(fixtures.upload(4))).isInstanceOf(ArtifactReservation.Reserved.class);
     }
 }

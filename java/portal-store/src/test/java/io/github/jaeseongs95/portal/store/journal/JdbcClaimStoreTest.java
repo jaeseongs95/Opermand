@@ -8,6 +8,7 @@ import java.util.List;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 
 import io.github.jaeseongs95.portal.app.journal.ClaimResult;
@@ -27,6 +28,7 @@ import io.github.jaeseongs95.portal.domain.operation.OperationState;
 import io.github.jaeseongs95.portal.domain.operation.ReconciliationEvidence;
 import io.github.jaeseongs95.portal.domain.schedule.ConcurrencyLimits;
 import io.github.jaeseongs95.portal.domain.schedule.SaturationReason;
+import io.github.jaeseongs95.portal.store.TestSavepoints;
 
 @JournalTest
 class JdbcClaimStoreTest {
@@ -36,12 +38,14 @@ class JdbcClaimStoreTest {
     private final JdbcOperationJournal journal;
     private final JdbcClaimStore claims;
     private final JdbcTemplate jdbc;
+    private final TestSavepoints savepoints;
     private final JournalFixture fx = new JournalFixture();
 
-    JdbcClaimStoreTest(JdbcOperationJournal journal, JdbcClaimStore claims, JdbcTemplate jdbc) {
+    JdbcClaimStoreTest(JdbcOperationJournal journal, JdbcClaimStore claims, JdbcTemplate jdbc, TestSavepoints savepoints) {
         this.journal = journal;
         this.claims = claims;
         this.jdbc = jdbc;
+        this.savepoints = savepoints;
     }
 
     private static ConcurrencyLimits limits(int global, int target) {
@@ -154,11 +158,15 @@ class JdbcClaimStoreTest {
         Operation independent = queued("independent", "alpha", new ConflictKey.Of("independent"));
 
         Operation startingFirst = claimed(first, limits);
-        assertThat(claims.claim(second.id(), second.version(), limits, AT)).as("the key is held while the first runs").isInstanceOf(ClaimResult.Contended.class);
+        assertThatThrownBy(() -> savepoints.run(() -> claims.claim(second.id(), second.version(), limits, AT)))
+            .as("the key is held while the first runs; DuplicateKeyException propagates so the caller's transaction rolls back cleanly")
+            .isInstanceOf(DuplicateKeyException.class);
         claimed(independent, limits);
 
         Operation unknown = lost(startingFirst);
-        assertThat(claims.claim(second.id(), second.version(), limits, AT)).as("an operation of unknown outcome keeps its key").isInstanceOf(ClaimResult.Contended.class);
+        assertThatThrownBy(() -> savepoints.run(() -> claims.claim(second.id(), second.version(), limits, AT)))
+            .as("an operation of unknown outcome keeps its key")
+            .isInstanceOf(DuplicateKeyException.class);
 
         journal.save(unknown.reconcile(new ReconciliationEvidence.Failed(), AT.plusSeconds(30)), unknown.version());
         assertThat(claims.claim(second.id(), second.version(), limits, AT)).as("a reconciled operation frees its key").isInstanceOf(ClaimResult.Claimed.class);
@@ -174,5 +182,17 @@ class JdbcClaimStoreTest {
 
         claimed(first, limits);
         assertThat(claims.claim(other.id(), other.version(), limits, AT)).isInstanceOf(ClaimResult.Claimed.class);
+    }
+
+    @Test
+    @DisplayName("B4-TX: claiming with an instant slightly behind updatedAt clamps to updatedAt so clock skew does not fail the claim")
+    void claimClampsInstantBehindUpdatedAt() {
+        Operation queued = queued("skew", "alpha", new ConflictKey.None());
+        Instant behind = queued.updatedAt().minusSeconds(5);
+
+        ClaimResult result = claims.claim(queued.id(), queued.version(), limits(2, 1), behind);
+
+        assertThat(result).isInstanceOf(ClaimResult.Claimed.class);
+        assertThat(((ClaimResult.Claimed) result).operation().updatedAt()).isEqualTo(queued.updatedAt());
     }
 }

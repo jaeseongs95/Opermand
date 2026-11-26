@@ -7,7 +7,6 @@ import java.util.Optional;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.jdbc.core.JdbcAggregateOperations;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Transactional;
 
 import io.github.jaeseongs95.portal.app.cli.AgentCliBinding;
 import io.github.jaeseongs95.portal.app.cli.AgentCliHistoryPage;
@@ -45,7 +44,6 @@ public class JdbcAgentCliRequestStore implements AgentCliRequestStore {
     }
 
     @Override
-    @Transactional
     public void insert(AgentCliInstallRecord record) {
         try {
             aggregates.insert(mapper.row(record));
@@ -56,20 +54,17 @@ public class JdbcAgentCliRequestStore implements AgentCliRequestStore {
     }
 
     @Override
-    @Transactional(readOnly = true)
     public Optional<AgentCliInstallRecord> findByOperation(OperationId operationId) {
         return requests.findById(operationId.value()).map(mapper::record);
     }
 
     @Override
-    @Transactional
     public RemoteStatus recordRemote(OperationId operationId, RemoteStatus status) {
         AgentCliRequestRow row = requests.findById(operationId.value()).orElseThrow(() -> new RequestRefusedException(RequestErrorCode.OPERATION_NOT_FOUND));
         return mapper.remote(aggregates.update(mapper.withRemote(row, status)));
     }
 
     @Override
-    @Transactional(readOnly = true)
     public AgentCliHistoryPage history(AgentCliBinding binding, HistoryCursor after) {
         AgentCliHistoryReader.Slice slice = reader.slice(binding, after);
         List<AgentCliHistoryPage.Entry> entries = new ArrayList<>();

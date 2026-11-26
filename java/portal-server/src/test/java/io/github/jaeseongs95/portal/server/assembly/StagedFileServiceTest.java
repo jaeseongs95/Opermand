@@ -34,6 +34,7 @@ import io.github.jaeseongs95.portal.app.file.StagedFileService;
 import io.github.jaeseongs95.portal.app.file.StagedPlacement;
 import io.github.jaeseongs95.portal.app.file.StagedPlacementRequest;
 import io.github.jaeseongs95.portal.app.maintenance.MaintenanceStore;
+import io.github.jaeseongs95.portal.app.storage.DiskCheck;
 import io.github.jaeseongs95.portal.domain.error.ArtifactErrorCode;
 import io.github.jaeseongs95.portal.domain.error.ErrorCode;
 import io.github.jaeseongs95.portal.domain.error.ExecutionErrorCode;
@@ -94,6 +95,7 @@ class StagedFileServiceTest {
         jdbc.update("DELETE FROM staged_action");
         jdbc.update("DELETE FROM artifact_chunk");
         jdbc.update("DELETE FROM artifact");
+        jdbc.update("UPDATE storage_budget SET charged_bytes = 0, item_count = 0 WHERE scope = 'ARTIFACT'");
         jdbc.update("DELETE FROM maintenance_reservation");
     }
 
@@ -154,7 +156,7 @@ class StagedFileServiceTest {
         ArtifactUuid uuid = new io.github.jaeseongs95.portal.domain.id.ArtifactUuidGenerator(new java.security.SecureRandom()).next();
         ArtifactSpec spec = new ArtifactSpec(ArtifactDirection.UPLOAD, new FileName("f.bin"), 10, new ArtifactOrigin.Staged(uuid, OWNER, "expire-key-0000000001"),
             new ArtifactDestination.Unassigned(), OverwriteMode.REPLACE, Elevation.NONE, UploadProtocol.MCP_JSON_V1, ArtifactRetention.RELEASABLE, Duration.ofNanos(1_000));
-        assertThat(registry.reserve(spec, clock.instant())).isInstanceOf(ArtifactReservation.Reserved.class);
+        assertThat(registry.reserve(spec, clock.instant(), DiskCheck.measure(payloads::usable))).isInstanceOf(ArtifactReservation.Reserved.class);
         byte[] bytes = bytes(10, 1);
 
         assertThatThrownBy(() -> staged.append(OWNER, uuid, 0, bytes, DIGEST.digest(bytes))).isInstanceOfSatisfying(RequestRefusedException.class,
@@ -292,6 +294,21 @@ class StagedFileServiceTest {
             .containsExactly(StagedActionState.REFUSED);
     }
 
+    @Test
+    @DisplayName("B4-TX: removing a STAGING file deletes partial bytes and leaves a REMOVED tombstone charging one byte")
+    void removingAStagingFileSucceeds() {
+        ArtifactUuid uuid = begin("staging-remove-key-1", 10);
+        byte[] first = bytes(4, 9);
+        staged.append(OWNER, uuid, 0, first, DIGEST.digest(first));
+
+        ArtifactRecord removed = staged.remove(OWNER, uuid);
+
+        assertThat(removed.state()).isEqualTo(ArtifactState.CONSUMED);
+        assertThat(removed.consumption()).isEqualTo(new ConsumeState.ConsumedBecause(ConsumeReason.REMOVED));
+        assertThat(payloads.stored()).doesNotContain(removed.id());
+        assertThat(registry.budget().chargedBytes()).isEqualTo(1L);
+    }
+
     // ---- helpers ----
 
     private byte[] bytes(int length, int fill) {
@@ -320,6 +337,6 @@ class StagedFileServiceTest {
     private void reserveFiller() {
         ArtifactSpec spec = new ArtifactSpec(ArtifactDirection.UPLOAD, new FileName("filler.bin"), 9_500, new ArtifactOrigin.Transfer(),
             new ArtifactDestination.Unassigned(), OverwriteMode.REPLACE, Elevation.NONE, UploadProtocol.UNSPECIFIED, ArtifactRetention.RELEASABLE, Duration.ofMinutes(10));
-        assertThat(registry.reserve(spec, clock.instant())).isInstanceOf(ArtifactReservation.Reserved.class);
+        assertThat(registry.reserve(spec, clock.instant(), DiskCheck.measure(payloads::usable))).isInstanceOf(ArtifactReservation.Reserved.class);
     }
 }

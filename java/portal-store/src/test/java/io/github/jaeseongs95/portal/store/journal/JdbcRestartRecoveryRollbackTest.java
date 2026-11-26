@@ -9,15 +9,17 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.domain.error.OperationErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.operation.ConflictKey;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
 
-/** RC-A-487: the recovery is one transaction. This class runs without the slice's own transaction, so that the rollback of the recovery's transaction is the one tested. */
+/** RC-A-487: the recovery is one caller-owned transaction (Principles 4.4). This class runs without the slice's own transaction, so that the rollback of the recovery's transaction is the one tested. */
 @JournalTest
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
 class JdbcRestartRecoveryRollbackTest {
@@ -25,12 +27,14 @@ class JdbcRestartRecoveryRollbackTest {
     private final JdbcOperationJournal journal;
     private final JdbcRestartRecovery recovery;
     private final JdbcTemplate jdbc;
+    private final TransactionTemplate tx;
     private final JournalFixture fx = new JournalFixture();
 
-    JdbcRestartRecoveryRollbackTest(JdbcOperationJournal journal, JdbcRestartRecovery recovery, JdbcTemplate jdbc) {
+    JdbcRestartRecoveryRollbackTest(JdbcOperationJournal journal, JdbcRestartRecovery recovery, JdbcTemplate jdbc, PlatformTransactionManager transactionManager) {
         this.journal = journal;
         this.recovery = recovery;
         this.jdbc = jdbc;
+        this.tx = new TransactionTemplate(transactionManager);
     }
 
     @AfterEach
@@ -44,13 +48,13 @@ class JdbcRestartRecoveryRollbackTest {
     @DisplayName("RC-A-487: when one stored operation cannot be recovered, none is: the journal is as it was before the recovery")
     void aFailureRollsBackEveryChange() {
         // Two operations that wait for the owner: the recovery expires both (a queued operation would be left alone and could not show a rollback).
-        Operation first = fx.pending(journal, fx.command("first", "alpha", "echo 1", new ConflictKey.None()));
-        Operation second = fx.pending(journal, fx.command("second", "alpha", "echo 2", new ConflictKey.None()));
+        Operation first = tx.execute(status -> fx.pending(journal, fx.command("first", "alpha", "echo 1", new ConflictKey.None())));
+        Operation second = tx.execute(status -> fx.pending(journal, fx.command("second", "alpha", "echo 2", new ConflictKey.None())));
         jdbc.update("DELETE FROM operation_command WHERE operation_id = ?", second.id().value());
         long events = jdbc.queryForObject("SELECT COUNT(*) FROM operation_event", Long.class);
 
-        assertThatThrownBy(() -> recovery.recoverAfterRestart(JournalFixture.NOW.plusSeconds(60))).isInstanceOfSatisfying(RequestRefusedException.class,
-            e -> assertThat(e.code()).isEqualTo(OperationErrorCode.INVALID_OPERATION_RECORD));
+        assertThatThrownBy(() -> tx.executeWithoutResult(status -> recovery.recoverAfterRestart(JournalFixture.NOW.plusSeconds(60))))
+            .isInstanceOfSatisfying(RequestRefusedException.class, e -> assertThat(e.code()).isEqualTo(OperationErrorCode.INVALID_OPERATION_RECORD));
 
         assertThat(jdbc.queryForList("SELECT state FROM operation", String.class)).containsExactly("PENDING", "PENDING");
         assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM operation_event", Long.class)).isEqualTo(events);

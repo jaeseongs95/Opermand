@@ -141,7 +141,7 @@ class OutputReaperTest {
         }
 
         @Override
-        public OutputReservation reserve(OutputBinding binding, long expectedBytes, Instant at) {
+        public OutputReservation reserve(OutputBinding binding, long expectedBytes, Instant at, DiskSpace disk) {
             throw new IllegalStateException("not used");
         }
 
@@ -156,7 +156,7 @@ class OutputReaperTest {
         }
 
         @Override
-        public void markUnavailable(OutputId id, Instant expiresAt) {
+        public void markUnavailable(OutputId id, Instant expiresAt, RetainedBytes retained) {
             throw new IllegalStateException("not used");
         }
 

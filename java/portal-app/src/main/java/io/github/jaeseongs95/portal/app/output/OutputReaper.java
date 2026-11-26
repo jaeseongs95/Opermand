@@ -1,11 +1,17 @@
 package io.github.jaeseongs95.portal.app.output;
 
 import java.time.Clock;
+import java.util.List;
+import java.util.Objects;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.storage.ReapGate;
 import io.github.jaeseongs95.portal.app.storage.ReapPermission;
@@ -26,12 +32,32 @@ public class OutputReaper {
     private final OutputPayloadStore payloads;
     private final ReapGate gate;
     private final Clock clock;
+    private final TransactionOperations readTx;
+    private final TransactionOperations writeTx;
+
+    @Autowired
+    public OutputReaper(OutputManifestStore manifests, OutputPayloadStore payloads, ReapGate gate, Clock clock, PlatformTransactionManager transactionManager) {
+        this(manifests, payloads, gate, clock, readOnly(transactionManager), new TransactionTemplate(transactionManager));
+    }
 
     public OutputReaper(OutputManifestStore manifests, OutputPayloadStore payloads, ReapGate gate, Clock clock) {
+        this(manifests, payloads, gate, clock, TransactionOperations.withoutTransaction(), TransactionOperations.withoutTransaction());
+    }
+
+    private OutputReaper(OutputManifestStore manifests, OutputPayloadStore payloads, ReapGate gate, Clock clock,
+                         TransactionOperations readTx, TransactionOperations writeTx) {
         this.manifests = manifests;
         this.payloads = payloads;
         this.gate = gate;
         this.clock = clock;
+        this.readTx = readTx;
+        this.writeTx = writeTx;
+    }
+
+    private static TransactionOperations readOnly(PlatformTransactionManager transactionManager) {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        return tx;
     }
 
     /** One run. The scheduler calls {@link #reapOnSchedule()}; a caller that wants the report calls this. */
@@ -41,18 +67,16 @@ public class OutputReaper {
         }
         int removed = 0;
         int failed = 0;
-        for (OutputManifest expired : manifests.expired(clock.instant())) {
+        List<OutputManifest> expiredOutputs = Objects.requireNonNull(readTx.execute(status -> manifests.expired(clock.instant())), "expired");
+        for (OutputManifest expired : expiredOutputs) {
             if (expired.state() == OutputState.PENDING) {
-                // A command still captures into it, or the last run stopped in the middle: its bytes are not the reaper's to delete (defect D-0162). The finish or the give-up
-                // of the run ends the state, and the start-up check gives up what a stop left pending.
                 continue;
             }
             try {
                 payloads.delete(expired.id());
-                manifests.delete(expired.id());
+                writeTx.executeWithoutResult(status -> manifests.delete(expired.id()));
                 removed++;
             } catch (RuntimeException e) {
-                // One output that cannot be removed must not stop the others; it is listed again by the next run.
                 failed++;
                 LOG.warn("The expired output {} could not be removed and stays until the next run", expired.id().value(), e);
             }

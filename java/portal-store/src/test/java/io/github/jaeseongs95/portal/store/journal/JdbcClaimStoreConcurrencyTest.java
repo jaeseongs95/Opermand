@@ -15,20 +15,26 @@ import java.util.concurrent.TimeoutException;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.journal.ClaimResult;
 import io.github.jaeseongs95.portal.domain.capacity.Capacity;
+import io.github.jaeseongs95.portal.domain.error.ExecutionAttempt;
+import io.github.jaeseongs95.portal.domain.error.OperationErrorCode;
+import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.operation.ConflictKey;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
 import io.github.jaeseongs95.portal.domain.schedule.ConcurrencyLimits;
 import io.github.jaeseongs95.portal.domain.schedule.SaturationReason;
 
 /**
- * S2-DB-06: claims from two threads. The slice does not wrap these tests in a transaction (every call commits on its own, as in the product), so the rows are removed
- * after each test.
+ * S2-DB-06: claims from two threads. The slice does not wrap these tests in a transaction (each call runs inside a caller-owned transaction via {@link TransactionTemplate},
+ * matching the service-layer boundary in Principles 4.4), so the rows are removed after each test.
  */
 @JournalTest
 @Transactional(propagation = Propagation.NOT_SUPPORTED)
@@ -40,12 +46,14 @@ class JdbcClaimStoreConcurrencyTest {
     private final JdbcOperationJournal journal;
     private final JdbcClaimStore claims;
     private final JdbcTemplate jdbc;
+    private final TransactionTemplate tx;
     private final JournalFixture fx = new JournalFixture();
 
-    JdbcClaimStoreConcurrencyTest(JdbcOperationJournal journal, JdbcClaimStore claims, JdbcTemplate jdbc) {
+    JdbcClaimStoreConcurrencyTest(JdbcOperationJournal journal, JdbcClaimStore claims, JdbcTemplate jdbc, PlatformTransactionManager transactionManager) {
         this.journal = journal;
         this.claims = claims;
         this.jdbc = jdbc;
+        this.tx = new TransactionTemplate(transactionManager);
     }
 
     @AfterEach
@@ -115,7 +123,16 @@ class JdbcClaimStoreConcurrencyTest {
             for (Operation operation : List.of(first, second)) {
                 futures.add(pool.submit(() -> {
                     together.await(10, TimeUnit.SECONDS);
-                    return claims.claim(operation.id(), operation.version(), limits, JournalFixture.NOW.plusSeconds(10));
+                    try {
+                        return tx.execute(status -> claims.claim(operation.id(), operation.version(), limits, JournalFixture.NOW.plusSeconds(10)));
+                    } catch (DuplicateKeyException e) {
+                        return new ClaimResult.Contended();
+                    } catch (RequestRefusedException e) {
+                        if (e.code() == OperationErrorCode.OPERATION_VERSION_CONFLICT) {
+                            return new ClaimResult.NotQueued();
+                        }
+                        throw e;
+                    }
                 }));
             }
             List<ClaimResult> results = new ArrayList<>();
@@ -138,8 +155,10 @@ class JdbcClaimStoreConcurrencyTest {
     private Object accept(String key, int number, Runnable beforeInsert) {
         io.github.jaeseongs95.portal.domain.operation.NewOperation spec = fx.command(key, "alpha", "touch " + key, new io.github.jaeseongs95.portal.domain.operation.ConflictKey.None());
         try {
-            return journal.accept(spec, QUEUED, id(number), JournalFixture.NOW, beforeInsert);
-        } catch (io.github.jaeseongs95.portal.domain.error.RequestRefusedException refused) {
+            return tx.execute(status -> journal.accept(spec, QUEUED, id(number), JournalFixture.NOW, beforeInsert));
+        } catch (DuplicateKeyException e) {
+            return new RequestRefusedException(OperationErrorCode.OPERATION_VERSION_CONFLICT, true, ExecutionAttempt.NOT_ATTEMPTED, e);
+        } catch (RequestRefusedException refused) {
             return refused;
         }
     }
@@ -234,7 +253,7 @@ class JdbcClaimStoreConcurrencyTest {
         try {
             Future<Object> approval = pool.submit(() -> {
                 try {
-                    return journal.save(pending.enqueue(new io.github.jaeseongs95.portal.domain.operation.StartAuthority.Owner(), JournalFixture.NOW.plusSeconds(1)), pending.version(), () -> {
+                    return tx.execute(status -> journal.save(pending.enqueue(new io.github.jaeseongs95.portal.domain.operation.StartAuthority.Owner(), JournalFixture.NOW.plusSeconds(1)), pending.version(), () -> {
                         roomOfOne.run();
                         counted.countDown();
                         try {
@@ -242,7 +261,7 @@ class JdbcClaimStoreConcurrencyTest {
                         } catch (InterruptedException e) {
                             Thread.currentThread().interrupt();
                         }
-                    });
+                    }));
                 } catch (io.github.jaeseongs95.portal.domain.error.RequestRefusedException refused) {
                     return refused;
                 }

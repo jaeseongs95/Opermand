@@ -45,8 +45,8 @@ import io.github.jaeseongs95.portal.domain.id.TargetId;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
 import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
 import io.github.jaeseongs95.portal.domain.target.TargetRevision;
-import io.github.jaeseongs95.portal.store.Savepoints;
 import io.github.jaeseongs95.portal.store.StoreTest;
+import io.github.jaeseongs95.portal.store.TestSavepoints;
 import io.github.jaeseongs95.portal.store.sql.SqlBuilder;
 
 /**
@@ -67,10 +67,10 @@ class JdbcAgentCliRequestStoreTest {
     private final JdbcAgentCliRequestStore store;
     private final AgentCliHistoryReader reader;
     private final JdbcTemplate jdbc;
-    private final Savepoints savepoints;
+    private final TestSavepoints savepoints;
     private final SqlBuilder sql;
 
-    JdbcAgentCliRequestStoreTest(JdbcAgentCliRequestStore store, AgentCliHistoryReader reader, JdbcTemplate jdbc, Savepoints savepoints, SqlBuilder sql) {
+    JdbcAgentCliRequestStoreTest(JdbcAgentCliRequestStore store, AgentCliHistoryReader reader, JdbcTemplate jdbc, TestSavepoints savepoints, SqlBuilder sql) {
         this.store = store;
         this.reader = reader;
         this.jdbc = jdbc;
@@ -316,7 +316,7 @@ class JdbcAgentCliRequestStoreTest {
 
         assertThatThrownBy(() -> store.recordRemote(operationId(98), completed)).isInstanceOfSatisfying(RequestRefusedException.class,
             e -> assertThat(e.code()).isEqualTo(RequestErrorCode.OPERATION_NOT_FOUND));
-        assertThatThrownBy(() -> store.insert(record)).isInstanceOf(RequestRefusedException.class);
+        assertThatThrownBy(() -> savepoints.run(() -> store.insert(record))).isInstanceOf(RequestRefusedException.class);
     }
 
     /**

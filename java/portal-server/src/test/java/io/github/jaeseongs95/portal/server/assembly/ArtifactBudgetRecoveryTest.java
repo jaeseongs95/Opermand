@@ -57,6 +57,7 @@ import io.github.jaeseongs95.portal.app.remote.ExecutionControl;
 import io.github.jaeseongs95.portal.app.remote.FileDiagnostic;
 import io.github.jaeseongs95.portal.app.remote.TransferLimits;
 import io.github.jaeseongs95.portal.app.remote.SinkResult;
+import io.github.jaeseongs95.portal.app.storage.DiskCheck;
 import io.github.jaeseongs95.portal.app.storage.DiskSpace;
 import io.github.jaeseongs95.portal.app.storage.PayloadRead;
 import io.github.jaeseongs95.portal.app.storage.PayloadWrite;
@@ -141,6 +142,7 @@ class ArtifactBudgetRecoveryTest {
         jdbc.update("DELETE FROM staged_action");
         jdbc.update("DELETE FROM artifact_chunk");
         jdbc.update("DELETE FROM artifact");
+        jdbc.update("UPDATE storage_budget SET charged_bytes = 0, item_count = 0 WHERE scope = 'ARTIFACT'");
     }
 
     /** The quarantine is the one place the store never deletes from; the test removes what it put there, so the shared context sees none of it. */
@@ -183,7 +185,7 @@ class ArtifactBudgetRecoveryTest {
         payloads.quarantine(LEGACY);
         assertThat(Files.size(quarantined(LEGACY))).as("more than the whole 100,000 byte budget is in quarantine").isEqualTo(150_000);
 
-        ArtifactReservation upload = registry.reserve(uploadSpec(1_090), clock.instant());
+        ArtifactReservation upload = registry.reserve(uploadSpec(1_090), clock.instant(), DiskCheck.measure(payloads::usable));
         remote.served = new byte[850];
         DownloadExecution download = downloads.download(downloadJob(), CONTROL);
 
@@ -344,7 +346,7 @@ class ArtifactBudgetRecoveryTest {
     void aRowThatCannotBeDeletedDoesNotEatTheBudget() {
         ArtifactId stuck = aRowThatAFailedDiscardLeftDeleting();
         for (int i = 0; i < 10; i++) {
-            assertThat(registry.reserve(uploadSpec(9_500), clock.instant())).isInstanceOf(ArtifactReservation.Reserved.class);
+            assertThat(registry.reserve(uploadSpec(9_500), clock.instant(), DiskCheck.measure(payloads::usable))).isInstanceOf(ArtifactReservation.Reserved.class);
         }
         List<ILoggingEvent> log = captureReaperLog();
         ArtifactReaper lockedReaper = new ArtifactReaper(registry, new UndeletablePayloads(payloads), gate, clock, quarantine);
@@ -355,7 +357,7 @@ class ArtifactBudgetRecoveryTest {
         assertThat(registry.find(stuck).orElseThrow().state()).isEqualTo(ArtifactState.DELETING);
         assertThat(registry.budget().chargedBytes()).as("the ten uploads only").isEqualTo(95_000L);
         assertThat(log).filteredOn(event -> event.getLevel() == Level.WARN).hasSize(2).allSatisfy(event -> assertThat(event.getThrowableProxy()).isNotNull());
-        assertThat(registry.reserve(uploadSpec(5_000), clock.instant())).as("the budget answers for the live rows, the disk check for the space").isInstanceOf(ArtifactReservation.Reserved.class);
+        assertThat(registry.reserve(uploadSpec(5_000), clock.instant(), DiskCheck.measure(payloads::usable))).as("the budget answers for the live rows, the disk check for the space").isInstanceOf(ArtifactReservation.Reserved.class);
     }
 
     @Test
@@ -364,7 +366,7 @@ class ArtifactBudgetRecoveryTest {
         ArtifactId stuck = expiredArtifact(new byte[9_000]);
         registry.beginConsume(stuck, ConsumeReason.REMOVED);
         for (int i = 0; i < 10; i++) {
-            assertThat(registry.reserve(uploadSpec(9_500), clock.instant())).isInstanceOf(ArtifactReservation.Reserved.class);
+            assertThat(registry.reserve(uploadSpec(9_500), clock.instant(), DiskCheck.measure(payloads::usable))).isInstanceOf(ArtifactReservation.Reserved.class);
         }
         ArtifactReaper lockedReaper = new ArtifactReaper(registry, new UndeletablePayloads(payloads), gate, clock, quarantine);
 
@@ -372,7 +374,7 @@ class ArtifactBudgetRecoveryTest {
 
         assertThat(registry.find(stuck).orElseThrow().state()).isEqualTo(ArtifactState.CONSUMING);
         assertThat(registry.budget().chargedBytes()).as("the ten uploads only: the 9,000 byte file in use charges nothing").isEqualTo(95_000L);
-        assertThat(registry.reserve(uploadSpec(5_000), clock.instant())).isInstanceOf(ArtifactReservation.Reserved.class);
+        assertThat(registry.reserve(uploadSpec(5_000), clock.instant(), DiskCheck.measure(payloads::usable))).isInstanceOf(ArtifactReservation.Reserved.class);
 
         assertThat(reaper.reap()).as("the disk works again").isEqualTo(new ReapReport.Reaped(1, 0));
         assertThat(registry.find(stuck).orElseThrow().state()).isEqualTo(ArtifactState.CONSUMED);
@@ -400,17 +402,17 @@ class ArtifactBudgetRecoveryTest {
     void aDownloadSinkNeedsTheSizeFirst() {
         ArtifactSpec spec = new ArtifactSpec(ArtifactDirection.DOWNLOAD, new FileName("d.bin"), 0L, new ArtifactOrigin.Transfer(), new ArtifactDestination.Unassigned(), OverwriteMode.REPLACE,
             Elevation.NONE, UploadProtocol.UNSPECIFIED, ArtifactRetention.RELEASABLE, Duration.ofMinutes(10));
-        ArtifactId first = ((ArtifactReservation.Reserved) registry.reserve(spec, clock.instant())).id();
+        ArtifactId first = ((ArtifactReservation.Reserved) registry.reserve(spec, clock.instant(), DiskCheck.measure(payloads::usable))).id();
         ArtifactSink blind = new ArtifactSink(first, payloads, registry, digester);
         assertThat(blind.append(new byte[] {1})).as("no size announced").isInstanceOf(SinkResult.Failed.class);
 
-        ArtifactId second = ((ArtifactReservation.Reserved) registry.reserve(spec, clock.instant())).id();
+        ArtifactId second = ((ArtifactReservation.Reserved) registry.reserve(spec, clock.instant(), DiskCheck.measure(payloads::usable))).id();
         ArtifactSink sized = new ArtifactSink(second, payloads, registry, digester);
         assertThat(sized.expect(3)).isInstanceOf(SinkResult.Accepted.class);
         assertThat(sized.append(new byte[] {1, 2, 3})).isInstanceOf(SinkResult.Accepted.class);
         assertThat(sized.append(new byte[] {4})).as("beyond the announced size").isInstanceOf(SinkResult.Failed.class);
 
-        ArtifactId third = ((ArtifactReservation.Reserved) registry.reserve(spec, clock.instant())).id();
+        ArtifactId third = ((ArtifactReservation.Reserved) registry.reserve(spec, clock.instant(), DiskCheck.measure(payloads::usable))).id();
         ArtifactSink tooBig = new ArtifactSink(third, payloads, registry, digester);
         assertThat(tooBig.expect(limits.maxFileSize().toBytes() + 1)).isInstanceOf(SinkResult.Failed.class);
         assertThat(tooBig.refusal()).containsInstanceOf(ArtifactReservation.FileTooLarge.class);
@@ -432,7 +434,7 @@ class ArtifactBudgetRecoveryTest {
     private ArtifactId expiredArtifact(byte[] bytes) {
         ArtifactSpec expired = new ArtifactSpec(ArtifactDirection.UPLOAD, new FileName("old.bin"), bytes.length, new ArtifactOrigin.Transfer(), new ArtifactDestination.Unassigned(),
             OverwriteMode.REPLACE, Elevation.NONE, UploadProtocol.UNSPECIFIED, ArtifactRetention.RELEASABLE, Duration.ofNanos(1_000));
-        ArtifactId id = ((ArtifactReservation.Reserved) registry.reserve(expired, clock.instant())).id();
+        ArtifactId id = ((ArtifactReservation.Reserved) registry.reserve(expired, clock.instant(), DiskCheck.measure(payloads::usable))).id();
         payloads.append(id, 0, bytes);
         registry.append(id, 0, new ChunkDigest(bytes.length, digester.digest(bytes)));
         registry.markReady(id, digester.digest(bytes));

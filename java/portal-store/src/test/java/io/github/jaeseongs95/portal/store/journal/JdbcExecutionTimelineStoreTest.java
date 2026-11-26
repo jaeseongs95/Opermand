@@ -41,7 +41,7 @@ import io.github.jaeseongs95.portal.domain.operation.SignalDelivery;
 import io.github.jaeseongs95.portal.domain.operation.StreamCapture;
 import io.github.jaeseongs95.portal.domain.operation.TimeoutMs;
 import io.github.jaeseongs95.portal.domain.schedule.ConcurrencyLimits;
-import io.github.jaeseongs95.portal.store.Savepoints;
+import io.github.jaeseongs95.portal.store.TestSavepoints;
 
 /**
  * The execution timeline of an operation (migration V7, decision D3-04, defect D-0038) and the failure code that V7 lets the result store
@@ -56,10 +56,10 @@ class JdbcExecutionTimelineStoreTest {
     private final JdbcOperationJournal journal;
     private final JdbcClaimStore claims;
     private final JdbcExecutionTimelineStore timelines;
-    private final Savepoints savepoints;
+    private final TestSavepoints savepoints;
     private final JournalFixture fx = new JournalFixture();
 
-    JdbcExecutionTimelineStoreTest(JdbcOperationJournal journal, JdbcClaimStore claims, JdbcExecutionTimelineStore timelines, Savepoints savepoints) {
+    JdbcExecutionTimelineStoreTest(JdbcOperationJournal journal, JdbcClaimStore claims, JdbcExecutionTimelineStore timelines, TestSavepoints savepoints) {
         this.journal = journal;
         this.claims = claims;
         this.timelines = timelines;

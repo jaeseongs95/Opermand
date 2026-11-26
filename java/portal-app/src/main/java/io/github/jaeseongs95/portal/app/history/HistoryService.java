@@ -7,6 +7,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import io.github.jaeseongs95.portal.app.journal.HistoryCursor;
 import io.github.jaeseongs95.portal.app.journal.HistoryFilter;
@@ -70,6 +71,7 @@ public class HistoryService {
     }
 
     /** The page of the history that follows {@code after} for the filter. */
+    @Transactional(readOnly = true)
     public HistoryResult page(HistoryFilter filter, HistoryCursor after) {
         Objects.requireNonNull(filter, "filter");
         Objects.requireNonNull(after, "after");
@@ -95,6 +97,7 @@ public class HistoryService {
     }
 
     /** One operation with its full public metadata; one that does not exist or is not listed (its target is not registered) is {@code OPERATION_NOT_FOUND}. */
+    @Transactional(readOnly = true)
     public HistoryEntry entry(OperationId id) {
         Objects.requireNonNull(id, "id");
         Operation operation = query.publicMetadata(id).orElseThrow(() -> new RequestRefusedException(RequestErrorCode.OPERATION_NOT_FOUND));

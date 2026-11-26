@@ -18,8 +18,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.FileSystemUtils;
 
 import io.github.jaeseongs95.portal.app.artifact.ArtifactPayloadStore;
@@ -28,6 +30,7 @@ import io.github.jaeseongs95.portal.app.artifact.ArtifactRecord;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRegistry;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactReservation;
 import io.github.jaeseongs95.portal.app.artifact.ReleaseReason;
+import io.github.jaeseongs95.portal.app.storage.DiskCheck;
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
 import io.github.jaeseongs95.portal.store.StorageRoots;
 import io.github.jaeseongs95.portal.store.StoreTest;
@@ -65,9 +68,11 @@ class ArtifactRetainedBudgetTest {
     private final StagedActionRowRepository actions;
     private final ArtifactChunkRowRepository chunks;
     private final ArtifactRowRepository artifacts;
+    private final TransactionTemplate tx;
 
     ArtifactRetainedBudgetTest(ArtifactRegistry registry, ArtifactPayloadStore payloads, ArtifactStartupCheck startup, StorageRoots roots,
-                               StagedActionRowRepository actions, ArtifactChunkRowRepository chunks, ArtifactRowRepository artifacts) {
+                               StagedActionRowRepository actions, ArtifactChunkRowRepository chunks, ArtifactRowRepository artifacts,
+                               PlatformTransactionManager transactionManager) {
         this.registry = registry;
         this.payloads = payloads;
         this.startup = startup;
@@ -75,6 +80,7 @@ class ArtifactRetainedBudgetTest {
         this.actions = actions;
         this.chunks = chunks;
         this.artifacts = artifacts;
+        this.tx = new TransactionTemplate(transactionManager);
     }
 
     @AfterEach
@@ -82,6 +88,7 @@ class ArtifactRetainedBudgetTest {
         actions.deleteAll();
         chunks.deleteAll();
         artifacts.deleteAll();
+        tx.executeWithoutResult(status -> registry.reconcileBudget());
         try {
             FileSystemUtils.deleteRecursively(roots.artifacts());
         } catch (IOException e) {
@@ -106,7 +113,7 @@ class ArtifactRetainedBudgetTest {
         assertThat(registry.budget().retainedBytes()).as("retained").isEqualTo(33);
         assertThat(registry.budget().chargedBytes()).as("not charged").isZero();
         assertThat(registry.holding()).as("nothing live is reserved").isEmpty();
-        ArtifactId live = fixtures.reservedId(registry.reserve(fixtures.upload(1), fixtures.at()));
+        ArtifactId live = fixtures.reservedId(registry.reserve(fixtures.upload(1), fixtures.at(), DiskCheck.measure(payloads::usable)));
         assertThat(registry.budget().chargedBytes()).as("only the new transfer is charged").isEqualTo(1);
         registry.release(live, ReleaseReason.REFUSED);
         assertThat(registry.expired(ArtifactFixtures.T0.plus(Duration.ofHours(2)))).isEmpty();
@@ -133,11 +140,11 @@ class ArtifactRetainedBudgetTest {
         assertThat(registry.budget().retainedBytes()).as("retained").isEqualTo(8);
         assertThat(registry.budget().chargedBytes()).as("not charged").isZero();
         assertThat(registry.holding()).as("live reserved 0").isEmpty();
-        ArtifactId live = fixtures.reservedId(registry.reserve(fixtures.upload(16), fixtures.at()));
-        ArtifactId second = fixtures.reservedId(registry.reserve(fixtures.upload(16), fixtures.at()));
+        ArtifactId live = fixtures.reservedId(registry.reserve(fixtures.upload(16), fixtures.at(), DiskCheck.measure(payloads::usable)));
+        ArtifactId second = fixtures.reservedId(registry.reserve(fixtures.upload(16), fixtures.at(), DiskCheck.measure(payloads::usable)));
         assertThat(registry.budget().chargedBytes()).as("16 and 16 live fill the budget, the 8 held do not count").isEqualTo(32);
         assertThat(registry.budget().remainingBytes()).isZero();
-        assertThat(registry.reserve(fixtures.upload(1), fixtures.at())).isEqualTo(new ArtifactReservation.BudgetExceeded(1, 32, 32));
+        assertThat(registry.reserve(fixtures.upload(1), fixtures.at(), DiskCheck.measure(payloads::usable))).isEqualTo(new ArtifactReservation.BudgetExceeded(1, 32, 32));
         assertThat(startup.reconcile().quarantined()).as("the second start").isEmpty();
         assertThat(registry.budget().chargedBytes()).isEqualTo(32);
         assertThat(registry.budget().retainedBytes()).isEqualTo(8);

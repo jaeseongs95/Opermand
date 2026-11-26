@@ -18,8 +18,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRegistry;
 import io.github.jaeseongs95.portal.app.artifact.ArtifactRecord;
@@ -59,13 +61,15 @@ class JdbcArtifactRegistryConcurrencyTest {
     private final StagedActionRowRepository actions;
     private final ArtifactChunkRowRepository chunks;
     private final ArtifactRowRepository artifacts;
+    private final TransactionTemplate tx;
 
     JdbcArtifactRegistryConcurrencyTest(ArtifactRegistry registry, StagedActionRowRepository actions, ArtifactChunkRowRepository chunks,
-                                        ArtifactRowRepository artifacts) {
+                                        ArtifactRowRepository artifacts, PlatformTransactionManager transactionManager) {
         this.registry = registry;
         this.actions = actions;
         this.chunks = chunks;
         this.artifacts = artifacts;
+        this.tx = new TransactionTemplate(transactionManager);
     }
 
     @AfterEach
@@ -73,6 +77,7 @@ class JdbcArtifactRegistryConcurrencyTest {
         actions.deleteAll();
         chunks.deleteAll();
         artifacts.deleteAll();
+        tx.executeWithoutResult(status -> registry.reconcileBudget());
     }
 
     @Test
@@ -93,7 +98,7 @@ class JdbcArtifactRegistryConcurrencyTest {
     @Test
     @DisplayName("RC-A-161 / RC-A-164: two callers that acknowledge the same chunk number at once: exactly one wins, the other gets ARTIFACT_CHUNK_CONFLICT, one chunk row exists")
     void theSameChunkNumberIsAcknowledgedOnce() throws Exception {
-        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.upload(8), fixtures.at()));
+        ArtifactId id = fixtures.reservedId(tx.execute(status -> registry.reserve(fixtures.upload(8), fixtures.at(), ArtifactFixtures.UNLIMITED_DISK)));
 
         List<Optional<ErrorCode>> outcomes = race(() -> registry.append(id, 0, fixtures.chunk(fixtures.bytes(4, 1))),
             () -> registry.append(id, 0, fixtures.chunk(fixtures.bytes(4, 1))));
@@ -147,7 +152,7 @@ class JdbcArtifactRegistryConcurrencyTest {
 
     private Optional<ErrorCode> attempt(Runnable call) {
         try {
-            call.run();
+            tx.executeWithoutResult(status -> call.run());
             return Optional.empty();
         } catch (RequestRefusedException e) {
             LOG.debug("The call was refused", e);

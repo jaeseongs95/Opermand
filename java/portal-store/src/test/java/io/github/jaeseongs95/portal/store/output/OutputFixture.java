@@ -10,6 +10,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 
 import io.github.jaeseongs95.portal.app.output.OutputBinding;
 import io.github.jaeseongs95.portal.app.output.OutputTarget;
+import io.github.jaeseongs95.portal.app.storage.DiskSpace;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
 import io.github.jaeseongs95.portal.domain.id.TargetId;
 import io.github.jaeseongs95.portal.domain.target.TargetRevision;
@@ -19,6 +20,8 @@ import io.github.jaeseongs95.portal.domain.target.TargetRevision;
  * NOT NULL columns of V1 only. The test double of the journal is not needed here: the output store never reads the operation.
  */
 final class OutputFixture {
+
+    static final DiskSpace UNLIMITED_DISK = new DiskSpace(Long.MAX_VALUE);
 
     /** The column holds the UTC date and time of the moment (D-0161), whatever zone the JVM of the run is in. */
     private static final LocalDateTime CREATED = LocalDateTime.ofInstant(Instant.parse("2026-11-12T00:00:00Z"), ZoneOffset.UTC);
@@ -56,5 +59,6 @@ final class OutputFixture {
         jdbc.update("DELETE FROM command_output_format");
         jdbc.update("DELETE FROM command_output");
         jdbc.update("DELETE FROM operation");
+        jdbc.update("UPDATE storage_budget SET charged_bytes = 0, item_count = 0 WHERE scope = 'OUTPUT'");
     }
 }

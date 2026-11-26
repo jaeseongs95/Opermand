@@ -1,9 +1,22 @@
 package io.github.jaeseongs95.portal.server.usecase;
 
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.CallableStatement;
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.Set;
 
+import javax.sql.DataSource;
+
+import org.springframework.beans.BeansException;
+import org.springframework.beans.factory.config.BeanPostProcessor;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.ComponentScan;
@@ -156,5 +169,109 @@ class UseCaseWiring {
     @Bean
     UseCaseKit kit(Digester digester, FixedTargets targets, ChangeWaiters waiters, OperationJournal journal) {
         return new UseCaseKit(digester, targets, waiters, journal);
+    }
+
+    /** Enforces PostgreSQL aborted-transaction semantics (SQLState 25P02) on the embedded H2 DataSource across all @UseCaseTest suites. */
+    @Bean
+    static BeanPostProcessor pgAbortedTransactionDataSource() {
+        Set<String> creators = Set.of("createStatement", "prepareStatement", "prepareCall");
+        Set<String> executors = Set.of("execute", "executeQuery", "executeUpdate", "executeBatch", "executeLargeUpdate", "executeLargeBatch");
+        return new BeanPostProcessor() {
+            @Override
+            public Object postProcessAfterInitialization(Object bean, String beanName) throws BeansException {
+                if (!(bean instanceof DataSource dataSource)) {
+                    return bean;
+                }
+                return Proxy.newProxyInstance(UseCaseWiring.class.getClassLoader(), new Class<?>[] {DataSource.class}, (proxy, method, args) -> {
+                    Object result = invoke(dataSource, method, args);
+                    if ("getConnection".equals(method.getName()) && result instanceof Connection connection) {
+                        return proxyConnection(connection, creators, executors);
+                    }
+                    return result;
+                });
+            }
+        };
+    }
+
+    private static Connection proxyConnection(Connection delegate, Set<String> creators, Set<String> executors) {
+        boolean[] aborted = {false};
+        return (Connection) Proxy.newProxyInstance(UseCaseWiring.class.getClassLoader(), new Class<?>[] {Connection.class}, (proxy, method, args) -> {
+            String name = method.getName();
+            if ("rollback".equals(name) || "close".equals(name) || ("setAutoCommit".equals(name) && args != null && args.length == 1 && Boolean.TRUE.equals(args[0]))) {
+                aborted[0] = false;
+                return invoke(delegate, method, args);
+            }
+            if ("commit".equals(name) && aborted[0]) {
+                aborted[0] = false;
+                delegate.rollback();
+                throw aborted25P02();
+            }
+            if (creators.contains(name)) {
+                if (aborted[0]) {
+                    throw aborted25P02();
+                }
+                Object created;
+                try {
+                    created = invoke(delegate, method, args);
+                } catch (SQLException e) {
+                    markAborted(delegate, aborted);
+                    throw e;
+                }
+                if (created instanceof CallableStatement c) {
+                    return proxyStatement(c, CallableStatement.class, delegate, aborted, executors);
+                }
+                if (created instanceof PreparedStatement p) {
+                    return proxyStatement(p, PreparedStatement.class, delegate, aborted, executors);
+                }
+                if (created instanceof Statement s) {
+                    return proxyStatement(s, Statement.class, delegate, aborted, executors);
+                }
+                return created;
+            }
+            if (("setSavepoint".equals(name) || "releaseSavepoint".equals(name)) && aborted[0]) {
+                throw aborted25P02();
+            }
+            return invoke(delegate, method, args);
+        });
+    }
+
+    @SuppressWarnings("unchecked")
+    private static <T extends Statement> T proxyStatement(T statement, Class<T> iface, Connection connection, boolean[] aborted, Set<String> executors) {
+        return (T) Proxy.newProxyInstance(UseCaseWiring.class.getClassLoader(), new Class<?>[] {iface}, (proxy, method, args) -> {
+            if (executors.contains(method.getName())) {
+                if (aborted[0]) {
+                    throw aborted25P02();
+                }
+                try {
+                    return invoke(statement, method, args);
+                } catch (SQLException e) {
+                    markAborted(connection, aborted);
+                    throw e;
+                }
+            }
+            return invoke(statement, method, args);
+        });
+    }
+
+    private static void markAborted(Connection connection, boolean[] aborted) {
+        try {
+            if (!connection.getAutoCommit()) {
+                aborted[0] = true;
+            }
+        } catch (SQLException ignored) {
+            // Connection already closed.
+        }
+    }
+
+    private static SQLException aborted25P02() {
+        return new SQLException("ERROR: current transaction is aborted, commands ignored until end of transaction block", "25P02");
+    }
+
+    private static Object invoke(Object target, Method method, Object[] args) throws Throwable {
+        try {
+            return method.invoke(target, args);
+        } catch (InvocationTargetException e) {
+            throw e.getTargetException();
+        }
     }
 }

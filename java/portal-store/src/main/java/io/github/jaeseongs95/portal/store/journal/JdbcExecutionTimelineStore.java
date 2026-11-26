@@ -5,7 +5,6 @@ import java.util.Objects;
 
 import org.springframework.data.jdbc.core.JdbcAggregateOperations;
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Transactional;
 
 import io.github.jaeseongs95.portal.app.history.ExecutionTimelineStore;
 import io.github.jaeseongs95.portal.app.remote.ExecutionPhase;
@@ -31,7 +30,6 @@ public class JdbcExecutionTimelineStore implements ExecutionTimelineStore {
     }
 
     @Override
-    @Transactional
     public void record(OperationId operationId, ExecutionTimeline timeline) {
         Objects.requireNonNull(operationId, "operationId");
         Objects.requireNonNull(timeline, "timeline");
@@ -41,7 +39,6 @@ public class JdbcExecutionTimelineStore implements ExecutionTimelineStore {
     }
 
     @Override
-    @Transactional(readOnly = true)
     public ExecutionTimeline timelineOf(OperationId operationId) {
         Objects.requireNonNull(operationId, "operationId");
         return results.findById(operationId.value()).map(this::timelineOf).orElseGet(ExecutionTimeline::empty);

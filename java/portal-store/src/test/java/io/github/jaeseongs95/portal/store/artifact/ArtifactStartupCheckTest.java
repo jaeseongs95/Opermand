@@ -22,8 +22,10 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.util.FileSystemUtils;
 
 import io.github.jaeseongs95.portal.app.artifact.ArtifactPayloadStore;
@@ -34,6 +36,7 @@ import io.github.jaeseongs95.portal.app.artifact.ArtifactState;
 import io.github.jaeseongs95.portal.app.artifact.ConsumeReason;
 import io.github.jaeseongs95.portal.app.artifact.ConsumeState;
 import io.github.jaeseongs95.portal.app.artifact.QuarantineNotice;
+import io.github.jaeseongs95.portal.app.storage.DiskCheck;
 import io.github.jaeseongs95.portal.domain.error.ArtifactErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
@@ -75,9 +78,11 @@ class ArtifactStartupCheckTest {
     private final ArtifactRowRepository artifacts;
     private final Digester digester;
     private final QuarantineNotice quarantine;
+    private final TransactionTemplate tx;
 
     ArtifactStartupCheckTest(ArtifactRegistry registry, ArtifactPayloadStore payloads, ArtifactStartupCheck startup, StorageRoots roots,
-                             StagedActionRowRepository actions, ArtifactChunkRowRepository chunks, ArtifactRowRepository artifacts, Digester digester, QuarantineNotice quarantine) {
+                             StagedActionRowRepository actions, ArtifactChunkRowRepository chunks, ArtifactRowRepository artifacts, Digester digester,
+                             QuarantineNotice quarantine, PlatformTransactionManager transactionManager) {
         this.digester = digester;
         this.quarantine = quarantine;
         this.registry = registry;
@@ -87,6 +92,7 @@ class ArtifactStartupCheckTest {
         this.actions = actions;
         this.chunks = chunks;
         this.artifacts = artifacts;
+        this.tx = new TransactionTemplate(transactionManager);
     }
 
     @AfterEach
@@ -94,6 +100,7 @@ class ArtifactStartupCheckTest {
         actions.deleteAll();
         chunks.deleteAll();
         artifacts.deleteAll();
+        tx.executeWithoutResult(status -> registry.reconcileBudget());
         try {
             FileSystemUtils.deleteRecursively(roots.artifacts());
         } catch (IOException e) {
@@ -102,10 +109,14 @@ class ArtifactStartupCheckTest {
         }
     }
 
+    private ArtifactId reserve(ArtifactSpec spec) {
+        return fixtures.reservedId(registry.reserve(spec, fixtures.at(), DiskCheck.measure(payloads::usable)));
+    }
+
     @Test
     @DisplayName("RC-A-162 / RC-B-093: a payload longer than the acknowledged bytes is cut back to them at start-up; a second run changes nothing")
     void anUnacknowledgedTailIsCutBack() {
-        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.upload(16), fixtures.at()));
+        ArtifactId id = reserve(fixtures.upload(16));
         byte[] acknowledged = {1, 2, 3, 4};
         appendBoth(id, 0, 0, acknowledged);
         payloads.append(id, 4, "uncommitted".getBytes(StandardCharsets.UTF_8));
@@ -123,7 +134,7 @@ class ArtifactStartupCheckTest {
     @Test
     @DisplayName("RC-A-162: acknowledged bytes that were changed are refused (the start is refused) and the changed file is left as it is")
     void aTamperedChunkRefusesTheStart() throws IOException {
-        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.upload(16), fixtures.at()));
+        ArtifactId id = reserve(fixtures.upload(16));
         appendBoth(id, 0, 0, new byte[] {1, 2, 3, 4});
         byte[] tampered = {9, 9, 9, 9};
         Files.write(file(id), tampered);
@@ -136,7 +147,7 @@ class ArtifactStartupCheckTest {
     @Test
     @DisplayName("RC-A-162: a payload shorter than the acknowledged bytes, or one that is missing, refuses the start")
     void aShorterOrMissingPayloadRefusesTheStart() throws IOException {
-        ArtifactId shorter = fixtures.reservedId(registry.reserve(fixtures.upload(16), fixtures.at()));
+        ArtifactId shorter = reserve(fixtures.upload(16));
         appendBoth(shorter, 0, 0, new byte[] {1, 2, 3, 4});
         Files.write(file(shorter), new byte[] {1, 2});
         assertCorrupted(shorter, ArtifactStoreCorruptedException.Reason.PAYLOAD_SHORTER);
@@ -148,7 +159,7 @@ class ArtifactStartupCheckTest {
     @Test
     @DisplayName("S2-DB-09: the bytes are on disk before the metadata; when the metadata commit fails the byte tail is there, and the start-up check cuts it off so the chunk can be sent again")
     void aFailedMetadataCommitLeavesATailThatStartupCutsOff() {
-        ArtifactId id = fixtures.reservedId(registry.reserve(fixtures.upload(4), fixtures.at()));
+        ArtifactId id = reserve(fixtures.upload(4));
         byte[] chunk = {5, 6, 7, 8};
 
         payloads.append(id, 0, chunk);
@@ -169,7 +180,7 @@ class ArtifactStartupCheckTest {
     @Test
     @DisplayName("S-D0012-19: bytes that cannot be deleted at the start do not refuse the start: a WARN with the cause is logged for each, the DELETING and the CONSUMING row stay (charging nothing), and the next start with a working disk finishes both")
     void aDeletionThatFailsAtTheStartDoesNotRefuseIt() {
-        ArtifactId dying = fixtures.reservedId(registry.reserve(fixtures.upload(8), fixtures.at()));
+        ArtifactId dying = reserve(fixtures.upload(8));
         appendBoth(dying, 0, 0, new byte[] {1, 2, 3, 4});
         registry.beginDelete(dying);
         ArtifactId using = readyWithFile(fixtures.stagedFile(4), new byte[] {5, 5, 5, 5});
@@ -213,10 +224,10 @@ class ArtifactStartupCheckTest {
     @Test
     @DisplayName("RC-A-167: a row marked for deletion has its bytes deleted and its row released, whether the file is still there or not")
     void aCommittedDeletionIsFinished() {
-        ArtifactId withFile = fixtures.reservedId(registry.reserve(fixtures.upload(8), fixtures.at()));
+        ArtifactId withFile = reserve(fixtures.upload(8));
         appendBoth(withFile, 0, 0, new byte[] {1, 2, 3, 4});
         registry.beginDelete(withFile);
-        ArtifactId withoutFile = fixtures.reservedId(registry.reserve(fixtures.upload(8), fixtures.at()));
+        ArtifactId withoutFile = reserve(fixtures.upload(8));
         registry.beginDelete(withoutFile);
 
         ArtifactReconciliation report = startup.reconcile();
@@ -277,7 +288,7 @@ class ArtifactStartupCheckTest {
         ArtifactId finished = readyWithFile(fixtures.upload(4), new byte[] {1, 1, 1, 1});
         ArtifactId pending = readyWithFile(fixtures.upload(4), new byte[] {2, 2, 2, 2});
         registry.submit(pending, new OperationId("a".repeat(48)));
-        ArtifactId partial = fixtures.reservedId(registry.reserve(fixtures.download(8), fixtures.at()));
+        ArtifactId partial = reserve(fixtures.download(8));
         appendBoth(partial, 0, 0, new byte[] {3, 3, 3, 3});
         ArtifactRecord pendingBefore = registry.find(pending).orElseThrow();
         ArtifactRecord partialBefore = registry.find(partial).orElseThrow();
@@ -301,7 +312,7 @@ class ArtifactStartupCheckTest {
     @DisplayName("RC-A-181 / RC-B-094: an empty file has no payload file and is not an error; a reserved file that never received a byte is not an error either")
     void filesWithoutBytesAreNotErrors() {
         ArtifactId empty = fixtures.readyArtifact(registry, fixtures.upload(0), new byte[0]);
-        ArtifactId reserved = fixtures.reservedId(registry.reserve(fixtures.upload(4), fixtures.at()));
+        ArtifactId reserved = reserve(fixtures.upload(4));
 
         ArtifactReconciliation report = startup.reconcile();
 
@@ -363,7 +374,7 @@ class ArtifactStartupCheckTest {
     }
 
     private ArtifactId readyWithFile(ArtifactSpec spec, byte[] bytes) {
-        ArtifactId id = fixtures.reservedId(registry.reserve(spec, fixtures.at()));
+        ArtifactId id = reserve(spec);
         appendBoth(id, 0, 0, bytes);
         registry.markReady(id, fixtures.digest(bytes));
         return id;

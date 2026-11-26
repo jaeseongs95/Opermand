@@ -9,7 +9,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Repository;
-import org.springframework.transaction.annotation.Transactional;
 
 import io.github.jaeseongs95.portal.app.journal.RestartRecovery;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
@@ -37,7 +36,6 @@ public class JdbcRestartRecovery implements RestartRecovery {
     }
 
     @Override
-    @Transactional
     public List<Operation> recoverAfterRestart(Instant at) {
         List<Operation> changed = new ArrayList<>();
         for (OperationRow row : operations.findByStateIn(IN_FLIGHT)) {

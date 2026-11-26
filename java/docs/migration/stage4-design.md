@@ -702,7 +702,7 @@ U5·U6·U8은 U4 뒤에 병렬로 할 수 있다. U18~U21은 이 개정(U0r)이 
 | 번호 | 파일 | 단위 | 만드는 것 | 병합 순서 |
 |---|---|---|---|---|
 | V1~V7 | (develop에 있음) | - | 작업 이력, 첨부, 출력, 명령 정책, 에이전트 CLI, 유지보수·용량, 실행 시간선 | 완료 |
-| V8 | `V8__budget_gate.sql` | F2(`feature/v300-fix-store-domain`) | 예산 판정 행 `budget_gate` | 1 |
+| V8 | `V8__storage_budget.sql` | B4-TX(`feature/v300-b4-tx`) | 도메인 쿼터 원장 `storage_budget` | 1 |
 | V9 | `V9__audit_record.sql` | U2 | `audit_record`(추가만), `audit_refusal_streak`(묶음 로그인 거절) | 2 |
 | V10 | `V10__device_token.sql` | U4 | `device_token`, `device_token_revocation` | 3 |
 | V11 | `V11__operation_reconciliation.sql` | U6 | `operation_reconciliation`(소유자 정리 기록) | 4 |

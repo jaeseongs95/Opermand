@@ -276,6 +276,12 @@ class ArchitectureRulesTest {
         check(PortalRules.sleep());
     }
 
+    @Test
+    @DisplayName("A-TX-BOUNDARY (D-0114): portal-store declares no @Transactional and uses no TransactionTemplate, TransactionOperations, or PlatformTransactionManager")
+    void a_txBoundary_storeSetsNoTransactionBoundary() {
+        check(PortalRules.transactionBoundary(TABLE));
+    }
+
     private void check(List<ArchRule> rules) {
         // A module whose package holds only package-info has no class yet; that is not a failure of the rule.
         rules.forEach(rule -> rule.allowEmptyShould(true).check(product));

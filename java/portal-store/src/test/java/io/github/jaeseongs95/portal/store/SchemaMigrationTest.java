@@ -27,7 +27,7 @@ class SchemaMigrationTest {
         "operation_decision", "operation_result", "operation_slot", "operation_fence",
         "artifact", "artifact_chunk", "staged_action", "command_output", "command_output_format", "command_output_page", "command_policy", "command_policy_rule",
         "command_policy_name", "agent_cli_request", "maintenance_reservation", "runtime_capacity",
-        "runtime_capacity_target", "budget_gate");
+        "runtime_capacity_target", "storage_budget");
 
     private final JdbcTemplate jdbc;
     private final DataSource dataSource;
@@ -71,7 +71,7 @@ class SchemaMigrationTest {
         for (String table : TABLES) {
             long expected = switch (table) {
                 case "command_policy" -> 1;
-                case "budget_gate" -> 2;
+                case "storage_budget" -> 2;
                 default -> 0;
             };
             assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM " + table, Long.class)).as(table).isEqualTo(expected);
