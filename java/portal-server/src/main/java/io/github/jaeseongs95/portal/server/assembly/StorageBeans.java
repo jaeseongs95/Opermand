@@ -1,5 +1,8 @@
 package io.github.jaeseongs95.portal.server.assembly;
 
+import java.nio.file.Path;
+
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.util.unit.DataSize;
@@ -8,17 +11,16 @@ import io.github.jaeseongs95.portal.app.artifact.StagingTimes;
 import io.github.jaeseongs95.portal.app.remote.TransferLimits;
 import io.github.jaeseongs95.portal.store.StorageRoots;
 import io.github.jaeseongs95.portal.store.artifact.ArtifactLimits;
+import io.github.jaeseongs95.portal.store.attachment.AttachmentKeyLocation;
+import io.github.jaeseongs95.portal.store.attachment.AttachmentKeyring;
 import io.github.jaeseongs95.portal.store.audit.AuditFileLocation;
 
 /**
- * The value beans that portal-store and portal-app ask for and cannot make themselves (Principles 3.1: they are records of numbers and paths, so the container cannot build
- * them by constructor injection, and this module has no setting of its own): {@link StorageRoots}, {@link ArtifactLimits}, {@link AuditFileLocation} and, derived from the same
- * numbers, {@link TransferLimits} and {@link StagingTimes}. The values come from one {@link StorageSettings}; the output limits are the store's own constants
- * ({@code OutputConfiguration}) until stage 4 binds them.
- *
- * <p>The transfer's largest file is the artifact store's, so a download that reserves the largest file a transfer carries is never refused as "too large" by the store.
+ * The value beans that portal-store and portal-app ask for and cannot make themselves: {@link StorageRoots}, {@link AttachmentKeyLocation}, {@link ArtifactLimits},
+ * {@link AuditFileLocation}, {@link TransferLimits}, and {@link StagingTimes}.
  */
 @Configuration(proxyBeanMethods = false)
+@EnableConfigurationProperties(PortalStorageProperties.class)
 public class StorageBeans {
 
     private final StorageSettings settings;
@@ -29,7 +31,15 @@ public class StorageBeans {
 
     @Bean
     public StorageRoots storageRoots() {
-        return new StorageRoots(settings.artifactsFolder(), settings.outputsFolder());
+        return new StorageRoots(settings.artifactsFolder(), settings.outputsFolder(), settings.attachmentsFolder(), settings.keyringFolder());
+    }
+
+    @Bean
+    public AttachmentKeyLocation attachmentKeyLocation(StorageRoots roots, PortalStorageProperties properties) {
+        Path chosen = properties.keyFile() != null ? properties.keyFile()
+            : settings.keyFile() != null ? settings.keyFile()
+            : roots.keyring().resolve(AttachmentKeyring.DEFAULT_FILE_NAME);
+        return new AttachmentKeyLocation(chosen);
     }
 
     @Bean

@@ -6,8 +6,10 @@ import java.util.Objects;
 
 import org.springframework.stereotype.Component;
 
+import io.github.jaeseongs95.portal.app.attachment.PreparedOperationAttachments;
+import io.github.jaeseongs95.portal.domain.attachment.AttachmentId;
+import io.github.jaeseongs95.portal.domain.attachment.AttachmentRole;
 import io.github.jaeseongs95.portal.domain.error.DispatchFailure;
-import io.github.jaeseongs95.portal.domain.error.ExecutionErrorCode;
 import io.github.jaeseongs95.portal.domain.error.ExecutionFailure;
 import io.github.jaeseongs95.portal.domain.file.FileBinding;
 import io.github.jaeseongs95.portal.domain.file.FileName;
@@ -45,12 +47,8 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Converts between the domain's {@code OperationSnapshot} and the rows of the journal, in both directions, without touching the database. The domain object is only
- * reached through {@code Operation#snapshot()} and {@code Operation#restore(OperationSnapshot)} (design 13.3); this class is the only place that knows the row layout.
- * Every sealed type of the snapshot is turned into columns by a complete {@code switch} (a variant that is added to the domain and not handled here fails the build), and
- * a missing variant is a NULL column group that the CHECK constraints of the table keep consistent.
- *
- * <p>The list of result texts is written as a JSON array with the Boot {@link JsonMapper} (Principles 2.2 categories 1 and 2).
+ * Converts between the domain's {@code OperationSnapshot} and the rows of the journal, in both directions, without touching the database. Body texts are stored in
+ * encrypted attachments referenced by their {@code CHAR(48)} ids on the child rows (stage 4 design B-15).
  */
 @Component
 class OperationMapper {
@@ -98,13 +96,20 @@ class OperationMapper {
         };
     }
 
-    OperationCommandRow commandRow(OperationId id, CommandInput input) {
-        return new OperationCommandRow(id.value(), input.command().value(), input.callerContext().value(), input.displayContext().value());
+    OperationCommandRow commandRow(OperationId id, PreparedOperationAttachments prepared) {
+        return new OperationCommandRow(id.value(),
+            prepared.require(AttachmentRole.COMMAND_TEXT).metadata().id().value(),
+            prepared.require(AttachmentRole.CALLER_CONTEXT).metadata().id().value(),
+            prepared.require(AttachmentRole.DISPLAY_CONTEXT).metadata().id().value());
     }
 
-    OperationSourceRow sourceRow(OperationId id, SourceInput input) {
+    OperationSourceRow sourceRow(OperationId id, SourceInput input, PreparedOperationAttachments prepared) {
         return new OperationSourceRow(id.value(), input.planDigest().hex(), input.sourceSha256().hex(), input.sourceBytes(), input.cwd().value(), input.elevation(),
-            input.environmentRevision().hex(), input.launcher().value(), input.argvJson().value(), input.callerContext().value(), input.displayContext().value());
+            input.environmentRevision().hex(),
+            prepared.require(AttachmentRole.LAUNCHER_COMMAND).metadata().id().value(),
+            prepared.require(AttachmentRole.ARGV_JSON).metadata().id().value(),
+            prepared.require(AttachmentRole.CALLER_CONTEXT).metadata().id().value(),
+            prepared.require(AttachmentRole.DISPLAY_CONTEXT).metadata().id().value());
     }
 
     OperationUploadRow uploadRow(OperationId id, UploadInput input) {
@@ -120,7 +125,7 @@ class OperationMapper {
             input.overwrite(), input.elevation(), targetId, revision, input.protocol());
     }
 
-    OperationDownloadRow downloadRow(OperationId id, DownloadInput input) {
+    OperationDownloadRow downloadRow(OperationId id, DownloadInput input, PreparedOperationAttachments prepared) {
         String targetId = switch (input.binding()) {
             case FileBinding.Unbound unbound -> null;
             case FileBinding.Bound bound -> bound.binding().targetId().value();
@@ -129,8 +134,9 @@ class OperationMapper {
             case FileBinding.Unbound unbound -> null;
             case FileBinding.Bound bound -> bound.binding().targetRevision().hex();
         };
-        return new OperationDownloadRow(id.value(), input.remotePath().value(), input.elevation(), targetId, revision, input.callerContext().value(),
-            input.displayContext().value());
+        return new OperationDownloadRow(id.value(), input.remotePath().value(), input.elevation(), targetId, revision,
+            prepared.require(AttachmentRole.CALLER_CONTEXT).metadata().id().value(),
+            prepared.require(AttachmentRole.DISPLAY_CONTEXT).metadata().id().value());
     }
 
     /** The decision row, or nothing when the operation has no decision. */
@@ -138,7 +144,7 @@ class OperationMapper {
         return new OperationDecisionRow(id.value(), decided.kind(), decided.reason(), decided.reviewReason(), decided.policyRevision());
     }
 
-    OperationResultRow resultRow(OperationId id, RecordedResult.Executed executed) {
+    OperationResultRow resultRow(OperationId id, RecordedResult.Executed executed, AttachmentId resultTextsAttachmentId) {
         ExecutionOutcome o = executed.outcome();
         OperationResultRow.ExitKind exitKind = switch (o.exit()) {
             case ExitStatus.Exited exited -> OperationResultRow.ExitKind.EXITED;
@@ -163,10 +169,10 @@ class OperationMapper {
             o.signalDelivery(), timeoutMs, o.cleanup(), o.reconciliation(), o.outputState(), o.capture(), out.received(), out.retained(), out.cursor(), out.truncation(),
             err.received(), err.retained(), err.cursor(), err.truncation(), failureKind, classified ? o.failure().stage() : null, classified ? o.failure().code() : null,
             classified ? o.failure().remoteOutcome() : null, null, null, null, evidence.kind(), evidence.exitCode(), evidence.confirmedAt(), evidence.sha256(), evidence.read(),
-            mapper.writeValueAsString(o.texts()), null, null, null);
+            resultTextsAttachmentId.value(), null, null, null);
     }
 
-    OperationResultRow resultRow(OperationId id, RecordedResult.Refused refused) {
+    OperationResultRow resultRow(OperationId id, RecordedResult.Refused refused, AttachmentId resultTextsAttachmentId) {
         DispatchFailure f = refused.failure();
         OperationResultRow.DispatchKind kind = switch (f) {
             case DispatchFailure.Refused r -> OperationResultRow.DispatchKind.REFUSED;
@@ -176,7 +182,7 @@ class OperationMapper {
         return new OperationResultRow(id.value(), OperationResultRow.ResultKind.REFUSED, io.github.jaeseongs95.portal.domain.operation.ResultFlag.FAILED, null, null,
             OperationResultRow.ExitKind.NO_EXIT, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
             OperationResultRow.FailureKind.NONE, null, null, null, kind, f.reason(), f.stage(), OperationResultRow.EvidenceKind.NO_EVIDENCE, null, null, null, null,
-            mapper.writeValueAsString(List.<String>of()), null, null, null);
+            resultTextsAttachmentId.value(), null, null, null);
     }
 
     // ----- rows -> snapshot -----
@@ -198,14 +204,14 @@ class OperationMapper {
         return TargetRevision.of(stored);
     }
 
-    OperationInput commandInput(OperationCommandRow row) {
-        return new CommandInput(new CommandText(row.commandText()), new Utf8Text(row.callerContext()), new Utf8Text(row.displayContext()));
+    OperationInput commandInput(String commandText, String callerContext, String displayContext) {
+        return new CommandInput(new CommandText(commandText), new Utf8Text(callerContext), new Utf8Text(displayContext));
     }
 
-    OperationInput sourceInput(OperationSourceRow row) {
-        return new SourceInput(new CommandText(row.launcherCommand()), new Digest(row.planDigest()), new Digest(row.sourceSha256()), row.sourceBytes(),
-            new Utf8Text(row.argvJson()), new Utf8Text(row.cwd()), row.elevation(), new Digest(row.environmentRevision()), new Utf8Text(row.callerContext()),
-            new Utf8Text(row.displayContext()));
+    OperationInput sourceInput(OperationSourceRow row, String launcherCommand, String argvJson, String callerContext, String displayContext) {
+        return new SourceInput(new CommandText(launcherCommand), new Digest(row.planDigest()), new Digest(row.sourceSha256()), row.sourceBytes(),
+            new Utf8Text(argvJson), new Utf8Text(row.cwd()), row.elevation(), new Digest(row.environmentRevision()), new Utf8Text(callerContext),
+            new Utf8Text(displayContext));
     }
 
     OperationInput uploadInput(OperationUploadRow row) {
@@ -213,9 +219,9 @@ class OperationMapper {
             row.overwriteMode(), row.elevation(), fileBinding(row.fileTargetId(), row.fileTargetRevision()), row.uploadProtocol());
     }
 
-    OperationInput downloadInput(OperationDownloadRow row) {
+    OperationInput downloadInput(OperationDownloadRow row, String callerContext, String displayContext) {
         return new DownloadInput(RemotePath.parse(row.remotePath()), row.elevation(), fileBinding(row.fileTargetId(), row.fileTargetRevision()),
-            new Utf8Text(row.callerContext()), new Utf8Text(row.displayContext()));
+            new Utf8Text(callerContext), new Utf8Text(displayContext));
     }
 
     OperationInput agentCliInput(OperationRow row) {
@@ -226,9 +232,13 @@ class OperationMapper {
         return new DecisionRecord.Decided(row.decision(), row.reasonCode(), row.reviewReason(), row.policyRevision());
     }
 
-    RecordedResult result(OperationResultRow row) {
+    List<String> parseResultTexts(String json) {
+        return mapper.readValue(json, TEXT_LIST);
+    }
+
+    RecordedResult result(OperationResultRow row, List<String> resultTexts) {
         return switch (row.resultKind()) {
-            case EXECUTED -> new RecordedResult.Executed(outcome(row));
+            case EXECUTED -> new RecordedResult.Executed(outcome(row, resultTexts));
             case REFUSED -> new RecordedResult.Refused(dispatchFailure(row));
         };
     }
@@ -240,7 +250,7 @@ class OperationMapper {
         return new FileBinding.Bound(new FileTargetBinding(new TargetId(targetId), TargetRevision.of(Objects.requireNonNull(revision, "fileTargetRevision"))));
     }
 
-    private ExecutionOutcome outcome(OperationResultRow row) {
+    private ExecutionOutcome outcome(OperationResultRow row, List<String> resultTexts) {
         ExitStatus exit = switch (row.exitKind()) {
             case EXITED -> new ExitStatus.Exited(Objects.requireNonNull(row.exitCode(), "exitCode"));
             case SIGNALED -> new ExitStatus.Signaled(Objects.requireNonNull(row.exitSignal(), "exitSignal"));
@@ -255,7 +265,7 @@ class OperationMapper {
         return new ExecutionOutcome(row.execReason(), row.remoteState(), exit, row.signalDelivery(), row.cleanup(), row.execReconciliation(), row.outputState(), row.capture(),
             timeout, capture(row.stdoutReceivedBytes(), row.stdoutRetainedBytes(), row.stdoutCursor(), row.stdoutTruncated()),
             capture(row.stderrReceivedBytes(), row.stderrRetainedBytes(), row.stderrCursor(), row.stderrTruncated()), failure, row.resultFlag(),
-            mapper.readValue(row.resultTexts(), TEXT_LIST), evidence(row));
+            resultTexts, evidence(row));
     }
 
     private StreamCapture capture(Long received, Long retained, Long cursor, io.github.jaeseongs95.portal.domain.operation.Truncation truncation) {

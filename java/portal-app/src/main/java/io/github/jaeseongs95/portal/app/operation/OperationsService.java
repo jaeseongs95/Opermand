@@ -3,8 +3,10 @@ package io.github.jaeseongs95.portal.app.operation;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
@@ -114,7 +116,7 @@ public class OperationsService {
     }
 
     private Operation require(OperationId id) {
-        return Objects.requireNonNull(readTx.execute(status -> journal.find(id)
-            .orElseThrow(() -> new RequestRefusedException(RequestErrorCode.OPERATION_NOT_FOUND))), "operation");
+        Supplier<Optional<Operation>> fetched = Objects.requireNonNull(readTx.execute(status -> journal.fetch(id)), "fetched");
+        return fetched.get().orElseThrow(() -> new RequestRefusedException(RequestErrorCode.OPERATION_NOT_FOUND));
     }
 }

@@ -22,8 +22,8 @@ import io.github.jaeseongs95.portal.store.migration.Migrations;
 @StoreTest
 class SchemaMigrationTest {
 
-    /** The 24 tables after removing dead 2.x model-evaluation tables (D-0122), operation_legacy (D-0127), and maintenance_release (D-0124), with the budget gate of V8 (D-0058): V1 10, V2 3, V3 3, V4 3, V5 1, V6 3, V8 1. */
-    static final Set<String> TABLES = Set.of("operation", "operation_event", "operation_command", "operation_source", "operation_upload", "operation_download",
+    /** The 25 tables after adding encrypted body attachment metadata in V1 (D-0092, stage 4 design B-15) and storage_budget in V8 (D-0058): V1 11, V2 3, V3 3, V4 3, V5 1, V6 3, V8 1. */
+    static final Set<String> TABLES = Set.of("operation", "operation_event", "attachment", "operation_command", "operation_source", "operation_upload", "operation_download",
         "operation_decision", "operation_result", "operation_slot", "operation_fence",
         "artifact", "artifact_chunk", "staged_action", "command_output", "command_output_format", "command_output_page", "command_policy", "command_policy_rule",
         "command_policy_name", "agent_cli_request", "maintenance_reservation", "runtime_capacity",
@@ -38,13 +38,13 @@ class SchemaMigrationTest {
     }
 
     @Test
-    @DisplayName("S2-DB-01: the migration of an empty database creates exactly the 24 tables")
-    void createsTheTwentyFourTables() {
+    @DisplayName("S2-DB-01: the migration of an empty database creates exactly the 25 tables")
+    void createsTheTwentyFiveTables() {
         List<String> names = jdbc.queryForList(
             "SELECT LOWER(TABLE_NAME) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = CURRENT_SCHEMA AND TABLE_TYPE = 'BASE TABLE'", String.class);
         Set<String> product = new TreeSet<>(names);
 
-        assertThat(TABLES).hasSize(24);
+        assertThat(TABLES).hasSize(25);
         assertThat(product).isEqualTo(new TreeSet<>(TABLES));
     }
 

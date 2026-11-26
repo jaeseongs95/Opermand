@@ -3,7 +3,9 @@ package io.github.jaeseongs95.portal.app.journal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 
+import io.github.jaeseongs95.portal.app.attachment.PreparedOperationAttachments;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
 import io.github.jaeseongs95.portal.domain.id.RequestKey;
 import io.github.jaeseongs95.portal.domain.operation.Admission;
@@ -35,10 +37,34 @@ public interface OperationJournal {
      */
     JournalInsert accept(NewOperation spec, Admission admission, OperationId id, Instant at, Runnable beforeInsert);
 
+    /**
+     * Same as {@link #accept(NewOperation, Admission, OperationId, Instant, Runnable)} when the caller already encrypted and {@code fsync}ed the input body attachments
+     * outside the database transaction (Principles 4.4, stage 4 design B-15).
+     */
+    default JournalInsert accept(NewOperation spec, Admission admission, OperationId id, Instant at, PreparedOperationAttachments prepared, Runnable beforeInsert) {
+        return accept(spec, admission, id, at, beforeInsert);
+    }
+
     /** {@code Optional} here has the one meaning "no such operation". */
     Optional<Operation> find(OperationId id);
 
+    /**
+     * Fetches database rows only (inside a short read-only transaction) and returns a supplier that decrypts body attachments outside the transaction (Principles 4.4).
+     */
+    default Supplier<Optional<Operation>> fetch(OperationId id) {
+        Optional<Operation> found = find(id);
+        return () -> found;
+    }
+
     Optional<Operation> findByRequestKey(RequestKey key);
+
+    /**
+     * Fetches database rows by request key only (inside a short read-only transaction) and returns a supplier that decrypts body attachments outside the transaction.
+     */
+    default Supplier<Optional<Operation>> fetchByRequestKey(RequestKey key) {
+        Optional<Operation> found = findByRequestKey(key);
+        return () -> found;
+    }
 
     /**
      * Compare-and-set: stores {@code next} when the stored version is {@code expectedVersion}, writes the event of the new state and releases or takes the concurrency
@@ -53,6 +79,14 @@ public interface OperationJournal {
      * {@code RequestRefusedException(OPERATION_VERSION_CONFLICT)} that is retryable and not attempted (the row is as it was).
      */
     Operation save(Operation next, long expectedVersion, Runnable beforeWrite);
+
+    /**
+     * Same as {@link #save(Operation, long, Runnable)} when the caller already encrypted and {@code fsync}ed any result attachment outside the database transaction
+     * (Principles 4.4, stage 4 design B-15).
+     */
+    default Operation save(Operation next, long expectedVersion, PreparedOperationAttachments prepared, Runnable beforeWrite) {
+        return save(next, expectedVersion, beforeWrite);
+    }
 
     /** The transitions of one operation in version order. */
     List<OperationEvent> events(OperationId id);

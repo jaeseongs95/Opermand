@@ -6,6 +6,7 @@ import java.time.Clock;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import io.github.jaeseongs95.portal.domain.attachment.AttachmentIdGenerator;
 import io.github.jaeseongs95.portal.domain.command.RuleApprovalPolicy;
 import io.github.jaeseongs95.portal.domain.classify.CommandClassifier;
 import io.github.jaeseongs95.portal.domain.classify.VendorCommandClassifier;
@@ -60,6 +61,11 @@ public class DomainBeans {
     @Bean
     public ArtifactUuidGenerator artifactUuidGenerator(SecureRandom random) {
         return new ArtifactUuidGenerator(random);
+    }
+
+    @Bean
+    public AttachmentIdGenerator attachmentIdGenerator(SecureRandom random) {
+        return new AttachmentIdGenerator(random);
     }
 
     /**

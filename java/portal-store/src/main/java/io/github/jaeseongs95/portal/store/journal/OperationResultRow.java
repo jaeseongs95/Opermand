@@ -22,8 +22,8 @@ import io.github.jaeseongs95.portal.domain.operation.Truncation;
 
 /**
  * Table {@code operation_result}: how an operation ended, either as an executed outcome ({@code resultKind EXECUTED}) or as a refusal before dispatch
- * ({@code REFUSED}). The columns that do not apply to the kind are NULL; the table's CHECK constraints keep the two shapes apart. {@code resultTexts} is the long-text
- * column (${long_text}) of V1 and holds a JSON array written by the mapper with the Boot {@code JsonMapper}.
+ * ({@code REFUSED}). The columns that do not apply to the kind are NULL; the table's CHECK constraints keep the two shapes apart. {@code resultTextsAttachmentId}
+ * references the encrypted JSON array attachment in {@code attachment} (no foreign key).
  */
 @Table("operation_result")
 public record OperationResultRow(@Id String operationId, ResultKind resultKind, ResultFlag resultFlag, ExecutionReason execReason, RemoteState remoteState, ExitKind exitKind,
@@ -32,7 +32,7 @@ public record OperationResultRow(@Id String operationId, ResultKind resultKind, 
                                  Truncation stdoutTruncated, Long stderrReceivedBytes, Long stderrRetainedBytes, Long stderrCursor, Truncation stderrTruncated,
                                  FailureKind failureKind, ExecutionStage failureStage, ExecutionErrorCode failureCode, RemoteOutcome failureRemoteOutcome,
                                  DispatchKind dispatchKind, DispatchReason dispatchReason, DispatchStage dispatchStage, EvidenceKind evidenceKind, Integer evidenceExitCode,
-                                 Instant evidenceConfirmedAt, String evidenceSha256, EvidenceRead evidenceRead, String resultTexts, Instant execConnectedAt,
+                                 Instant evidenceConfirmedAt, String evidenceSha256, EvidenceRead evidenceRead, String resultTextsAttachmentId, Instant execConnectedAt,
                                  Instant execDispatchedAt, Instant execClosedAt) {
 
     /**
@@ -43,7 +43,7 @@ public record OperationResultRow(@Id String operationId, ResultKind resultKind, 
         return new OperationResultRow(operationId, resultKind, resultFlag, execReason, remoteState, exitKind, exitCode, exitSignal, signalDelivery, timeoutMs, cleanup,
             execReconciliation, outputState, capture, stdoutReceivedBytes, stdoutRetainedBytes, stdoutCursor, stdoutTruncated, stderrReceivedBytes, stderrRetainedBytes,
             stderrCursor, stderrTruncated, failureKind, failureStage, failureCode, failureRemoteOutcome, dispatchKind, dispatchReason, dispatchStage, evidenceKind,
-            evidenceExitCode, evidenceConfirmedAt, evidenceSha256, evidenceRead, resultTexts, connectedAt, dispatchedAt, closedAt);
+            evidenceExitCode, evidenceConfirmedAt, evidenceSha256, evidenceRead, resultTextsAttachmentId, connectedAt, dispatchedAt, closedAt);
     }
 
     /** Which shape the row has. */

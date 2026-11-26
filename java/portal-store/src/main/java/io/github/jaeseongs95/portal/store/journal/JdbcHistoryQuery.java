@@ -5,6 +5,7 @@ import java.util.Collection;
 import java.util.EnumSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Supplier;
 
 import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Repository;
@@ -21,9 +22,10 @@ import io.github.jaeseongs95.portal.domain.operation.Operation;
 import io.github.jaeseongs95.portal.domain.operation.OperationState;
 
 /**
- * {@link HistoryQuery} over the journal, newest first with keyset paging on {@code (created_at, id)}. The keyset predicate
- * {@code created_at < c OR (created_at = c AND id < i)} is two derived queries whose results are put together here (the rows of the same instant come first), so that the
- * limit of each is the dialect's own limit syntax and no {@code LIMIT} is written in SQL.
+ * {@link HistoryQuery} over the journal, newest first with keyset paging on {@code (created_at, id)}.
+ *
+ * <p>{@link #fetchPage} and {@link #fetchPublicMetadata} perform SQL queries only (inside the caller's read-only transaction) and return a supplier that decrypts
+ * operation body attachments outside the transaction with per-row masked fallback on unreadable bodies (stage 4 design B-15, Principles 4.4).
  */
 @Repository
 public class JdbcHistoryQuery implements HistoryQuery {
@@ -38,6 +40,11 @@ public class JdbcHistoryQuery implements HistoryQuery {
 
     @Override
     public HistoryPage page(HistoryFilter filter, HistoryCursor after, int pageSize) {
+        return fetchPage(filter, after, pageSize).get();
+    }
+
+    @Override
+    public Supplier<HistoryPage> fetchPage(HistoryFilter filter, HistoryCursor after, int pageSize) {
         Collection<OperationState> states = filter.states().isEmpty() ? EnumSet.allOf(OperationState.class) : filter.states();
         int fetch = pageSize + 1;
         List<OperationRow> rows = switch (after) {
@@ -47,14 +54,20 @@ public class JdbcHistoryQuery implements HistoryQuery {
         };
         boolean more = rows.size() > pageSize;
         List<OperationRow> shown = more ? rows.subList(0, pageSize) : rows;
-        List<Operation> operationsOnPage = shown.stream().map(storage::load).toList();
+        List<OperationStorage.LoadedOperation> loaded = shown.stream().map(storage::fetchRaw).toList();
         HistoryCursor next = more ? new HistoryCursor.After(shown.get(shown.size() - 1).createdAt(), new OperationId(shown.get(shown.size() - 1).id())) : new HistoryCursor.End();
-        return new HistoryPage(operationsOnPage, next);
+        return () -> new HistoryPage(loaded.stream().map(storage::hydrateForHistory).toList(), next);
     }
 
     @Override
     public Optional<Operation> publicMetadata(OperationId id) {
-        return operations.findById(id.value()).map(storage::load);
+        return fetchPublicMetadata(id).get();
+    }
+
+    @Override
+    public Supplier<Optional<Operation>> fetchPublicMetadata(OperationId id) {
+        Optional<OperationStorage.LoadedOperation> raw = operations.findById(id.value()).map(storage::fetchRaw);
+        return () -> raw.map(storage::hydrateForHistory);
     }
 
     private List<OperationRow> firstPage(TargetFilter target, Collection<OperationState> states, int fetch) {

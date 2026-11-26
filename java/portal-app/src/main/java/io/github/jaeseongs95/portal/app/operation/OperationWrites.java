@@ -8,9 +8,12 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionOperations;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import io.github.jaeseongs95.portal.app.attachment.OperationAttachmentPreparer;
+import io.github.jaeseongs95.portal.app.attachment.PreparedOperationAttachments;
 import io.github.jaeseongs95.portal.app.event.OperationEvents;
 import io.github.jaeseongs95.portal.app.journal.OperationJournal;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
+import io.github.jaeseongs95.portal.domain.operation.Settlement;
 
 /**
  * Stores a new version of an operation inside a short write transaction and announces it only after the transaction commits: the event that wakes the waiters and the
@@ -23,23 +26,26 @@ public class OperationWrites {
     private final OperationEvents events;
     private final TerminalNotifier terminal;
     private final ExpiryTimers timers;
+    private final OperationAttachmentPreparer attachments;
     private final TransactionOperations writeTx;
 
     @Autowired
     public OperationWrites(OperationJournal journal, OperationEvents events, TerminalNotifier terminal, ExpiryTimers timers,
-                           PlatformTransactionManager transactionManager) {
-        this(journal, events, terminal, timers, new TransactionTemplate(transactionManager));
+                           OperationAttachmentPreparer attachments, PlatformTransactionManager transactionManager) {
+        this(journal, events, terminal, timers, attachments, new TransactionTemplate(transactionManager));
     }
 
     public OperationWrites(OperationJournal journal, OperationEvents events, TerminalNotifier terminal, ExpiryTimers timers) {
-        this(journal, events, terminal, timers, TransactionOperations.withoutTransaction());
+        this(journal, events, terminal, timers, OperationAttachmentPreparer.none(), TransactionOperations.withoutTransaction());
     }
 
-    private OperationWrites(OperationJournal journal, OperationEvents events, TerminalNotifier terminal, ExpiryTimers timers, TransactionOperations writeTx) {
+    private OperationWrites(OperationJournal journal, OperationEvents events, TerminalNotifier terminal, ExpiryTimers timers,
+                            OperationAttachmentPreparer attachments, TransactionOperations writeTx) {
         this.journal = journal;
         this.events = events;
         this.terminal = terminal;
         this.timers = timers;
+        this.attachments = Objects.requireNonNull(attachments, "attachments");
         this.writeTx = writeTx;
     }
 
@@ -50,7 +56,18 @@ public class OperationWrites {
 
     /** The same, with a check that runs inside the transaction of the write, before it (the room in the queue; see {@link OperationJournal#save(Operation, long, Runnable)}). */
     public Operation store(Operation next, long expectedVersion, Runnable beforeWrite) {
-        Operation stored = Objects.requireNonNull(writeTx.execute(status -> journal.save(next, expectedVersion, beforeWrite)), "stored");
+        PreparedOperationAttachments prepared = next.settlement() instanceof Settlement.Settled settled
+            ? attachments.prepareResult(settled.result()) : PreparedOperationAttachments.empty();
+        Operation stored;
+        try {
+            stored = Objects.requireNonNull(writeTx.execute(status -> journal.save(next, expectedVersion, prepared, beforeWrite)), "stored");
+        } catch (RuntimeException e) {
+            attachments.discard(prepared);
+            throw e;
+        }
+        if (!prepared.isConsumed()) {
+            attachments.discard(prepared);
+        }
         announce(stored);
         return stored;
     }

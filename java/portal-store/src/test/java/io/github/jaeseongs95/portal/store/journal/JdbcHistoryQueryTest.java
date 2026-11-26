@@ -3,36 +3,47 @@ package io.github.jaeseongs95.portal.store.journal;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.jdbc.core.JdbcTemplate;
 
+import io.github.jaeseongs95.portal.app.attachment.AttachmentUnreadableException;
 import io.github.jaeseongs95.portal.app.journal.HistoryCursor;
 import io.github.jaeseongs95.portal.app.journal.HistoryFilter;
 import io.github.jaeseongs95.portal.app.journal.HistoryPage;
 import io.github.jaeseongs95.portal.app.journal.TargetFilter;
+import io.github.jaeseongs95.portal.domain.attachment.AttachmentId;
 import io.github.jaeseongs95.portal.domain.error.HistoryErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.OperationId;
 import io.github.jaeseongs95.portal.domain.id.TargetId;
+import io.github.jaeseongs95.portal.domain.operation.CommandInput;
 import io.github.jaeseongs95.portal.domain.operation.ConflictKey;
 import io.github.jaeseongs95.portal.domain.operation.Operation;
 import io.github.jaeseongs95.portal.domain.operation.StartAuthority;
 import io.github.jaeseongs95.portal.domain.operation.OperationState;
+import io.github.jaeseongs95.portal.store.attachment.AttachmentFiles;
 
 @JournalTest
 class JdbcHistoryQueryTest {
 
     private final JdbcOperationJournal journal;
     private final JdbcHistoryQuery history;
+    private final AttachmentFiles attachmentFiles;
+    private final JdbcTemplate jdbc;
     private final JournalFixture fx = new JournalFixture();
 
-    JdbcHistoryQueryTest(JdbcOperationJournal journal, JdbcHistoryQuery history) {
+    JdbcHistoryQueryTest(JdbcOperationJournal journal, JdbcHistoryQuery history, AttachmentFiles attachmentFiles, JdbcTemplate jdbc) {
         this.journal = journal;
         this.history = history;
+        this.attachmentFiles = attachmentFiles;
+        this.jdbc = jdbc;
     }
 
     private List<OperationId> allPages(HistoryFilter filter, int pageSize) {
@@ -92,5 +103,28 @@ class JdbcHistoryQueryTest {
         Operation accepted = fx.accept(journal, fx.command("meta", "alpha", "echo", new ConflictKey.None())).operation();
         assertThat(history.publicMetadata(accepted.id()).map(Operation::snapshot)).contains(accepted.snapshot());
         assertThat(history.publicMetadata(new OperationId("f".repeat(48)))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S4-AT-05: a corrupted attachment fails strict journal.find but read-only history masks only the damaged body per row")
+    void historyMasksUnreadableAttachmentPerRow() throws Exception {
+        Operation healthy = fx.accept(journal, fx.command("healthy", "alpha", "echo healthy", new ConflictKey.None())).operation();
+        Operation damaged = fx.accept(journal, fx.command("damaged", "alpha", "echo secret", new ConflictKey.None())).operation();
+        String cmdAttId = jdbc.queryForObject("SELECT command_text_attachment_id FROM operation_command WHERE operation_id = ?", String.class, damaged.id().value());
+        Path blob = attachmentFiles.pathOf(new AttachmentId(cmdAttId));
+        byte[] bytes = Files.readAllBytes(blob);
+        bytes[bytes.length - 1] ^= 0x5A;
+        Files.write(blob, bytes);
+
+        assertThatThrownBy(() -> journal.find(damaged.id())).isInstanceOf(AttachmentUnreadableException.class);
+
+        HistoryPage page = history.page(new HistoryFilter(Set.of(), new TargetFilter.AnyTarget()), new HistoryCursor.FirstPage(), 10);
+        assertThat(page.operations()).hasSize(2);
+        Operation damagedView = page.operations().stream().filter(op -> op.id().equals(damaged.id())).findFirst().orElseThrow();
+        Operation healthyView = page.operations().stream().filter(op -> op.id().equals(healthy.id())).findFirst().orElseThrow();
+        assertThat(((CommandInput) damagedView.input()).command().value()).isEqualTo(OperationStorage.MASKED_BODY);
+        assertThat(((CommandInput) damagedView.input()).callerContext().value()).isEqualTo("caller");
+        assertThat(((CommandInput) healthyView.input()).command().value()).isEqualTo("echo healthy");
+        assertThat(((CommandInput) history.publicMetadata(damaged.id()).orElseThrow().input()).command().value()).isEqualTo(OperationStorage.MASKED_BODY);
     }
 }

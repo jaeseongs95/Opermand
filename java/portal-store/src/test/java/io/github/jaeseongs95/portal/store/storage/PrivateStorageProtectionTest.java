@@ -29,8 +29,12 @@ class PrivateStorageProtectionTest {
         assertThat(protection.check()).isEqualTo(new ProtectionCheck.Protected());
         assertThat(Files.isDirectory(base.resolve("artifacts"))).isTrue();
         assertThat(Files.isDirectory(base.resolve("outputs"))).isTrue();
+        assertThat(Files.isDirectory(base.resolve("attachments"))).isTrue();
+        assertThat(Files.isDirectory(base.resolve("keyring"))).isTrue();
         TestStorage.assertOwnerOnly(base.resolve("artifacts"));
         TestStorage.assertOwnerOnly(base.resolve("outputs"));
+        TestStorage.assertOwnerOnly(base.resolve("attachments"));
+        TestStorage.assertOwnerOnly(base.resolve("keyring"));
         assertThat(protection.check()).isEqualTo(new ProtectionCheck.Protected());
     }
 
@@ -39,9 +43,13 @@ class PrivateStorageProtectionTest {
     void anOpenFolderIsProtected(@TempDir Path base) throws IOException {
         Path artifacts = Files.createDirectory(base.resolve("artifacts"));
         Path outputs = Files.createDirectory(base.resolve("outputs"));
+        Path attachments = Files.createDirectory(base.resolve("attachments"));
+        Path keyring = Files.createDirectory(base.resolve("keyring"));
         TestStorage.openUp(artifacts);
         TestStorage.openUp(outputs);
-        PrivateStorageProtection protection = new PrivateStorageProtection(new StorageRoots(artifacts, outputs), TestStorage.rules());
+        TestStorage.openUp(attachments);
+        TestStorage.openUp(keyring);
+        PrivateStorageProtection protection = new PrivateStorageProtection(new StorageRoots(artifacts, outputs, attachments, keyring), TestStorage.rules());
 
         assertThat(protection.check()).isEqualTo(new ProtectionCheck.Protected());
     }

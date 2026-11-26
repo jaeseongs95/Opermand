@@ -14,6 +14,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 
+import io.github.jaeseongs95.portal.domain.attachment.AttachmentRole;
 import io.github.jaeseongs95.portal.domain.error.DispatchReason;
 import io.github.jaeseongs95.portal.domain.error.DispatchStage;
 import io.github.jaeseongs95.portal.domain.operation.ApprovalMode;
@@ -37,6 +38,7 @@ class SchemaChecksTest {
     private static final String OP = "a".repeat(48);
     private static final String ARTIFACT = "b".repeat(48);
     private static final String OUTPUT = "c".repeat(48);
+    private static final String ATT = "f".repeat(48);
     private static final String HEX = "0".repeat(64);
     private static final String STAMP = "TIMESTAMP '2026-11-12 00:00:00'";
 
@@ -62,19 +64,23 @@ class SchemaChecksTest {
             + " updated_at, recovery_reason, audit_failure, outcome_certainty, reconciliation) VALUES ('" + OP + "', 'request-key-000001', 'owner', 'alpha', '" + HEX
             + "', 'COMMAND', 'QUEUED', 1, 'OWNER', 'default', '" + HEX + "', " + STAMP + ", " + STAMP + ", 'NONE', 'NONE', 'EXITED', 'NOT_REQUIRED')");
         jdbc.update("INSERT INTO operation_event (operation_id, version, state, occurred_at) VALUES ('" + OP + "', 1, 'QUEUED', " + STAMP + ")");
-        jdbc.update("INSERT INTO operation_command (operation_id, command_text, caller_context, display_context) VALUES ('" + OP + "', 'echo', '', '')");
-        jdbc.update("INSERT INTO operation_source (operation_id, plan_digest, source_sha256, source_bytes, cwd, elevation, environment_revision, launcher_command, argv_json,"
-            + " caller_context, display_context) VALUES ('" + OP + "', '" + HEX + "', '" + HEX + "', 5, '/tmp', 'NONE', '" + HEX + "', 'python', '[]', '', '')");
+        jdbc.update("INSERT INTO attachment (id, role, size_bytes, sha256, created_at) VALUES ('" + ATT + "', 'COMMAND_TEXT', 4, '" + HEX + "', " + STAMP + ")");
+        jdbc.update("INSERT INTO operation_command (operation_id, command_text_attachment_id, caller_context_attachment_id, display_context_attachment_id) VALUES ('"
+            + OP + "', '" + ATT + "', '" + ATT + "', '" + ATT + "')");
+        jdbc.update("INSERT INTO operation_source (operation_id, plan_digest, source_sha256, source_bytes, cwd, elevation, environment_revision, "
+            + "launcher_command_attachment_id, argv_json_attachment_id, caller_context_attachment_id, display_context_attachment_id) VALUES ('" + OP + "', '" + HEX
+            + "', '" + HEX + "', 5, '/tmp', 'NONE', '" + HEX + "', '" + ATT + "', '" + ATT + "', '" + ATT + "', '" + ATT + "')");
         jdbc.update("INSERT INTO operation_upload (operation_id, artifact_id, remote_path, file_name, size_bytes, sha256, overwrite_mode, elevation, upload_protocol)"
             + " VALUES ('" + OP + "', '" + ARTIFACT + "', '/tmp/a', 'a', 1, '" + HEX + "', 'REPLACE', 'NONE', 'UNSPECIFIED')");
-        jdbc.update("INSERT INTO operation_download (operation_id, remote_path, elevation, caller_context, display_context) VALUES ('" + OP + "', '/tmp/a', 'NONE', '', '')");
+        jdbc.update("INSERT INTO operation_download (operation_id, remote_path, elevation, caller_context_attachment_id, display_context_attachment_id) VALUES ('"
+            + OP + "', '/tmp/a', 'NONE', '" + ATT + "', '" + ATT + "')");
         jdbc.update("INSERT INTO operation_decision (operation_id, decision, reason_code, review_reason, policy_revision) VALUES ('" + OP
             + "', 'EXECUTE', 'COMMAND_SET', 'NONE', 0)");
         jdbc.update("INSERT INTO operation_result (operation_id, result_kind, result_flag, exec_reason, remote_state, exit_kind, exit_code, signal_delivery, cleanup,"
             + " exec_reconciliation, output_state, capture, stdout_truncated, stderr_truncated, failure_kind, failure_stage, failure_code, failure_remote_outcome, dispatch_kind,"
-            + " dispatch_reason, dispatch_stage, evidence_kind, evidence_exit_code, result_texts) VALUES ('" + OP + "', 'EXECUTED', 'OK', 'EXIT', 'EXITED', 'EXITED', 0,"
+            + " dispatch_reason, dispatch_stage, evidence_kind, evidence_exit_code, result_texts_attachment_id) VALUES ('" + OP + "', 'EXECUTED', 'OK', 'EXIT', 'EXITED', 'EXITED', 0,"
             + " 'NOT_SENT', 'COMPLETE', 'NOT_REQUIRED', 'COMPLETE', 'OK', 'COMPLETE', 'COMPLETE', 'CLASSIFIED', 'SSH_CONNECT', 'SSH_CONNECT_FAILED', 'NOT_STARTED', NULL, NULL,"
-            + " NULL, 'COMMAND_EXITED', 0, '[]')");
+            + " NULL, 'COMMAND_EXITED', 0, '" + ATT + "')");
         jdbc.update("INSERT INTO operation_slot (scope, slot_no, operation_id) VALUES ('GLOBAL', 1, '" + OP + "')");
         jdbc.update("INSERT INTO operation_fence (target_id, target_revision, conflict_digest, operation_id) VALUES ('alpha', '" + HEX + "', '" + HEX + "', '" + OP + "')");
         jdbc.update("INSERT INTO artifact (id, direction, purpose, state, file_name, size_bytes, received_bytes, chunk_count, file_target_binding, upload_protocol,"
@@ -103,7 +109,7 @@ class SchemaChecksTest {
     static Stream<Column> enumColumns() {
         return Stream.of(new Column("operation", "kind"), new Column("operation", "state"), new Column("operation", "approval_mode"),
             new Column("operation", "outcome_certainty"), new Column("operation", "reconciliation"), new Column("operation", "recovery_reason"),
-            new Column("operation", "audit_failure"), new Column("operation_event", "state"), new Column("operation_source", "elevation"),
+            new Column("operation", "audit_failure"), new Column("operation_event", "state"), new Column("attachment", "role"), new Column("operation_source", "elevation"),
             new Column("operation_upload", "overwrite_mode"), new Column("operation_upload", "elevation"), new Column("operation_upload", "upload_protocol"),
             new Column("operation_download", "elevation"), new Column("operation_decision", "decision"), new Column("operation_decision", "reason_code"),
             new Column("operation_decision", "review_reason"), new Column("operation_result", "result_kind"),
@@ -145,6 +151,7 @@ class SchemaChecksTest {
         acceptAll("operation", "outcome_certainty", Stream.of(OutcomeCertainty.values()).map(Enum::name).toList());
         acceptAll("operation", "recovery_reason", Stream.of(RecoveryReason.values()).map(Enum::name).toList());
         acceptAll("operation_event", "state", Stream.of(OperationState.values()).map(Enum::name).toList());
+        acceptAll("attachment", "role", Stream.of(AttachmentRole.values()).map(Enum::name).toList());
         acceptAll("operation_decision", "decision", Stream.of(DecisionKind.values()).map(Enum::name).toList());
         acceptAll("operation_decision", "reason_code", Stream.of(DecisionReason.values()).map(Enum::name).toList());
         acceptAll("operation_result", "exec_reason", Stream.of(ExecutionReason.values()).map(Enum::name).toList());
@@ -158,8 +165,8 @@ class SchemaChecksTest {
         for (DispatchReason reason : DispatchReason.values()) {
             for (DispatchStage stage : DispatchStage.values()) {
                 jdbc.update("INSERT INTO operation_result (operation_id, result_kind, result_flag, exit_kind, failure_kind, dispatch_kind, dispatch_reason, dispatch_stage,"
-                    + " evidence_kind, result_texts) VALUES ('" + OP + "', 'REFUSED', 'FAILED', 'NO_EXIT', 'NONE', 'REFUSED', '" + reason.name() + "', '" + stage.name()
-                    + "', 'NO_EVIDENCE', '[]')");
+                    + " evidence_kind, result_texts_attachment_id) VALUES ('" + OP + "', 'REFUSED', 'FAILED', 'NO_EXIT', 'NONE', 'REFUSED', '" + reason.name() + "', '" + stage.name()
+                    + "', 'NO_EVIDENCE', '" + ATT + "')");
                 jdbc.update("DELETE FROM operation_result");
             }
         }
@@ -179,6 +186,8 @@ class SchemaChecksTest {
             .isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> inSavepoint("UPDATE agent_cli_request SET provider = ''")).as("provider cannot be empty")
             .isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> inSavepoint("UPDATE attachment SET size_bytes = -1")).isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> inSavepoint("UPDATE attachment SET size_bytes = 1048577")).isInstanceOf(DataIntegrityViolationException.class);
         inSavepoint("UPDATE agent_cli_request SET provider = 'custom-provider'");
     }
 
@@ -212,8 +221,8 @@ class SchemaChecksTest {
                 .isInstanceOf(DataIntegrityViolationException.class);
         }
         assertThatThrownBy(() -> inSavepoint("INSERT INTO operation_result (operation_id, result_kind, result_flag, exit_kind, failure_kind, dispatch_kind, dispatch_reason,"
-            + " dispatch_stage, evidence_kind, result_texts) VALUES ('" + OP + "', 'REFUSED', 'FAILED', 'NO_EXIT', 'NONE', 'REFUSED', 'PERSISTENCE_FAILED',"
-            + " 'EVALUATION_PERSISTENCE', 'NO_EVIDENCE', '[]')")).isInstanceOf(DataIntegrityViolationException.class);
+            + " dispatch_stage, evidence_kind, result_texts_attachment_id) VALUES ('" + OP + "', 'REFUSED', 'FAILED', 'NO_EXIT', 'NONE', 'REFUSED', 'PERSISTENCE_FAILED',"
+            + " 'EVALUATION_PERSISTENCE', 'NO_EVIDENCE', '" + ATT + "')")).isInstanceOf(DataIntegrityViolationException.class);
     }
 
     @Test
@@ -224,8 +233,9 @@ class SchemaChecksTest {
             + "', 'COMMAND', 'PENDING', 1, 'NOT_DECIDED', 'default', '" + HEX + "', " + STAMP + ", " + STAMP + ", 'NONE', 'NONE')")).isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> inSavepoint("INSERT INTO operation_slot (scope, slot_no, operation_id) VALUES ('GLOBAL', 1, '" + OP + "')"))
             .isInstanceOf(DataIntegrityViolationException.class);
-        assertThatThrownBy(() -> inSavepoint("INSERT INTO operation_command (operation_id, command_text, caller_context, display_context) VALUES ('" + "e".repeat(48)
-            + "', 'x', '', '')")).isInstanceOf(DataIntegrityViolationException.class);
+        assertThatThrownBy(() -> inSavepoint("INSERT INTO operation_command (operation_id, command_text_attachment_id, caller_context_attachment_id,"
+            + " display_context_attachment_id) VALUES ('" + "e".repeat(48) + "', '" + ATT + "', '" + ATT + "', '" + ATT + "')"))
+            .isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> inSavepoint("INSERT INTO operation_fence (target_id, target_revision, conflict_digest, operation_id) VALUES ('alpha', '" + HEX + "', '" + HEX
             + "', '" + OP + "')")).as("a conflict key is held by one operation").isInstanceOf(DataIntegrityViolationException.class);
         assertThatThrownBy(() -> inSavepoint("DELETE FROM operation")).as("an operation with rows below it cannot be deleted").isInstanceOf(DataIntegrityViolationException.class);

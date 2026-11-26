@@ -22,9 +22,9 @@ import io.github.jaeseongs95.portal.store.StoreConfiguration;
  */
 @Configuration(proxyBeanMethods = false)
 @Import({StoreConfiguration.class, DomainBeans.class, AgentCliConfiguration.class, StorageBeans.class, StorageStartup.class})
-@ComponentScan(basePackages = {"io.github.jaeseongs95.portal.app.artifact", "io.github.jaeseongs95.portal.app.file", "io.github.jaeseongs95.portal.app.output",
-    "io.github.jaeseongs95.portal.app.storage", "io.github.jaeseongs95.portal.app.agentcli", "io.github.jaeseongs95.portal.app.history",
-    "io.github.jaeseongs95.portal.app.capacity", "io.github.jaeseongs95.portal.app.lifecycle"},
+@ComponentScan(basePackages = {"io.github.jaeseongs95.portal.app.artifact", "io.github.jaeseongs95.portal.app.attachment", "io.github.jaeseongs95.portal.app.file",
+    "io.github.jaeseongs95.portal.app.output", "io.github.jaeseongs95.portal.app.storage", "io.github.jaeseongs95.portal.app.agentcli",
+    "io.github.jaeseongs95.portal.app.history", "io.github.jaeseongs95.portal.app.capacity", "io.github.jaeseongs95.portal.app.lifecycle"},
     excludeFilters = @ComponentScan.Filter(type = FilterType.ASSIGNABLE_TYPE, classes = OperationUploadAdmission.class))
 @EnableScheduling
 public class CoreAssembly {

@@ -26,19 +26,15 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import io.github.jaeseongs95.portal.store.migration.MigrationRunner.Phase;
 
 /**
- * S-D0109-19 to S-D0109-21: the scripts of the product as they are in the jar. They are ANSI SQL in one folder ({@code db/expand}, no folder per DBMS), numbered from 1
- * without a gap, and the whole set applies on an embedded H2 database without a compatibility mode. The long-text columns are written {@code ${long_text}} and nothing else.
+ * S-D0109-19 to S-D0109-21 and S4-AT-06: the scripts of the product as they are in the jar. They are ANSI SQL in one folder ({@code db/expand}, no folder per DBMS),
+ * numbered from 1 without a gap, and the whole set applies on an embedded H2 database without a compatibility mode. After B5-Crypto1 (U18 / D-0092), there are zero
+ * {@code ${long_text}}, CLOB, BLOB, BYTEA, or unbounded text columns, and every string column has length at most 4096.
  */
 class ProductScriptsTest {
 
     private static final PathMatchingResourcePatternResolver RESOURCES = new PathMatchingResourcePatternResolver();
     private static final Pattern DIRECT_CHILD = Pattern.compile(".*/db/expand/V\\d+__[^/]+\\.sql");
-    private static final Pattern VENDOR_TYPE = Pattern.compile("(?i)\\b(CLOB|MEDIUMTEXT|LONGTEXT|TEXT|BLOB|BYTEA)\\b");
-
-    /** The long-text columns of the schema. */
-    private static final List<String> LONG_TEXT_COLUMNS = List.of("operation_command.caller_context", "operation_command.command_text",
-        "operation_command.display_context", "operation_download.caller_context", "operation_download.display_context",
-        "operation_result.result_texts", "operation_source.argv_json", "operation_source.caller_context", "operation_source.display_context", "operation_source.launcher_command");
+    private static final Pattern VENDOR_TYPE = Pattern.compile("(?i)\\b(CLOB|MEDIUMTEXT|LONGTEXT|TEXT|BLOB|BYTEA|VARBINARY)\\b");
 
     private static String code(Resource script) throws IOException {
         String text = new String(script.getContentAsByteArray(), StandardCharsets.UTF_8);
@@ -60,7 +56,7 @@ class ProductScriptsTest {
     }
 
     @Test
-    @DisplayName("S-D0109-20: on an embedded H2 database without a compatibility mode the whole set applies: mode REGULAR, 8 scripts, 24 tables, and no Flyway table")
+    @DisplayName("S-D0109-20: on an embedded H2 database without a compatibility mode the whole set applies: mode REGULAR, 8 scripts, 25 tables, and no Flyway table")
     void theWholeSetAppliesOnPlainH2() {
         assertThat(freshUrl()).doesNotContain("MODE=");
         DataSource database = freshDatabase();
@@ -70,13 +66,13 @@ class ProductScriptsTest {
 
         assertThat(jdbc.queryForObject("SELECT SETTING_VALUE FROM INFORMATION_SCHEMA.SETTINGS WHERE SETTING_NAME = 'MODE'", String.class)).isEqualTo("REGULAR");
         assertThat(history(jdbc, Phase.EXPAND)).containsExactly("1/1/SUCCEEDED", "2/1/SUCCEEDED", "3/1/SUCCEEDED", "4/1/SUCCEEDED", "5/1/SUCCEEDED", "6/1/SUCCEEDED", "7/1/SUCCEEDED", "8/1/SUCCEEDED");
-        assertThat(count(jdbc, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'PUBLIC' AND TABLE_TYPE = 'BASE TABLE'")).isEqualTo(24);
+        assertThat(count(jdbc, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'PUBLIC' AND TABLE_TYPE = 'BASE TABLE'")).isEqualTo(25);
         assertThat(tableExists(jdbc, "PUBLIC", "flyway_schema_history")).isFalse();
     }
 
     @Test
-    @DisplayName("S-D0109-21: no script names a DBMS's own long text type; the twelve long-text columns are written ${long_text} and have one type on the database")
-    void longTextIsWrittenOnlyAsThePlaceholder() throws IOException {
+    @DisplayName("S-D0109-21 / S4-AT-06: product scripts contain zero ${long_text}/CLOB/BLOB/BYTEA columns and every remaining character column has max length <= 4096")
+    void noLongTextOrLobColumnsRemainInProductScripts() throws IOException {
         List<String> offenders = new ArrayList<>();
         int placeholders = 0;
         for (Resource script : RESOURCES.getResources("classpath*:db/expand/**/*.sql")) {
@@ -87,14 +83,21 @@ class ProductScriptsTest {
             placeholders += code.split(Pattern.quote("${long_text}"), -1).length - 1;
         }
         assertThat(offenders).isEmpty();
-        assertThat(placeholders).as("every long-text column of the schema comes from the placeholder").isEqualTo(LONG_TEXT_COLUMNS.size());
+        assertThat(placeholders).as("all 10 long-text columns moved to encrypted attachments (D-0092)").isZero();
 
-        // The declaration of H2 in SqlBuilder is CHARACTER LARGE OBJECT(2147483647); the columns of the schema that have that type and length are exactly the twelve of the list.
         DataSource database = freshDatabase();
         new MigrationRunner(CLOCK, database).run(Phase.EXPAND);
-        List<String> columns = new JdbcTemplate(database).query("SELECT LOWER(TABLE_NAME) || '.' || LOWER(COLUMN_NAME), DATA_TYPE, CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS "
-            + "WHERE TABLE_SCHEMA = 'PUBLIC' ORDER BY 1", (rows, number) -> rows.getString(2).equals("CHARACTER LARGE OBJECT") && rows.getLong(3) == 2_147_483_647L ? rows.getString(1) : null)
+        JdbcTemplate jdbc = new JdbcTemplate(database);
+        List<String> lobColumns = jdbc.query("SELECT LOWER(TABLE_NAME) || '.' || LOWER(COLUMN_NAME), DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS "
+            + "WHERE TABLE_SCHEMA = 'PUBLIC' ORDER BY 1",
+            (rows, number) -> rows.getString(2).contains("LARGE OBJECT") || rows.getString(2).contains("BINARY") ? rows.getString(1) + ":" + rows.getString(2) : null)
             .stream().filter(java.util.Objects::nonNull).toList();
-        assertThat(columns).as("the columns declared as CHARACTER LARGE OBJECT(2147483647)").containsExactlyElementsOf(LONG_TEXT_COLUMNS);
+        assertThat(lobColumns).as("no CLOB/BLOB/BINARY columns in schema").isEmpty();
+
+        List<String> oversizedCharColumns = jdbc.query("SELECT LOWER(TABLE_NAME) || '.' || LOWER(COLUMN_NAME), CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS "
+            + "WHERE TABLE_SCHEMA = 'PUBLIC' AND CHARACTER_MAXIMUM_LENGTH IS NOT NULL ORDER BY 1",
+            (rows, number) -> rows.getLong(2) > 4096L ? rows.getString(1) + "(" + rows.getLong(2) + ")" : null)
+            .stream().filter(java.util.Objects::nonNull).toList();
+        assertThat(oversizedCharColumns).as("every string column in V1..V8 is bounded to <= 4096 characters (S4-AT-06)").isEmpty();
     }
 }

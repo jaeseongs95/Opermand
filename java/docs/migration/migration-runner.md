@@ -75,19 +75,12 @@ SSH의 사정에 따른 차이:
 
 ## 긴 텍스트 열
 
-- 목표는 0개(장부 D-0092: 본문을 DB 열에 두지 않음)이지만, 열의 의미를 바꿔야 해서 **바꾸지 않았다**. 이전 판의 벤더 스크립트(`V1_1`·`V6_1`)가 만들던 12개를 같은 이름·같은 NOT NULL 규칙으로 공통 스크립트(`V1`·`V6`)에 `${long_text}`로 옮겼다(시험 S-D0109-21이 12개의 집합을 고정한다).
-  - `operation_command`: `command_text`, `caller_context`, `display_context`
-  - `operation_source`: `launcher_command`, `argv_json`, `caller_context`, `display_context`
-  - `operation_download`: `caller_context`, `display_context`
-  - `operation_result`: `result_texts`
-  - `operation_legacy`: `original_text`
-  - `maintenance_reservation`: `baseline`(null 허용)
-  - 2026-11-21 보정: 위 마지막 두 열(`operation_legacy.original_text`, `maintenance_reservation.baseline`)은 지금의 `V1`~`V8` 스크립트에 없다. 현재 긴 텍스트 열은 앞의 10개이고 `ProductScriptsTest.LONG_TEXT_COLUMNS`가 10개를 고정한다. 이 10개를 첨부 메타 표와 파일로 옮기는 단위는 `stage4-design.md` B-15·A.9(U18)이다. 그 단위가 이 절과 위 시험을 같은 커밋에서 고친다.
-- 이 열들은 요청 본문(명령, 호출 맥락, 결과 문장, 2.x 원문, 유지보수 보존 기준)이다. 이를 첨부 메타 표와 파일로 옮기면 저장 계약이 바뀌므로(저장소 어댑터·사용 사례·사례표 전체) 첨부 표 이전(장부 D-0092)에서 따로 다룬다. 이 변경은 열을 그대로 둔다. 같은 이유로 DBMS별 폴더 제거(D-0088)는 이 열들을 `${long_text}`로 쓰는 것으로 끝냈다.
-- 번호: 3.0.0은 배포 전이라 `V1_1`·`V6_1`을 없애고 `V1`·`V6` 안으로 합쳐 번호가 1~7로 연속이다(`V2`~`V5`·`V7`의 번호와 이름은 그대로).
-- 방언별 선언(`SqlBuilder.generateLongText`): H2 `CHARACTER LARGE OBJECT(2147483647)`, PostgreSQL `TEXT`, Oracle `CLOB`, Db2 `CLOB(2147483647)`, SQL Server `NVARCHAR(MAX)`(`VARCHAR(MAX)`는 데이터베이스 정렬 규칙의 코드 페이지에 따라 한글을 담지 못할 수 있다), MariaDB·MySQL `LONGTEXT`. 근거 주소는 메서드의 주석에 있다.
-- H2에서 `${long_text}`는 `CHARACTER LARGE OBJECT(2147483647)`이다. 이전 판의 H2 벤더 스크립트는 `CLOB`이었고, 지금과 열의 의미(NOT NULL, 큰 문자 객체)가 같다. H2가 이 선언을 받아들이는 것은 시험으로 확인했다: 이 선언으로 만든 열의 형이 `CHARACTER LARGE OBJECT`이고 최대 길이가 2147483647이며(S-D0109-13 (b)), 한글을 포함한 40만 자를 넣고 그대로 읽는다. 제품 스크립트의 열 12개가 모두 이 형이다(S-D0109-21).
-- 지금 스크립트에는 `CLOB`·`TEXT` 같은 DBMS의 형 이름이 없다(S-D0109-21). 다른 DBMS의 선언은 DB 없는 문자열 시험(S-SQLB-22)으로만 확인한다. 실제 다른 DBMS에서의 실행은 개발원칙 7.3에 따라 시험하지 않는다. 미검증.
+- 목표였던 **0개**(장부 D-0092: 본문을 DB 열에 두지 않음)가 `B5-Crypto1`(`stage4-design.md` B-15·A.9 U18)에서 달성되었다.
+  - 이전 `V1__operation_journal.sql`의 10개 `${long_text}` 열(`operation_command.command_text`·`caller_context`·`display_context`, `operation_source.launcher_command`·`argv_json`·`caller_context`·`display_context`, `operation_download.caller_context`·`display_context`, `operation_result.result_texts`)을 모두 제거하고, 외래 키·경로 열이 없는 첨부 메타 표 `attachment(id, role, size_bytes, sha256, created_at)`와 10개 `*_attachment_id CHAR(48) NOT NULL` 참조 열로 대체했다.
+  - `ProductScriptsTest`(S-D0109-21·S4-AT-06)는 `db/expand/*.sql`에 `${long_text}`·CLOB·BLOB·BYTEA 열이 0개이며 남은 모든 문자 열 길이가 4096 이하임을 고정한다.
+  - `SqlBuilder.generateLongText(Database)`와 `MigrationRunner`의 `${long_text}` 치환 기능 자체는 이식성 기반으로 유지하며 `MigrationRunnerTest`(S-D0109-13)와 `SqlBuilderTest`(S-SQLB-22)가 계속 검증한다.
+- 번호: 3.0.0은 배포 전이라 `V1`~`V8` 8개 스크립트·25개 표(`attachment` 포함, `V8` `storage_budget` 포함)로 연속이다.
+- 방언별 선언(`SqlBuilder.generateLongText`): H2 `CHARACTER LARGE OBJECT(2147483647)`, PostgreSQL `TEXT`, Oracle `CLOB`, Db2 `CLOB(2147483647)`, SQL Server `NVARCHAR(MAX)`, MariaDB·MySQL `LONGTEXT`. 다른 DBMS의 선언은 DB 없는 문자열 시험(S-SQLB-22)으로만 확인한다. 실제 다른 DBMS에서의 실행은 개발원칙 7.3에 따라 시험하지 않는다. 미검증.
 
 ## 한계와 운영자 복구
 

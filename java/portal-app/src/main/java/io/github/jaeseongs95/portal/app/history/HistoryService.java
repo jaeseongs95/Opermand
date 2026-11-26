@@ -5,9 +5,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.function.Supplier;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionOperations;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import io.github.jaeseongs95.portal.app.journal.HistoryCursor;
 import io.github.jaeseongs95.portal.app.journal.HistoryFilter;
@@ -64,14 +68,30 @@ public class HistoryService {
 
     private final HistoryQuery query;
     private final TargetSource targets;
+    private final TransactionOperations readTx;
 
-    public HistoryService(HistoryQuery query, TargetSource targets) {
-        this.query = query;
-        this.targets = targets;
+    @Autowired
+    public HistoryService(HistoryQuery query, TargetSource targets, PlatformTransactionManager transactionManager) {
+        this(query, targets, readOnly(transactionManager));
     }
 
-    /** The page of the history that follows {@code after} for the filter. */
-    @Transactional(readOnly = true)
+    public HistoryService(HistoryQuery query, TargetSource targets) {
+        this(query, targets, TransactionOperations.withoutTransaction());
+    }
+
+    private HistoryService(HistoryQuery query, TargetSource targets, TransactionOperations readTx) {
+        this.query = query;
+        this.targets = targets;
+        this.readTx = readTx;
+    }
+
+    private static TransactionOperations readOnly(PlatformTransactionManager transactionManager) {
+        TransactionTemplate tx = new TransactionTemplate(transactionManager);
+        tx.setReadOnly(true);
+        return tx;
+    }
+
+    /** The page of the history that follows {@code after} for the filter. Each page fetch runs SQL in a short read-only transaction and decrypts attachments outside it. */
     public HistoryResult page(HistoryFilter filter, HistoryCursor after) {
         Objects.requireNonNull(filter, "filter");
         Objects.requireNonNull(after, "after");
@@ -97,10 +117,10 @@ public class HistoryService {
     }
 
     /** One operation with its full public metadata; one that does not exist or is not listed (its target is not registered) is {@code OPERATION_NOT_FOUND}. */
-    @Transactional(readOnly = true)
     public HistoryEntry entry(OperationId id) {
         Objects.requireNonNull(id, "id");
-        Operation operation = query.publicMetadata(id).orElseThrow(() -> new RequestRefusedException(RequestErrorCode.OPERATION_NOT_FOUND));
+        Supplier<Optional<Operation>> fetched = Objects.requireNonNull(readTx.execute(status -> query.fetchPublicMetadata(id)), "metadata");
+        Operation operation = fetched.get().orElseThrow(() -> new RequestRefusedException(RequestErrorCode.OPERATION_NOT_FOUND));
         HistoryEntry entry = statusOf(operation).map(status -> new HistoryEntry(operation, status))
             .orElseThrow(() -> new RequestRefusedException(RequestErrorCode.OPERATION_NOT_FOUND));
         if (weigh(operation) > RESPONSE_BYTES) {
@@ -118,7 +138,9 @@ public class HistoryService {
         HistoryCursor cursor = after;
         HistoryCursor resume = new HistoryCursor.End();
         for (int pages = 0; pages < MAX_QUERY_PAGES && listed.size() <= PAGE_SIZE; pages++) {
-            HistoryPage page = query.page(filter, cursor, PAGE_SIZE);
+            HistoryCursor currentCursor = cursor;
+            Supplier<HistoryPage> fetched = Objects.requireNonNull(readTx.execute(status -> query.fetchPage(filter, currentCursor, PAGE_SIZE)), "page");
+            HistoryPage page = fetched.get();
             for (Operation operation : page.operations()) {
                 statusOf(operation).ifPresent(status -> listed.add(new HistoryEntry(operation, status)));
             }

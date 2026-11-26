@@ -65,8 +65,9 @@ import io.github.jaeseongs95.portal.store.output.OutputConfiguration;
 @TestConfiguration(proxyBeanMethods = false)
 @Import({DomainBeans.class, OutputConfiguration.class, TargetPlatformRegistry.class, StagedFileService.class, UploadService.class, DownloadService.class,
     TransferSupport.class, TransferOutcomes.class, OperationUploadAdmission.class, ArtifactImporter.class, QuarantineNotice.class, StartupSequence.class})
-@ComponentScan(basePackages = {"io.github.jaeseongs95.portal.app.event", "io.github.jaeseongs95.portal.app.admission", "io.github.jaeseongs95.portal.app.operation",
-    "io.github.jaeseongs95.portal.app.execution", "io.github.jaeseongs95.portal.app.recovery", "io.github.jaeseongs95.portal.app.storage"}, excludeFilters = @ComponentScan.Filter(type = FilterType.REGEX,
+@ComponentScan(basePackages = {"io.github.jaeseongs95.portal.app.attachment", "io.github.jaeseongs95.portal.app.event", "io.github.jaeseongs95.portal.app.admission",
+    "io.github.jaeseongs95.portal.app.operation", "io.github.jaeseongs95.portal.app.execution", "io.github.jaeseongs95.portal.app.recovery",
+    "io.github.jaeseongs95.portal.app.storage"}, excludeFilters = @ComponentScan.Filter(type = FilterType.REGEX,
     pattern = "io\\.github\\.jaeseongs95\\.portal\\.app\\.execution\\.AgentCliOperationRunner"))
 @ComponentScan(basePackages = "io.github.jaeseongs95.portal.store", excludeFilters = @ComponentScan.Filter(type = FilterType.REGEX,
     pattern = "io\\.github\\.jaeseongs95\\.portal\\.store\\.(audit|capacity|cli)\\..*|io\\.github\\.jaeseongs95\\.portal\\.store\\.StoreConfiguration"))

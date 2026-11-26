@@ -47,6 +47,8 @@ public class PrivateStorageProtection implements StorageProtection {
         return switch (area) {
             case ARTIFACTS -> roots.artifacts();
             case OUTPUTS -> roots.outputs();
+            case ATTACHMENTS -> roots.attachments();
+            case KEYRING -> roots.keyring();
         };
     }
 
