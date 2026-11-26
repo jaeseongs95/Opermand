@@ -227,11 +227,34 @@ public final class PosixCommandLineGrammar implements CommandLineGrammar {
 
         private void scanForPrivilegeWrappers(List<Word> words, int fromIndex) {
             for (int i = fromIndex; i < words.size(); i++) {
-                String base = basename(words.get(i).text());
-                if (PRIVILEGE_WRAPPERS.contains(base)) {
+                if (containsPrivilegeWrapper(words.get(i).text())) {
                     usesSudo = true;
+                    return;
                 }
             }
+        }
+
+        private static boolean containsPrivilegeWrapper(String text) {
+            int length = text.length();
+            int start = 0;
+            while (start < length) {
+                while (start < length && isWrapperDelimiter(text.charAt(start))) {
+                    start++;
+                }
+                int end = start;
+                while (end < length && !isWrapperDelimiter(text.charAt(end))) {
+                    end++;
+                }
+                if (end > start && PRIVILEGE_WRAPPERS.contains(basename(text.substring(start, end)))) {
+                    return true;
+                }
+                start = end;
+            }
+            return false;
+        }
+
+        private static boolean isWrapperDelimiter(char c) {
+            return Character.isWhitespace(c) || c == ';' || c == '&' || c == '|' || c == '(' || c == ')' || c == '<' || c == '>' || c == '\'' || c == '"' || c == '`';
         }
 
         private void doas(List<Word> words, int depth) {
