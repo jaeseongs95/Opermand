@@ -1,5 +1,6 @@
 package io.github.jaeseongs95.portal.app.attachment;
 
+import java.io.Serial;
 import java.util.Objects;
 
 import io.github.jaeseongs95.portal.domain.attachment.AttachmentId;
@@ -11,7 +12,10 @@ import io.github.jaeseongs95.portal.domain.attachment.AttachmentRole;
  */
 public final class AttachmentUnreadableException extends RuntimeException {
 
-    private final AttachmentId id;
+    @Serial
+    private static final long serialVersionUID = 1L;
+
+    private final transient AttachmentId id;
     private final AttachmentRole role;
     private final Reason reason;
 

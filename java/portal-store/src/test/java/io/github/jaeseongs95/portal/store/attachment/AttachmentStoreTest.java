@@ -275,7 +275,7 @@ class AttachmentStoreTest {
 
         // Bit-flipped ciphertext
         byte[] flipped = originalFirst.clone();
-        flipped[flipped.length - 1] ^= 0x01;
+        flipped[flipped.length - 1] = (byte) (flipped[flipped.length - 1] ^ 0x01);
         Files.write(files.pathOf(first.metadata().id()), flipped);
         assertThatThrownBy(() -> store.decrypt(first.metadata(), AttachmentRole.COMMAND_TEXT))
             .isInstanceOfSatisfying(AttachmentUnreadableException.class, e -> assertThat(e.reason()).isEqualTo(AttachmentUnreadableException.Reason.AUTH_FAILED));

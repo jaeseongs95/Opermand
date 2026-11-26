@@ -113,7 +113,7 @@ class JdbcHistoryQueryTest {
         String cmdAttId = jdbc.queryForObject("SELECT command_text_attachment_id FROM operation_command WHERE operation_id = ?", String.class, damaged.id().value());
         Path blob = attachmentFiles.pathOf(new AttachmentId(cmdAttId));
         byte[] bytes = Files.readAllBytes(blob);
-        bytes[bytes.length - 1] ^= 0x5A;
+        bytes[bytes.length - 1] = (byte) (bytes[bytes.length - 1] ^ 0x5A);
         Files.write(blob, bytes);
 
         assertThatThrownBy(() -> journal.find(damaged.id())).isInstanceOf(AttachmentUnreadableException.class);
