@@ -165,16 +165,25 @@ class FileOutputPayloadStoreTest {
         FileOutputPayloadStore store = store(folder, 1024 * 1024);
         OutputId id = id("6");
         byte[] json = utf8("{\"failed\":false,\"texts\":[\"" + "SAFE ".repeat(20000) + "\"]}");
-        FormatSpan span = store.finish(id, json, utf8("SAFE ".repeat(20000))).spans().get(OutputFormat.JSON);
+        OutputFormats finished = store.finish(id, json, utf8("SAFE ".repeat(20000)));
+        FormatSpan span = finished.spans().get(OutputFormat.JSON);
+        FormatSpan textSpan = finished.spans().get(OutputFormat.TEXT);
         Path out = folder.resolve(id.value() + ".out");
         assertThat(readAll(store.openFormat(id, OutputFormat.JSON, span))).isEqualTo(json);
 
         byte[] original = Files.readAllBytes(out);
-        byte[] damaged = original.clone();
-        damaged[damaged.length - 1] = (byte) (damaged[damaged.length - 1] ^ 1);
-        Files.write(out, damaged);
+        byte[] damagedJson = original.clone();
+        damagedJson[128] = (byte) (damagedJson[128] ^ 1);
+        Files.write(out, damagedJson);
         assertThatThrownBy(() -> store.openFormat(id, OutputFormat.JSON, span)).isInstanceOfSatisfying(RequestRefusedException.class,
             e -> assertThat(e.code()).isEqualTo(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED));
+
+        byte[] damagedText = original.clone();
+        damagedText[damagedText.length - 1] = (byte) (damagedText[damagedText.length - 1] ^ 1);
+        Files.write(out, damagedText);
+        assertThatThrownBy(() -> store.openFormat(id, OutputFormat.TEXT, textSpan)).isInstanceOfSatisfying(RequestRefusedException.class,
+            e -> assertThat(e.code()).isEqualTo(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED));
+
         Files.write(out, original);
         assertThat(readAll(store.openFormat(id, OutputFormat.JSON, span))).isEqualTo(json);
 
