@@ -11,7 +11,8 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.nio.file.attribute.PosixFilePermissions;
+import java.security.SecureRandom;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -33,6 +34,8 @@ import io.github.jaeseongs95.portal.domain.id.Digest;
 import io.github.jaeseongs95.portal.domain.id.Sha256Digester;
 import io.github.jaeseongs95.portal.store.StorageRoots;
 import io.github.jaeseongs95.portal.store.TestStorage;
+import io.github.jaeseongs95.portal.store.attachment.AttachmentKeyring;
+import io.github.jaeseongs95.portal.store.attachment.ChunkedAeadCodec;
 
 /** The file part of the output store on a temporary folder; no Spring and no database. */
 class FileOutputPayloadStoreTest {
@@ -42,7 +45,10 @@ class FileOutputPayloadStoreTest {
 
     private FileOutputPayloadStore store(Path folder, long maxOutputBytes) {
         OutputLimits limits = new OutputLimits(Duration.ofHours(1), maxOutputBytes, maxOutputBytes * 8, 1000, 0L);
-        return new FileOutputPayloadStore(new OutputFiles(new StorageRoots(folder, folder), TestStorage.rules()), new Sha256Digester(), limits);
+        StorageRoots roots = new StorageRoots(folder, folder);
+        SecureRandom random = new SecureRandom();
+        AttachmentKeyring keyring = new AttachmentKeyring(roots.keyring().resolve(AttachmentKeyring.DEFAULT_FILE_NAME), TestStorage.rules(), random, Clock.systemUTC());
+        return new FileOutputPayloadStore(new OutputFiles(roots, TestStorage.rules()), new Sha256Digester(), limits, new ChunkedAeadCodec(keyring, random));
     }
 
     private OutputId id(String hexDigit) {
@@ -70,8 +76,11 @@ class FileOutputPayloadStoreTest {
         assertThat(store.append(id, new StreamFrame(StreamKind.STDERR, AC_FF_00))).isEqualTo(15L);
 
         byte[] expected = {0, 0, 0, 0, 2, (byte) 0xe2, (byte) 0x82, 1, 0, 0, 0, 3, (byte) 0xac, (byte) 0xff, 0};
-        assertThat(Files.readAllBytes(folder.resolve(id.value() + ".stream"))).isEqualTo(expected);
-        assertThat(store(folder, 1024).retainedBytes(id)).isEqualTo(15L);
+        byte[] rawSpool = Files.readAllBytes(folder.resolve(id.value() + ".stream"));
+        assertThat(new String(rawSpool, 0, 4, StandardCharsets.UTF_8)).isEqualTo("PAE1");
+        FileOutputPayloadStore restarted = store(folder, 1024);
+        assertThat(readAll(restarted.openStream(id))).isEqualTo(expected);
+        assertThat(restarted.retainedBytes(id)).isEqualTo(15L);
     }
 
     @Test
@@ -82,19 +91,22 @@ class FileOutputPayloadStoreTest {
         Path spool = folder.resolve(id.value() + ".stream");
 
         assertThat(store.append(id, new StreamFrame(StreamKind.STDOUT, "a".repeat(200).getBytes(StandardCharsets.US_ASCII)))).isEqualTo(128L);
-        assertThat(Files.size(spool)).isEqualTo(128L);
-        assertThat(ByteBuffer.wrap(Files.readAllBytes(spool)).getInt(1)).as("5 header bytes leave 123 data bytes").isEqualTo(123);
+        assertThat(store.retainedBytes(id)).isEqualTo(128L);
+        byte[] decoded = readAll(store.openStream(id));
+        assertThat(decoded).hasSize(128);
+        assertThat(ByteBuffer.wrap(decoded).getInt(1)).as("5 header bytes leave 123 data bytes").isEqualTo(123);
 
         assertThat(store.append(id, new StreamFrame(StreamKind.STDERR, utf8("lost")))).isEqualTo(128L);
-        assertThat(Files.size(spool)).isEqualTo(128L);
+        assertThat(store.retainedBytes(id)).isEqualTo(128L);
 
         assertThatThrownBy(() -> store.finish(id, utf8("{}"), utf8("x".repeat(200)))).isInstanceOfSatisfying(RequestRefusedException.class,
             e -> assertThat(e.code()).isEqualTo(ExecutionErrorCode.OUTPUT_CAPACITY));
         assertThat(Files.exists(folder.resolve(id.value() + ".out"))).isFalse();
         assertThat(Files.exists(folder.resolve(id.value() + ".part"))).isFalse();
-        byte[] kept = Files.readAllBytes(spool);
+        byte[] kept = readAll(store.openStream(id));
         assertThat(kept).hasSize(128);
         assertThat(kept[5]).isEqualTo((byte) 'a');
+        assertThat(new String(Files.readAllBytes(spool), 0, 4, StandardCharsets.UTF_8)).isEqualTo("PAE1");
         assertThat(store.retainedBytes(id)).isEqualTo(128L);
     }
 
@@ -120,7 +132,10 @@ class FileOutputPayloadStoreTest {
         assertThat(jsonSpan.pageDigests()).hasSize((json.length + 16383) / 16384);
         assertThat(textSpan.pageDigests()).hasSize((text.length + 16383) / 16384).hasSizeGreaterThan(1);
         assertThat(textSpan.sha256()).isEqualTo(digester.digest(text));
-        assertThat(Files.size(folder.resolve(id.value() + ".out"))).isEqualTo((long) json.length + text.length);
+        byte[] rawOut = Files.readAllBytes(folder.resolve(id.value() + ".out"));
+        assertThat(new String(rawOut, 0, 4, StandardCharsets.UTF_8)).isEqualTo("PAE1");
+        assertThat(new String(rawOut, StandardCharsets.UTF_8)).doesNotContain("SENTINEL");
+        assertThat(store.retainedBytes(id)).isEqualTo((long) json.length + text.length);
         assertThat(Files.exists(folder.resolve(id.value() + ".part"))).isFalse();
 
         FileOutputPayloadStore restarted = store(folder, 4 * 1024 * 1024);
@@ -156,7 +171,7 @@ class FileOutputPayloadStoreTest {
 
         byte[] original = Files.readAllBytes(out);
         byte[] damaged = original.clone();
-        damaged[10] ^= 1;
+        damaged[damaged.length - 1] = (byte) (damaged[damaged.length - 1] ^ 1);
         Files.write(out, damaged);
         assertThatThrownBy(() -> store.openFormat(id, OutputFormat.JSON, span)).isInstanceOfSatisfying(RequestRefusedException.class,
             e -> assertThat(e.code()).isEqualTo(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED));
@@ -213,17 +228,19 @@ class FileOutputPayloadStoreTest {
         byte[] streamed = readAll(store.openStream(id));
         Digest digest = store.streamDigest(id);
 
-        assertThat(streamed).isEqualTo(Files.readAllBytes(folder.resolve(id.value() + ".stream")));
+        byte[] rawSpool = Files.readAllBytes(folder.resolve(id.value() + ".stream"));
+        assertThat(new String(rawSpool, 0, 4, StandardCharsets.UTF_8)).isEqualTo("PAE1");
+        assertThat(new String(rawSpool, StandardCharsets.UTF_8)).doesNotContain("hello");
         assertThat(streamed).hasSize(5 + 6 + 5 + 4);
         assertThat(digest).isEqualTo(new Sha256Digester().digest(streamed));
         assertThat(store.streamDigest(id)).as("the same input, the same digest").isEqualTo(digest);
 
-        byte[] changed = streamed.clone();
-        changed[changed.length - 1] ^= 0x01;
+        byte[] changed = rawSpool.clone();
+        changed[changed.length - 1] = (byte) (changed[changed.length - 1] ^ 0x01);
         Files.write(folder.resolve(id.value() + ".stream"), changed);
 
-        assertThat(store.streamDigest(id)).as("a tampered spool does not match").isNotEqualTo(digest);
-        assertThat(store.streamDigest(id)).isEqualTo(new Sha256Digester().digest(changed));
+        assertThatThrownBy(() -> store.streamDigest(id)).as("a tampered encrypted spool fails closed").isInstanceOfSatisfying(RequestRefusedException.class,
+            e -> assertThat(e.code()).isEqualTo(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED));
     }
 
     @Test

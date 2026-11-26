@@ -16,6 +16,7 @@ import java.util.Set;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import io.github.jaeseongs95.portal.app.output.FormatSpan;
@@ -31,21 +32,21 @@ import io.github.jaeseongs95.portal.domain.error.ExecutionErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.Digest;
 import io.github.jaeseongs95.portal.domain.id.Digester;
+import io.github.jaeseongs95.portal.store.attachment.ChunkedAeadCodec;
+import io.github.jaeseongs95.portal.store.attachment.CorruptedEncryptedPayloadException;
 import io.github.jaeseongs95.portal.store.output.OutputFiles.PayloadKind;
 
 /**
- * The bytes of the command outputs, in the files of the output folder (design 8.5; 2.x {@code command-output.mjs}). An output has up to three files:
+ * The bytes of the command outputs, encrypted at rest with {@link ChunkedAeadCodec} ({@code PAE1}, 16 KiB fixed chunks with AES-256-GCM, B6-Crypto2).
+ *
  * <ul>
- * <li>{@code <id>.stream}: the spool of the raw stdout/stderr frames, each one byte of {@link StreamKind} (0 stdout, 1 stderr), four bytes of length (big endian)
- * and the data. Every append is forced to disk before it returns, so the bytes are durable before the manifest says so. The spool never grows beyond
- * {@link OutputLimits#maxOutputBytes()}: a frame is cut to what still fits and, when nothing fits, not written (2.x truncation); the caller sees the loss as the
- * difference between the bytes it sent and the growth of the returned size.</li>
- * <li>{@code <id>.part}: the temporary file of {@code finish}.</li>
- * <li>{@code <id>.out}: the JSON rendering followed by the text rendering. {@code finish} writes the {@code .part} file, forces it, and renames it to {@code .out} in
- * one step, so a reader sees either no {@code .out} or the whole one; it then removes the spool. A finished output accepts no more frames.</li>
+ * <li>{@code <id>.stream}: encrypted spool of raw stdout/stderr frames, each one byte of {@link StreamKind} (0 stdout, 1 stderr), four bytes of length (big endian),
+ * and the data. Logical plaintext size never exceeds {@link OutputLimits#maxOutputBytes()}.</li>
+ * <li>{@code <id>.part}: temporary encrypted file written by {@code finish}.</li>
+ * <li>{@code <id>.out}: encrypted JSON rendering followed by text rendering. {@code openFormat} performs O(span) random-seek decryption over only the intersecting
+ * 16 KiB chunks and verifies both the GCM tags and the 16 KiB page SHA-256 digests + full rendering SHA-256 against the manifest.</li>
  * </ul>
- * Every method does file I/O and so is called outside a transaction (Principles 4.4). A read verifies the bytes it returns: the SHA-256 of each 16 KiB page and of
- * the whole rendering must match the span the manifest holds, so a damaged file is refused instead of served.
+ * Every method does file I/O and is called outside a database transaction (Principles 4.4).
  */
 @Component
 public class FileOutputPayloadStore implements OutputPayloadStore {
@@ -62,11 +63,14 @@ public class FileOutputPayloadStore implements OutputPayloadStore {
     private final OutputFiles files;
     private final Digester digester;
     private final OutputLimits limits;
+    private final ChunkedAeadCodec codec;
 
-    public FileOutputPayloadStore(OutputFiles files, Digester digester, OutputLimits limits) {
+    @Autowired
+    public FileOutputPayloadStore(OutputFiles files, Digester digester, OutputLimits limits, ChunkedAeadCodec codec) {
         this.files = Objects.requireNonNull(files, "files");
         this.digester = Objects.requireNonNull(digester, "digester");
         this.limits = Objects.requireNonNull(limits, "limits");
+        this.codec = Objects.requireNonNull(codec, "codec");
     }
 
     @Override
@@ -76,20 +80,16 @@ public class FileOutputPayloadStore implements OutputPayloadStore {
             throw new RequestRefusedException(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED);
         }
         byte[] data = frame.data();
-        try (FileChannel spool = files.openAppend(files.path(id, PayloadKind.STREAM))) {
-            long size = spool.size();
+        try (FileChannel spool = files.openReadWrite(files.path(id, PayloadKind.STREAM))) {
+            long size = codec.plaintextLength(spool, ChunkedAeadCodec.Scope.OUTPUT_STREAM, id.value());
             int room = (int) Math.max(0L, Math.min(data.length, limits.maxOutputBytes() - size - FRAME_HEADER_BYTES));
             if (room == 0) {
                 return size;
             }
             ByteBuffer bytes = ByteBuffer.allocate(FRAME_HEADER_BYTES + room);
-            bytes.put(code(frame.kind())).putInt(room).put(data, 0, room).flip();
-            while (bytes.hasRemaining()) {
-                spool.write(bytes);
-            }
-            spool.force(true);
-            return spool.size();
-        } catch (IOException e) {
+            bytes.put(code(frame.kind())).putInt(room).put(data, 0, room);
+            return codec.append(spool, ChunkedAeadCodec.Scope.OUTPUT_STREAM, id.value(), size, bytes.array());
+        } catch (CorruptedEncryptedPayloadException | IOException e) {
             throw new RequestRefusedException(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED, e);
         }
     }
@@ -109,11 +109,9 @@ public class FileOutputPayloadStore implements OutputPayloadStore {
         spans.put(OutputFormat.JSON, span(0L, json));
         spans.put(OutputFormat.TEXT, span(json.length, text));
         Path part = files.path(id, PayloadKind.PART);
-        try (FileChannel channel = files.openFresh(part)) {
-            write(channel, json);
-            write(channel, text);
-            channel.force(true);
-        } catch (IOException e) {
+        try (FileChannel channel = files.openFreshReadWrite(part)) {
+            codec.writeAll(channel, ChunkedAeadCodec.Scope.OUTPUT_OUT, id.value(), json, text);
+        } catch (CorruptedEncryptedPayloadException | IOException e) {
             throw new RequestRefusedException(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED, e);
         }
         files.moveIntoPlace(part, out);
@@ -127,18 +125,11 @@ public class FileOutputPayloadStore implements OutputPayloadStore {
             throw new RequestRefusedException(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED);
         }
         int size = (int) span.sizeBytes();
-        byte[] bytes = new byte[size];
+        byte[] bytes;
         try (FileChannel out = files.openRead(files.path(id, PayloadKind.OUT))) {
-            if (span.offsetBytes() + size > out.size()) {
-                throw damaged(id, format, "the file is shorter than its span");
-            }
-            out.position(span.offsetBytes());
-            ByteBuffer buffer = ByteBuffer.wrap(bytes);
-            while (buffer.hasRemaining()) {
-                if (out.read(buffer) < 0) {
-                    throw damaged(id, format, "the file ended inside its span");
-                }
-            }
+            bytes = codec.readRange(out, ChunkedAeadCodec.Scope.OUTPUT_OUT, id.value(), span.offsetBytes(), size);
+        } catch (CorruptedEncryptedPayloadException e) {
+            throw damaged(id, format, e.getMessage());
         } catch (IOException e) {
             throw new RequestRefusedException(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED, e);
         }
@@ -146,18 +137,23 @@ public class FileOutputPayloadStore implements OutputPayloadStore {
         return new PayloadRead(Channels.newChannel(new ByteArrayInputStream(bytes)), size);
     }
 
-    /** The spool is read as the file holds it; it is a safe regular file or the read is refused. The caller closes the channel. */
+    /** Opens the encrypted spool as a verified decrypting stream; fails closed on tampering or missing spool. */
     @Override
     public PayloadRead openStream(OutputId id) {
         Path spool = files.path(id, PayloadKind.STREAM);
         if (!files.exists(spool)) {
             throw new RequestRefusedException(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED);
         }
-        long size = files.sizeOf(spool);
-        return new PayloadRead(files.openRead(spool), size);
+        FileChannel channel = files.openRead(spool);
+        try {
+            ChunkedAeadCodec.DecryptedStream stream = codec.openDecryptingChannel(channel, ChunkedAeadCodec.Scope.OUTPUT_STREAM, id.value());
+            return new PayloadRead(stream.channel(), stream.plaintextLength());
+        } catch (CorruptedEncryptedPayloadException | IOException e) {
+            throw new RequestRefusedException(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED, e);
+        }
     }
 
-    /** The spool never exceeds {@link OutputLimits#maxOutputBytes()}, so it is hashed from memory like a rendering; a spool beyond that bound is damaged. */
+    /** The SHA-256 of the verified decrypted spool; a tampered spool fails closed with {@code OUTPUT_CAPTURE_FAILED}. */
     @Override
     public Digest streamDigest(OutputId id) {
         try (PayloadRead read = openStream(id)) {
@@ -189,7 +185,12 @@ public class FileOutputPayloadStore implements OutputPayloadStore {
         for (PayloadKind kind : PayloadKind.values()) {
             Path file = files.path(id, kind);
             if (files.exists(file)) {
-                bytes += files.sizeOf(file);
+                files.requireRegular(file);
+                try {
+                    bytes += codec.plaintextLengthOrRawSize(file, scopeOf(kind), id.value());
+                } catch (IOException e) {
+                    throw new RequestRefusedException(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED, e);
+                }
             }
         }
         return bytes;
@@ -215,19 +216,19 @@ public class FileOutputPayloadStore implements OutputPayloadStore {
         return new DiskSpace(files.usableBytes());
     }
 
+    private ChunkedAeadCodec.Scope scopeOf(PayloadKind kind) {
+        return switch (kind) {
+            case STREAM -> ChunkedAeadCodec.Scope.OUTPUT_STREAM;
+            case PART, OUT -> ChunkedAeadCodec.Scope.OUTPUT_OUT;
+        };
+    }
+
     private FormatSpan span(long offset, byte[] bytes) {
         List<Digest> pages = new ArrayList<>();
         for (int from = 0; from < bytes.length; from += PAGE_BYTES) {
             pages.add(digester.digest(Arrays.copyOfRange(bytes, from, Math.min(bytes.length, from + PAGE_BYTES))));
         }
         return new FormatSpan(offset, bytes.length, digester.digest(bytes), pages);
-    }
-
-    private void write(FileChannel channel, byte[] bytes) throws IOException {
-        ByteBuffer buffer = ByteBuffer.wrap(bytes);
-        while (buffer.hasRemaining()) {
-            channel.write(buffer);
-        }
     }
 
     private void verify(OutputId id, OutputFormat format, FormatSpan span, byte[] bytes) {

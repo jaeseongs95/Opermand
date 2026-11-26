@@ -165,16 +165,19 @@ class OutputAccountingTest {
     void publicationFailureKeepsThePayloadAndItsCharge(@TempDir Path folder) throws IOException {
         OutputWorld w = factory.create(folder, LIMITS);
         OutputId id = w.reserve(fixture.unbound(), 1024, T0);
-        w.payloads.finish(id, utf8("{\"failed\":true}"), utf8("complete retained payload"));
+        byte[] json = utf8("{\"failed\":true}");
+        byte[] text = utf8("complete retained payload");
+        long logicalBytes = (long) json.length + text.length;
+        w.payloads.finish(id, json, text);
         byte[] bytes = Files.readAllBytes(w.file(id, PayloadKind.OUT));
 
         w.markUnavailable(id, T0.plusMillis(50));
 
-        assertThat(w.charge(id)).isEqualTo(bytes.length);
+        assertThat(w.charge(id)).isEqualTo(logicalBytes);
         OutputWorld restarted = factory.create(folder, LIMITS);
         restarted.startup.reconcile(T0);
         assertThat(Files.readAllBytes(restarted.file(id, PayloadKind.OUT))).isEqualTo(bytes);
-        assertThat(restarted.charge(id)).isEqualTo(bytes.length);
+        assertThat(restarted.charge(id)).isEqualTo(logicalBytes);
     }
 
     @Test
@@ -299,7 +302,7 @@ class OutputAccountingTest {
         OutputId id = w.reserve(fixture.unbound(), 1024, T0);
         w.append(id, StreamKind.STDOUT, "some");
         w.append(id, StreamKind.STDERR, "warn");
-        byte[] spool = Files.readAllBytes(w.file(id, PayloadKind.STREAM));
+        byte[] spool = readAll(w.payloads.openStream(id));
         StreamInfo.CompleteStream complete = new StreamInfo.CompleteStream(8, spool.length, new Sha256Digester().digest(spool), 4, 4, StreamInfo.Truncation.COMPLETE);
         w.manifests.recordStream(id, complete);
         byte[] json = utf8("{\"failed\":true,\"execution\":{\"reason\":\"deadline\",\"timeoutMs\":120000}}");
@@ -309,7 +312,7 @@ class OutputAccountingTest {
         OutputManifest ready = w.manifests.markReady(id, formats, (long) json.length + text.length);
 
         assertThat(Files.exists(w.file(id, PayloadKind.STREAM))).isFalse();
-        assertThat(ready.chargeBytes()).isEqualTo(Files.size(w.file(id, PayloadKind.OUT)));
+        assertThat(ready.chargeBytes()).isEqualTo(w.payloads.retainedBytes(id)).isEqualTo((long) json.length + text.length);
         assertThat(ready.stream()).isEqualTo(complete);
         assertThat(readAll(w.payloads.openFormat(id, OutputFormat.TEXT, formats.spans().get(OutputFormat.TEXT)))).isEqualTo(text);
         assertThat(readAll(w.payloads.openFormat(id, OutputFormat.JSON, formats.spans().get(OutputFormat.JSON)))).isEqualTo(json);
@@ -334,14 +337,14 @@ class OutputAccountingTest {
 
         assertThat(committed).isEqualTo(14L);
         assertThat(w.row(id).streamBytes()).isEqualTo(14L);
-        assertThat(Files.size(w.file(id, PayloadKind.STREAM))).isEqualTo(total).isGreaterThan(w.row(id).streamBytes());
+        assertThat(w.payloads.retainedBytes(id)).isEqualTo(total).isGreaterThan(w.row(id).streamBytes());
 
         OutputWorld restarted = factory.create(folder, LIMITS);
         restarted.startup.reconcile(T0);
 
         assertThat(restarted.row(id).state()).isEqualTo(OutputState.UNAVAILABLE);
         assertThat(restarted.row(id).streamBytes()).isEqualTo(14L);
-        assertThat(restarted.charge(id)).isEqualTo(Files.size(restarted.file(id, PayloadKind.STREAM))).isEqualTo(30L);
+        assertThat(restarted.charge(id)).isEqualTo(restarted.payloads.retainedBytes(id)).isEqualTo(30L);
     }
 
     @Test

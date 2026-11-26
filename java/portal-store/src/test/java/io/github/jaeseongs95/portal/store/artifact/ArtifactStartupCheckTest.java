@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
+import java.nio.channels.Channels;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -245,12 +246,13 @@ class ArtifactStartupCheckTest {
         ArtifactId legacy = new ArtifactId("f".repeat(48));
         byte[] bytes = fixtures.bytes(48, 'f');
         payloads.append(legacy, 0, bytes);
+        byte[] rawEncrypted = Files.readAllBytes(file(legacy));
 
         ArtifactReconciliation report = startup.reconcile();
 
         assertThat(report.quarantined()).containsExactly(legacy);
         assertThat(payloads.stored()).isEmpty();
-        assertThat(Files.readAllBytes(roots.artifacts().resolve("orphans").resolve(legacy.value() + ".part"))).isEqualTo(bytes);
+        assertThat(Files.readAllBytes(roots.artifacts().resolve("orphans").resolve(legacy.value() + ".part"))).isEqualTo(rawEncrypted);
         assertThat(startup.reconcile().quarantined()).isEmpty();
         assertThat(registry.budget().retainedBytes()).as("the quarantined bytes are shown to the owner").isEqualTo(48);
         assertThat(registry.budget().chargedBytes()).as("and are not charged to the staging budget (D-0012)").isZero();
@@ -303,8 +305,12 @@ class ArtifactStartupCheckTest {
         assertThat(registry.find(pending)).contains(pendingBefore);
         assertThat(registry.find(partial)).contains(partialBefore);
         assertThat(registry.find(finished)).contains(finishedBefore);
-        assertThat(Files.readAllBytes(file(pending))).isEqualTo(new byte[] {2, 2, 2, 2});
-        assertThat(Files.readAllBytes(file(partial))).isEqualTo(new byte[] {3, 3, 3, 3});
+        try (var read = payloads.open(pending)) {
+            assertThat(Channels.newInputStream(read.channel()).readAllBytes()).isEqualTo(new byte[] {2, 2, 2, 2});
+        }
+        try (var read = payloads.open(partial)) {
+            assertThat(Channels.newInputStream(read.channel()).readAllBytes()).isEqualTo(new byte[] {3, 3, 3, 3});
+        }
         assertThat(payloads.stored()).containsExactlyInAnyOrder(finished, pending, partial);
     }
 

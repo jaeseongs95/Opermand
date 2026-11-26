@@ -107,6 +107,7 @@ class ArtifactRetainedBudgetTest {
         ArtifactId legacy = new ArtifactId("1".repeat(48));
         byte[] bytes = fixtures.bytes(33, 'L');
         payloads.append(legacy, 0, bytes);
+        byte[] rawLegacy = Files.readAllBytes(roots.artifacts().resolve(legacy.value() + ".part"));
 
         assertThat(startup.reconcile().quarantined()).containsExactly(legacy);
 
@@ -117,7 +118,7 @@ class ArtifactRetainedBudgetTest {
         assertThat(registry.budget().chargedBytes()).as("only the new transfer is charged").isEqualTo(1);
         registry.release(live, ReleaseReason.REFUSED);
         assertThat(registry.expired(ArtifactFixtures.T0.plus(Duration.ofHours(2)))).isEmpty();
-        assertThat(Files.readAllBytes(orphans().resolve(legacy.value() + ".part"))).as("the reap does not touch the bytes").isEqualTo(bytes);
+        assertThat(Files.readAllBytes(orphans().resolve(legacy.value() + ".part"))).as("the reap does not touch the bytes").isEqualTo(rawLegacy);
         assertThat(startup.reconcile().quarantined()).as("a second start finds nothing new").isEmpty();
         assertThat(registry.budget().retainedBytes()).as("and still holds 33").isEqualTo(33);
     }
@@ -126,10 +127,12 @@ class ArtifactRetainedBudgetTest {
     @DisplayName("S-D0012-03 (replaces RC-A-169): eight one byte legacy payloads are 8 retained bytes and charge nothing: two live begins of 16 fill the budget of 32, a third is refused with the live 32 only, and a second start, a release and a reap leave the 8 and the files as they were")
     void quarantinedBytesAreChargedWithTheLiveReservationAndNotRewritten() throws IOException {
         List<ArtifactId> legacy = new ArrayList<>();
+        List<byte[]> rawLegacy = new ArrayList<>();
         for (int i = 1; i <= 8; i++) {
             ArtifactId id = new ArtifactId(String.format("%048x", i));
             legacy.add(id);
             payloads.append(id, 0, new byte[] {(byte) i});
+            rawLegacy.add(Files.readAllBytes(roots.artifacts().resolve(id.value() + ".part")));
         }
         assertThat(startup.reconcile().quarantined()).containsExactlyInAnyOrderElementsOf(legacy);
         List<FileTime> modified = new ArrayList<>();
@@ -157,7 +160,7 @@ class ArtifactRetainedBudgetTest {
         assertThat(registry.budget().retainedBytes()).as("a reap keeps the held bytes").isEqualTo(8);
         for (int i = 0; i < legacy.size(); i++) {
             Path file = orphans().resolve(legacy.get(i).value() + ".part");
-            assertThat(Files.readAllBytes(file)).isEqualTo(new byte[] {(byte) (i + 1)});
+            assertThat(Files.readAllBytes(file)).isEqualTo(rawLegacy.get(i));
             assertThat(Files.getLastModifiedTime(file)).as("modification time of " + file.getFileName()).isEqualTo(modified.get(i));
         }
     }

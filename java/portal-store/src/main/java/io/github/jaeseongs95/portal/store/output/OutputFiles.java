@@ -141,9 +141,20 @@ public class OutputFiles {
         return open(file, Set.of(StandardOpenOption.WRITE, StandardOpenOption.APPEND), Set.of(StandardOpenOption.WRITE, StandardOpenOption.APPEND));
     }
 
+    /** Opens the file for random read/write (created owner only when it is new); used by chunked AEAD spool appends that re-encrypt a trailing partial chunk. */
+    public FileChannel openReadWrite(Path file) {
+        return open(file, Set.of(StandardOpenOption.READ, StandardOpenOption.WRITE), Set.of(StandardOpenOption.READ, StandardOpenOption.WRITE));
+    }
+
     /** Opens the file for writing from the start, dropping what an earlier crash left in it. */
     public FileChannel openFresh(Path file) {
         return open(file, Set.of(StandardOpenOption.WRITE), Set.of(StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING));
+    }
+
+    /** Opens the file fresh for read/write from the start, dropping what an earlier crash left in it. */
+    public FileChannel openFreshReadWrite(Path file) {
+        return open(file, Set.of(StandardOpenOption.READ, StandardOpenOption.WRITE),
+            Set.of(StandardOpenOption.READ, StandardOpenOption.WRITE, StandardOpenOption.TRUNCATE_EXISTING));
     }
 
     /** Opens a regular file for reading. */

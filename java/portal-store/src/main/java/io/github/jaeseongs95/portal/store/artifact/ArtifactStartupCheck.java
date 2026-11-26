@@ -21,8 +21,10 @@ import io.github.jaeseongs95.portal.app.artifact.ConsumeState;
 import io.github.jaeseongs95.portal.app.artifact.QuarantineNotice;
 import io.github.jaeseongs95.portal.app.artifact.ReleaseReason;
 import io.github.jaeseongs95.portal.app.storage.PayloadRead;
+import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
 import io.github.jaeseongs95.portal.domain.id.Digester;
+import io.github.jaeseongs95.portal.store.attachment.CorruptedEncryptedPayloadException;
 
 /**
  * Makes the payload files and the metadata agree after a start (design 8.5, 2.x {@code artifacts.mjs:130-144}). The use case writes the bytes first and
@@ -118,7 +120,22 @@ public class ArtifactStartupCheck {
 
     private void checkPayload(ArtifactRecord record, Set<ArtifactId> stored, List<ArtifactId> truncated) {
         long expected = record.receivedBytes();
-        long actual = stored.contains(record.id()) ? payloads.length(record.id()) : 0L;
+        long actual;
+        if (!stored.contains(record.id())) {
+            actual = 0L;
+        } else {
+            try {
+                actual = payloads.length(record.id());
+            } catch (RequestRefusedException e) {
+                if (e.getCause() instanceof CorruptedEncryptedPayloadException corrupted) {
+                    if (payloads instanceof FileArtifactPayloadStore fileStore && fileStore.rawFileSize(record.id()) < expected) {
+                        throw new ArtifactStoreCorruptedException(record.id(), ArtifactStoreCorruptedException.Reason.PAYLOAD_SHORTER, corrupted);
+                    }
+                    throw new ArtifactStoreCorruptedException(record.id(), ArtifactStoreCorruptedException.Reason.CHUNK_MISMATCH, corrupted);
+                }
+                throw e;
+            }
+        }
         if (actual < expected) {
             throw new ArtifactStoreCorruptedException(record.id(), ArtifactStoreCorruptedException.Reason.PAYLOAD_SHORTER);
         }
@@ -147,7 +164,15 @@ public class ArtifactStartupCheck {
                     throw new ArtifactStoreCorruptedException(record.id(), ArtifactStoreCorruptedException.Reason.CHUNK_MISMATCH);
                 }
             }
+        } catch (RequestRefusedException e) {
+            if (e.getCause() instanceof CorruptedEncryptedPayloadException corrupted) {
+                throw new ArtifactStoreCorruptedException(record.id(), ArtifactStoreCorruptedException.Reason.CHUNK_MISMATCH, corrupted);
+            }
+            throw e;
         } catch (IOException e) {
+            if (e.getCause() instanceof CorruptedEncryptedPayloadException corrupted) {
+                throw new ArtifactStoreCorruptedException(record.id(), ArtifactStoreCorruptedException.Reason.CHUNK_MISMATCH, corrupted);
+            }
             throw new ArtifactStoreCorruptedException(record.id(), ArtifactStoreCorruptedException.Reason.PAYLOAD_UNREADABLE, e);
         }
     }

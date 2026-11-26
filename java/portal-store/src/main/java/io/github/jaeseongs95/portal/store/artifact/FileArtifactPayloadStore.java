@@ -1,7 +1,6 @@
 package io.github.jaeseongs95.portal.store.artifact;
 
 import java.io.IOException;
-import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.channels.OverlappingFileLockException;
@@ -13,10 +12,14 @@ import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.security.SecureRandom;
+import java.time.Clock;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import io.github.jaeseongs95.portal.app.artifact.ArtifactPayloadStore;
@@ -24,27 +27,22 @@ import io.github.jaeseongs95.portal.app.artifact.ChunkDigest;
 import io.github.jaeseongs95.portal.app.storage.DiskSpace;
 import io.github.jaeseongs95.portal.app.storage.PayloadRead;
 import io.github.jaeseongs95.portal.app.storage.PayloadWrite;
+import io.github.jaeseongs95.portal.app.storage.PrivateStorages;
+import io.github.jaeseongs95.portal.app.storage.UnsafeStorageException;
 import io.github.jaeseongs95.portal.domain.error.ArtifactErrorCode;
 import io.github.jaeseongs95.portal.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.portal.domain.id.ArtifactId;
 import io.github.jaeseongs95.portal.store.StorageRoots;
-import io.github.jaeseongs95.portal.app.storage.PrivateStorages;
-import io.github.jaeseongs95.portal.app.storage.UnsafeStorageException;
+import io.github.jaeseongs95.portal.store.attachment.AttachmentKeyring;
+import io.github.jaeseongs95.portal.store.attachment.ChunkedAeadCodec;
+import io.github.jaeseongs95.portal.store.attachment.CorruptedEncryptedPayloadException;
 
 /**
- * {@link ArtifactPayloadStore} over one folder, {@code StorageRoots#artifacts()}: the bytes of an artifact are the file {@code <id>.part} (2.x
- * {@code artifacts.mjs:84-149}; design 8.5, a 64 MiB body is not put in a BLOB). Every method does file I/O, so it is called outside a transaction (Principles 4.4).
+ * {@link ArtifactPayloadStore} over one folder, {@code StorageRoots#artifacts()}: the bytes of an artifact are stored encrypted at rest as {@code <id>.part} using
+ * {@link ChunkedAeadCodec} ({@code PAE1}, 16 KiB fixed chunks with AES-256-GCM). Every method does file I/O, so it is called outside a transaction (Principles 4.4).
  *
- * <p>What is created is private to its owner: the folder and the files this store makes. How "private" is made belongs to {@link PrivateStorages}, which picks the rule by
- * what the file store offers (permission bits, or an access control list on an NTFS volume) and refuses a file store with neither; this class holds no copy of that rule.
- * What exists is used as it is (decision D-0117): who else may use the folder or a payload, who owns it and whether it is reached through a link (a link is followed) are
- * not asked. A path that is not a folder where the folder should be, or not a regular file where a payload should be, and a file store that cannot make a new path private are
- * refused with {@code ARTIFACT_STORAGE_UNSAFE}, and nothing else is.
- *
- * <p>An append writes at the current end, takes a lock on the file so that two writers of one artifact cannot interleave, and calls
- * {@code FileChannel#force(true)} before it returns: the use case commits the metadata only after that (design 8.5). Not done: the directory entry of a new file is
- * not forced separately (the JDK has no portable call for it); a crash that loses the entry loses a file whose metadata then says "more bytes than the file", which
- * the start-up check refuses to start with.
+ * <p>What is created is private to its owner ({@link PrivateStorages}); what exists is used as it is (decision D-0117). An append acquires a file lock, verifies the
+ * logical plaintext offset, re-encrypts any trailing partial chunk with a fresh random IV, and calls {@code FileChannel#force(true)} before returning.
  */
 @Component
 public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedPayloads {
@@ -55,10 +53,24 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
 
     private final Path root;
     private final PrivateStorages storages;
+    private final ChunkedAeadCodec codec;
 
+    @Autowired
+    public FileArtifactPayloadStore(StorageRoots roots, PrivateStorages storages, ChunkedAeadCodec codec) {
+        this.root = Objects.requireNonNull(roots, "roots").artifacts();
+        this.storages = Objects.requireNonNull(storages, "storages");
+        this.codec = Objects.requireNonNull(codec, "codec");
+    }
+
+    /** Convenience constructor for unit tests without Spring: derives a keyring under {@code roots.keyring()}. */
     public FileArtifactPayloadStore(StorageRoots roots, PrivateStorages storages) {
-        this.root = roots.artifacts();
-        this.storages = storages;
+        this(roots, storages, defaultCodec(roots, storages));
+    }
+
+    private static ChunkedAeadCodec defaultCodec(StorageRoots roots, PrivateStorages storages) {
+        SecureRandom random = new SecureRandom();
+        AttachmentKeyring keyring = new AttachmentKeyring(roots.keyring().resolve(AttachmentKeyring.DEFAULT_FILE_NAME), storages, random, Clock.systemUTC());
+        return new ChunkedAeadCodec(keyring, random);
     }
 
     @Override
@@ -83,25 +95,22 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
                 if (lock == null) {
                     throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_BUSY);
                 }
-                if (channel.size() != offset) {
+                long currentPlain = codec.plaintextLength(channel, ChunkedAeadCodec.Scope.ARTIFACT, id.value());
+                if (currentPlain != offset) {
                     throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_CHUNK_CONFLICT);
                 }
-                ByteBuffer buffer = ByteBuffer.wrap(data);
-                channel.position(offset);
-                while (buffer.hasRemaining()) {
-                    channel.write(buffer);
-                }
-                channel.force(true);
-                return new PayloadWrite(channel.size());
+                long updatedPlain = codec.append(channel, ChunkedAeadCodec.Scope.ARTIFACT, id.value(), offset, data);
+                return new PayloadWrite(updatedPlain);
             }
         } catch (OverlappingFileLockException e) {
             throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_BUSY, e);
         } catch (FileAlreadyExistsException e) {
-            // Two first chunks of the same artifact arrive together: both saw no file, one created it, and this one lost the creation. That is a writer at work on the same file, which the
-            // caller may retry, and not a fault of the storage (defect D-0139).
+            // Two first chunks of the same artifact arrive together: both saw no file, one created it, and this one lost the creation (defect D-0139).
             throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_BUSY, e);
         } catch (UnsafeStorageException e) {
             throw unsafe(e);
+        } catch (CorruptedEncryptedPayloadException e) {
+            throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_STORAGE_IO_ERROR, e);
         } catch (IOException e) {
             throw ioFailure(e);
         }
@@ -113,17 +122,19 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
             throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
         }
         Path file = existingFile(id);
-        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.WRITE); FileLock lock = channel.tryLock()) {
+        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ, StandardOpenOption.WRITE); FileLock lock = channel.tryLock()) {
             if (lock == null) {
                 throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_BUSY);
             }
-            if (length > channel.size()) {
+            long currentPlain = codec.plaintextLength(channel, ChunkedAeadCodec.Scope.ARTIFACT, id.value());
+            if (length > currentPlain) {
                 throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_SEQUENCE_OR_SIZE);
             }
-            channel.truncate(length);
-            channel.force(true);
+            codec.truncate(channel, ChunkedAeadCodec.Scope.ARTIFACT, id.value(), length);
         } catch (OverlappingFileLockException e) {
             throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_BUSY, e);
+        } catch (CorruptedEncryptedPayloadException e) {
+            throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_STORAGE_IO_ERROR, e);
         } catch (IOException e) {
             throw ioFailure(e);
         }
@@ -132,8 +143,10 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
     @Override
     public long length(ArtifactId id) {
         Path file = existingFile(id);
-        try {
-            return Files.size(file);
+        try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
+            return codec.plaintextLength(channel, ChunkedAeadCodec.Scope.ARTIFACT, id.value());
+        } catch (CorruptedEncryptedPayloadException e) {
+            throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_STORAGE_IO_ERROR, e);
         } catch (IOException e) {
             throw ioFailure(e);
         }
@@ -144,16 +157,10 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
         Path file = existingFile(id);
         try {
             FileChannel channel = FileChannel.open(file, StandardOpenOption.READ);
-            try {
-                return new PayloadRead(channel, channel.size());
-            } catch (IOException | RuntimeException e) {
-                try {
-                    channel.close();
-                } catch (IOException closing) {
-                    e.addSuppressed(closing);
-                }
-                throw e;
-            }
+            ChunkedAeadCodec.DecryptedStream stream = codec.openDecryptingChannel(channel, ChunkedAeadCodec.Scope.ARTIFACT, id.value());
+            return new PayloadRead(stream.channel(), stream.plaintextLength());
+        } catch (CorruptedEncryptedPayloadException e) {
+            throw new RequestRefusedException(ArtifactErrorCode.ARTIFACT_STORAGE_IO_ERROR, e);
         } catch (IOException e) {
             throw ioFailure(e);
         }
@@ -172,8 +179,7 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
 
     /**
      * Moves the file to {@code orphans/} next to the payloads and keeps every byte; nothing in the store deletes that folder's files. Never uses {@code ATOMIC_MOVE}
-     * (whose overwrite behavior is implementation-specific across OSes and may silently overwrite an existing quarantine file on POSIX/Windows or fail with
-     * {@code AtomicMoveNotSupportedException}, defect D-0150); instead retries on {@code FileAlreadyExistsException} with the next free suffix.
+     * (defect D-0150); instead retries on {@code FileAlreadyExistsException} with the next free suffix.
      */
     @Override
     public void quarantine(ArtifactId id) {
@@ -221,7 +227,7 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
         return Set.copyOf(found);
     }
 
-    /** The number and the sizes of the regular files in {@code orphans/}; a link is not followed and not counted, a missing folder is zero. */
+    /** The number and the logical sizes of the regular files in {@code orphans/}; a link is not followed and not counted, a missing folder is zero. */
     @Override
     public Held held() {
         Path quarantine = root.resolve(QUARANTINE_FOLDER);
@@ -235,7 +241,9 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
                 BasicFileAttributes attributes = Files.readAttributes(entry, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
                 if (attributes.isRegularFile()) {
                     files++;
-                    total += attributes.size();
+                    String name = entry.getFileName().toString();
+                    String idPart = name.length() >= 48 ? name.substring(0, 48) : name;
+                    total += codec.plaintextLengthOrRawSize(entry, ChunkedAeadCodec.Scope.ARTIFACT, idPart);
                 }
             }
         } catch (IOException e) {
@@ -254,7 +262,16 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
         }
     }
 
-    /** The root folder, created private when it is not there; a path that is not a folder is refused, on every kind of file store. A folder that exists is used as it is. */
+    /** Raw size on disk of an existing payload file; used by startup corruption classification when a file is shorter than a valid PAE1 header. */
+    long rawFileSize(ArtifactId id) {
+        Path file = existingFile(id);
+        try {
+            return Files.size(file);
+        } catch (IOException e) {
+            throw ioFailure(e);
+        }
+    }
+
     private Path preparedRoot() {
         try {
             if (!Files.exists(root, LinkOption.NOFOLLOW_LINKS)) {
@@ -283,12 +300,13 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
     }
 
     private Path fileOf(Path folder, ArtifactId id) {
-        // An ArtifactId is 48 lowercase hex characters, so the name cannot leave the folder.
         return folder.resolve(id.value() + SUFFIX);
     }
 
     private FileChannel openForWrite(Path file, boolean create) throws IOException {
-        Set<OpenOption> options = create ? Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE) : Set.of(StandardOpenOption.WRITE);
+        Set<OpenOption> options = create
+            ? Set.of(StandardOpenOption.CREATE_NEW, StandardOpenOption.READ, StandardOpenOption.WRITE)
+            : Set.of(StandardOpenOption.READ, StandardOpenOption.WRITE);
         return storages.open(file, options);
     }
 

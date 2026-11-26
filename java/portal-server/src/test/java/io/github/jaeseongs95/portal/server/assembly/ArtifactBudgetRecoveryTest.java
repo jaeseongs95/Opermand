@@ -183,7 +183,8 @@ class ArtifactBudgetRecoveryTest {
         Arrays.fill(held, (byte) 7);
         payloads.append(LEGACY, 0, held);
         payloads.quarantine(LEGACY);
-        assertThat(Files.size(quarantined(LEGACY))).as("more than the whole 100,000 byte budget is in quarantine").isEqualTo(150_000);
+        byte[] rawQuarantined = Files.readAllBytes(quarantined(LEGACY));
+        assertThat(rawQuarantined.length).as("encrypted PAE1 quarantine file exceeds the 100,000 byte budget").isGreaterThan(150_000);
 
         ArtifactReservation upload = registry.reserve(uploadSpec(1_090), clock.instant(), DiskCheck.measure(payloads::usable));
         remote.served = new byte[850];
@@ -195,7 +196,7 @@ class ArtifactBudgetRecoveryTest {
         assertThat(registry.budget().retainedBytes()).as("the quarantined bytes are shown apart, not charged").isEqualTo(150_000L);
         assertThat(registry.budget().retainedFiles()).isEqualTo(1L);
         assertThat(reaper.reap()).isInstanceOf(ReapReport.Reaped.class);
-        assertThat(Files.readAllBytes(quarantined(LEGACY))).as("nothing deletes the quarantined bytes").isEqualTo(held);
+        assertThat(Files.readAllBytes(quarantined(LEGACY))).as("nothing deletes the quarantined bytes").isEqualTo(rawQuarantined);
         assertThat(registry.budget().retainedBytes()).as("and a reap leaves the figure as it was").isEqualTo(150_000L);
     }
 

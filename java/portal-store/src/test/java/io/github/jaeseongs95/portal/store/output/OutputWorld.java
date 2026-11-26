@@ -21,6 +21,8 @@ import io.github.jaeseongs95.portal.domain.id.OperationIdGenerator;
 import io.github.jaeseongs95.portal.domain.id.Sha256Digester;
 import io.github.jaeseongs95.portal.store.StorageRoots;
 import io.github.jaeseongs95.portal.store.TestStorage;
+import io.github.jaeseongs95.portal.store.attachment.AttachmentKeyring;
+import io.github.jaeseongs95.portal.store.attachment.ChunkedAeadCodec;
 import io.github.jaeseongs95.portal.store.output.OutputFiles.PayloadKind;
 import io.github.jaeseongs95.portal.store.storage.StorageBudgetRowRepository;
 
@@ -45,9 +47,12 @@ final class OutputWorld {
         this.formats = formats;
         this.pages = pages;
         this.aggregates = aggregates;
-        this.files = new OutputFiles(new StorageRoots(folder, folder), TestStorage.rules());
-        this.payloads = new FileOutputPayloadStore(files, new Sha256Digester(), limits);
-        this.manifests = new JdbcOutputManifestStore(rows, formats, pages, budgets, aggregates, mapper, new OperationIdGenerator(new SecureRandom()), limits, clock);
+        StorageRoots roots = new StorageRoots(folder, folder);
+        this.files = new OutputFiles(roots, TestStorage.rules());
+        SecureRandom random = new SecureRandom();
+        AttachmentKeyring keyring = new AttachmentKeyring(roots.keyring().resolve(AttachmentKeyring.DEFAULT_FILE_NAME), TestStorage.rules(), random, clock);
+        this.payloads = new FileOutputPayloadStore(files, new Sha256Digester(), limits, new ChunkedAeadCodec(keyring, random));
+        this.manifests = new JdbcOutputManifestStore(rows, formats, pages, budgets, aggregates, mapper, new OperationIdGenerator(random), limits, clock);
         this.startup = new OutputStartupCheck(manifests, payloads);
     }
 

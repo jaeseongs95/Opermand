@@ -15,16 +15,18 @@ import org.springframework.beans.factory.DisposableBean;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
 
+import io.github.jaeseongs95.portal.app.storage.PrivateStorages;
 import io.github.jaeseongs95.portal.domain.id.Digester;
 import io.github.jaeseongs95.portal.domain.id.OperationIdGenerator;
 import io.github.jaeseongs95.portal.domain.id.Sha256Digester;
 import io.github.jaeseongs95.portal.store.StorageRoots;
 import io.github.jaeseongs95.portal.store.TestStorage;
-import io.github.jaeseongs95.portal.app.storage.PrivateStorages;
+import io.github.jaeseongs95.portal.store.attachment.AttachmentKeyring;
+import io.github.jaeseongs95.portal.store.attachment.ChunkedAeadCodec;
 
 /**
- * The beans that the portal-app configuration ({@link Digester}, the id generator) and the server ({@link StorageRoots}) provide in the product, supplied for a test
- * that wires the output adapters by Spring. The output folder is created for the context and removed when the context closes.
+ * The beans that portal-app ({@link Digester}, id generator) and portal-server ({@link StorageRoots}) provide in the product, supplied for a test that wires the output
+ * adapters by Spring.
  */
 @TestConfiguration(proxyBeanMethods = false)
 class OutputWiringBeans {
@@ -41,8 +43,23 @@ class OutputWiringBeans {
     }
 
     @Bean
+    SecureRandom secureRandom() {
+        return new SecureRandom();
+    }
+
+    @Bean
     PrivateStorages privateStorages() {
         return TestStorage.rules();
+    }
+
+    @Bean
+    AttachmentKeyring attachmentKeyring(StorageRoots roots, PrivateStorages storages, SecureRandom random, Clock clock) {
+        return new AttachmentKeyring(roots.keyring().resolve(AttachmentKeyring.DEFAULT_FILE_NAME), storages, random, clock);
+    }
+
+    @Bean
+    ChunkedAeadCodec chunkedAeadCodec(AttachmentKeyring keyring, SecureRandom random) {
+        return new ChunkedAeadCodec(keyring, random);
     }
 
     @Bean
@@ -51,8 +68,8 @@ class OutputWiringBeans {
     }
 
     @Bean
-    OperationIdGenerator operationIdGenerator() {
-        return new OperationIdGenerator(new SecureRandom());
+    OperationIdGenerator operationIdGenerator(SecureRandom random) {
+        return new OperationIdGenerator(random);
     }
 
     @Bean

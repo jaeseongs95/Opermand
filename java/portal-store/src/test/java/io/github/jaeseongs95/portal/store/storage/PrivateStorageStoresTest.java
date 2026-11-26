@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
 
+import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -88,7 +89,11 @@ class PrivateStorageStoresTest {
         assertThat(store.stored()).containsExactly(ARTIFACT);
         assertThat(store.usable().usableBytes()).isPositive();
         store.truncate(ARTIFACT, 2);
-        assertThat(Files.readAllBytes(file)).isEqualTo(new byte[] {1, 2});
+        assertThat(store.length(ARTIFACT)).isEqualTo(2);
+        try (var read = store.open(ARTIFACT)) {
+            assertThat(Channels.newInputStream(read.channel()).readAllBytes()).isEqualTo(new byte[] {1, 2});
+        }
+        assertThat(new String(Files.readAllBytes(file), 0, 4, StandardCharsets.UTF_8)).isEqualTo("PAE1");
         store.quarantine(ARTIFACT);
         assertThat(store.stored()).isEmpty();
     }

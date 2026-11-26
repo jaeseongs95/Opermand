@@ -90,7 +90,10 @@ class FileArtifactPayloadStoreTest {
         PayloadWrite written = store.append(id, 0, data);
 
         assertThat(written.storedBytes()).isEqualTo(1000);
-        assertThat(Files.readAllBytes(dir.resolve("artifacts").resolve(id.value() + ".part"))).isEqualTo(data);
+        byte[] rawOnDisk = Files.readAllBytes(dir.resolve("artifacts").resolve(id.value() + ".part"));
+        assertThat(new String(rawOnDisk, 0, 4, StandardCharsets.UTF_8)).isEqualTo("PAE1");
+        assertThat(rawOnDisk.length).isGreaterThan(data.length);
+        assertThat(read(storeIn(dir), id)).isEqualTo(data);
     }
 
     @Test
@@ -172,7 +175,9 @@ class FileArtifactPayloadStoreTest {
         assertThat(store.append(id, 0, new byte[] {1, 2}).storedBytes()).isEqualTo(2);
 
         assertThat(Files.isSymbolicLink(root)).isTrue();
-        assertThat(Files.readAllBytes(real.resolve(id.value() + ".part"))).isEqualTo(new byte[] {1, 2});
+        byte[] rawOnDisk = Files.readAllBytes(real.resolve(id.value() + ".part"));
+        assertThat(new String(rawOnDisk, 0, 4, StandardCharsets.UTF_8)).isEqualTo("PAE1");
+        assertThat(read(store, id)).isEqualTo(new byte[] {1, 2});
         assertThat(store.stored()).containsExactly(id);
     }
 
@@ -180,10 +185,11 @@ class FileArtifactPayloadStoreTest {
     @DisplayName("S-D0117-03, RC-A-166: a symbolic link in place of a payload is followed by every operation, the target is the payload, and deleting removes the link only (runs where the file store allows symbolic links)")
     void aSymbolicLinkPayloadIsFollowed(@TempDir Path dir) throws IOException {
         FileArtifactPayloadStore store = storeIn(dir);
-        store.stored();
-        Path target = Files.write(dir.resolve("target.bin"), new byte[] {9, 9, 9}, StandardOpenOption.CREATE_NEW);
         ArtifactId id = ids.next();
+        store.append(id, 0, new byte[] {9, 9, 9});
         Path link = dir.resolve("artifacts").resolve(id.value() + ".part");
+        Path target = dir.resolve("target.bin");
+        Files.move(link, target);
         TestStorage.requireOrSkip("links", canLink(dir, link, target), "the file store or the account of the test cannot make symbolic links (a Windows user token); the Linux CI requires them (-Pportal.test.require=posix,links) and fails instead of skipping");
 
         assertThat(store.stored()).containsExactly(id);
@@ -191,30 +197,35 @@ class FileArtifactPayloadStoreTest {
         assertThat(read(store, id)).isEqualTo(new byte[] {9, 9, 9});
         assertThat(store.append(id, 3, new byte[] {1}).storedBytes()).isEqualTo(4);
         store.truncate(id, 2);
-        assertThat(Files.readAllBytes(target)).isEqualTo(new byte[] {9, 9});
+        assertThat(read(store, id)).isEqualTo(new byte[] {9, 9});
+        byte[] afterTruncate = Files.readAllBytes(target);
+        assertThat(new String(afterTruncate, 0, 4, StandardCharsets.UTF_8)).isEqualTo("PAE1");
 
         store.delete(id);
         assertThat(Files.exists(link, LinkOption.NOFOLLOW_LINKS)).isFalse();
-        assertThat(Files.readAllBytes(target)).isEqualTo(new byte[] {9, 9});
+        assertThat(Files.readAllBytes(target)).isEqualTo(afterTruncate);
     }
 
     @Test
     @DisplayName("S-D0117-03, RC-A-171: a payload with a second hard link is used as it is; deleting it removes the name only")
     void aHardLinkedPayloadIsUsed(@TempDir Path dir) throws IOException {
         FileArtifactPayloadStore store = storeIn(dir);
-        store.stored();
         byte[] evidence = fixtures.bytes(48, 'c');
-        Path original = Files.write(dir.resolve("evidence.bin"), evidence, StandardOpenOption.CREATE_NEW);
         ArtifactId id = new ArtifactId("c".repeat(48));
-        Files.createLink(dir.resolve("artifacts").resolve(id.value() + ".part"), original);
+        store.append(id, 0, evidence);
+        Path link = dir.resolve("artifacts").resolve(id.value() + ".part");
+        Path original = dir.resolve("evidence.bin");
+        Files.move(link, original);
+        Files.createLink(link, original);
 
         assertThat(store.stored()).containsExactly(id);
         assertThat(read(store, id)).isEqualTo(evidence);
+        long sizeBeforeAppend = Files.size(original);
         assertThat(store.append(id, 48, new byte[] {1}).storedBytes()).isEqualTo(49);
-        assertThat(Files.size(original)).as("both names are one file").isEqualTo(49);
+        assertThat(Files.size(original)).as("both names are one file").isEqualTo(sizeBeforeAppend + 1);
 
         store.delete(id);
-        assertThat(Files.size(original)).isEqualTo(49);
+        assertThat(Files.size(original)).isEqualTo(sizeBeforeAppend + 1);
         assertThat(store.stored()).isEmpty();
     }
 
@@ -275,17 +286,19 @@ class FileArtifactPayloadStoreTest {
         Path orphans = dir.resolve("artifacts").resolve("orphans");
 
         store.append(id, 0, legacy);
+        byte[] rawLegacy = Files.readAllBytes(dir.resolve("artifacts").resolve(id.value() + ".part"));
         store.quarantine(id);
 
         assertThat(store.stored()).isEmpty();
-        assertThat(Files.readAllBytes(orphans.resolve(id.value() + ".part"))).isEqualTo(legacy);
+        assertThat(Files.readAllBytes(orphans.resolve(id.value() + ".part"))).isEqualTo(rawLegacy);
 
         byte[] second = fixtures.bytes(10, 'g');
         store.append(id, 0, second);
+        byte[] rawSecond = Files.readAllBytes(dir.resolve("artifacts").resolve(id.value() + ".part"));
         store.quarantine(id);
         store.delete(id);
-        assertThat(Files.readAllBytes(orphans.resolve(id.value() + ".part"))).isEqualTo(legacy);
-        assertThat(Files.readAllBytes(orphans.resolve(id.value() + ".1.part"))).isEqualTo(second);
+        assertThat(Files.readAllBytes(orphans.resolve(id.value() + ".part"))).isEqualTo(rawLegacy);
+        assertThat(Files.readAllBytes(orphans.resolve(id.value() + ".1.part"))).isEqualTo(rawSecond);
     }
 
     @Test
