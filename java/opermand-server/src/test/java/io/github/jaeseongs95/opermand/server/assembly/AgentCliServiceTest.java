@@ -223,14 +223,14 @@ class AgentCliServiceTest {
         ResolvedTarget target = targets.linux();
         RequestKey key = new RequestKey("agentcli-request-" + KEYS.incrementAndGet() + "-0000000000");
         Digest expected = new Digest("e".repeat(64));
-        AgentCliRequest request = new AgentCliRequest(FakeTargets.LINUX_ID, target.revision(), FakeTargets.LINUX_WRITE, CodexCliProvider.ID, AgentCliAction.INSTALL,
+        AgentCliRequest request = new AgentCliRequest(FakeTargets.LINUX_ID, target.revision(), FakeTargets.LINUX_WRITE, CodexCliProvider.PROVIDER_ID, AgentCliAction.INSTALL,
             release.releaseDigestLabel(), expected, key);
         Instant now = clock.instant();
         AgentCliIntent intent = AgentCliIntent.of(provider, request, new AgentCliTargetBinding(FakeTargets.LINUX_ID, target.revision(), FakeTargets.LINUX_WRITE, true), release,
             now.plus(validFor).truncatedTo(ChronoUnit.MILLIS), now, digester);
         OperationId id = journal.accept(NewOperation.of(digester, key, new OwnerId("owner"), FakeTargets.LINUX_ID, target.revision(), FakeTargets.LINUX_WRITE,
             new AgentCliInput(intent.intentDigest()), new ConflictKey.None(), new Deadline.None()), Admission.of(DecisionReason.AGENT_CLI_REVIEW, OperationKind.AGENT_CLI, 0L)).operation().id();
-        store.insert(new AgentCliInstallRecord(id, CodexCliProvider.ID, AgentCliAction.INSTALL, storedRelease == null ? release : storedRelease, expected,
+        store.insert(new AgentCliInstallRecord(id, CodexCliProvider.PROVIDER_ID, AgentCliAction.INSTALL, storedRelease == null ? release : storedRelease, expected,
             storedIntentDigest == null ? "sha256:" + intent.intentDigest().hex() : storedIntentDigest, storedExpiry == null ? intent.expiresAt() : storedExpiry,
             new RemoteStatus.NotReported()));
         return new Plan(new AgentCliRun(id, key, target, target.revision(), FakeTargets.LINUX_WRITE), release);

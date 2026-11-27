@@ -76,7 +76,18 @@ class OwnerOnlyFileTest {
     @Test
     void aBrokenSymbolicLinkAtThePathIsRefusedAndLeftAlone(@TempDir Path root) throws IOException {
         Path link = root.resolve("settings.env");
-        Files.createSymbolicLink(link, root.resolve("does-not-exist.env"));
+        boolean linked;
+        try {
+            Files.createSymbolicLink(link, root.resolve("does-not-exist.env"));
+            linked = true;
+        } catch (IOException | UnsupportedOperationException e) {
+            linked = false;
+        }
+        if (java.util.List.of(System.getProperty("portal.test.require", "").split(",")).contains("links")) {
+            assertThat(linked).as("this run requires 'links', and the machine could not create a symbolic link").isTrue();
+        } else {
+            org.junit.jupiter.api.Assumptions.assumeTrue(linked, "the file store or the account of the test cannot make a symbolic link");
+        }
 
         assertThatThrownBy(() -> files.createNew(link, CONTENT)).isInstanceOf(FileAlreadyExistsException.class);
 

@@ -84,9 +84,9 @@ public final class PosixCommandLineGrammar implements CommandLineGrammar {
     private static final Pattern ENV_ASSIGNMENT = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*=.*");
     private static final Pattern NICE_SHORT_ADJUSTMENT = Pattern.compile("-[0-9]+");
     private static final Pattern STDBUF_SHORT_COMBINED = Pattern.compile("-[ioe](?:[0-9]+[KMGTP]?|L)");
-    private static final Pattern SED_IN_PLACE_SHORT = Pattern.compile("-[A-Za-z]*i[A-Za-z]*");
+    private static final Pattern SED_IN_PLACE_SHORT = Pattern.compile("-[A-Za-hj-zA-Z]*i[A-Za-z]*");
     /** The option letters of a shell, with at most one {@code c} (2.x command-line.mjs). */
-    private static final Pattern SHELL_FLAG = Pattern.compile("[+-][abefhkmnprtuvxBCEHPTilrs]*c?[abefhkmnprtuvxBCEHPTilrs]*");
+    private static final Pattern SHELL_FLAG = Pattern.compile("[+-][abefhkmnprtuvxBCEHPTilrs]*(?:c[abefhkmnprtuvxBCEHPTilrs]*)?");
     private static final Pattern SUDO_ASSIGNED_OPTION = Pattern.compile("--(?:user|group|host|prompt|preserve-env)=");
     /** A file descriptor number in front of a redirection operator, such as the {@code 2} of {@code 2>/tmp/file}. */
     private static final Pattern DESCRIPTOR = Pattern.compile("[0-9]+(?=[<>])");

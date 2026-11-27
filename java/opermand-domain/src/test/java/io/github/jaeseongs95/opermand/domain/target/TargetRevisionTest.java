@@ -82,6 +82,11 @@ class TargetRevisionTest {
         Target withPython = TargetFixtures.windows("win", new WindowsRuntime(Setting.unset(), Setting.given(new WindowsPythonExecutable("C:\\Python312\\python.exe"))),
             new DesktopSettings.NoDesktop());
         assertThat(revision(plain, TargetFixtures.reader(), TargetFixtures.writer())).isNotEqualTo(revision(withPython, TargetFixtures.reader(), TargetFixtures.writer()));
+        Target linuxBase = TargetFixtures.linux("alpha");
+        Target linuxCustomPython = new Target(linuxBase.id(), linuxBase.displayName(), linuxBase.readProfile(), linuxBase.writeProfile(), linuxBase.credentialRevision(),
+            linuxBase.enabled(), linuxBase.os(), linuxBase.windows(), Setting.given(new PosixPythonExecutable("/usr/local/bin/python3")),
+            linuxBase.queueCapacity(), linuxBase.maxConcurrency(), linuxBase.desktop());
+        assertThat(revision(linuxBase, TargetFixtures.reader(), TargetFixtures.writer())).isNotEqualTo(revision(linuxCustomPython, TargetFixtures.reader(), TargetFixtures.writer()));
     }
 
     @Test

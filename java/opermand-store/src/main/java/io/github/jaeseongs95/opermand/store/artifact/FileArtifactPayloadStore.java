@@ -50,6 +50,7 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
     private static final String SUFFIX = ".part";
     private static final Pattern STORED_NAME = Pattern.compile("[a-f0-9]{48}\\.part");
     private static final String QUARANTINE_FOLDER = "orphans";
+    private static final SecureRandom DEFAULT_RANDOM = new SecureRandom();
 
     private final Path root;
     private final PrivateStorages storages;
@@ -68,9 +69,8 @@ public class FileArtifactPayloadStore implements ArtifactPayloadStore, RetainedP
     }
 
     private static ChunkedAeadCodec defaultCodec(StorageRoots roots, PrivateStorages storages) {
-        SecureRandom random = new SecureRandom();
-        AttachmentKeyring keyring = new AttachmentKeyring(roots.keyring().resolve(AttachmentKeyring.DEFAULT_FILE_NAME), storages, random, Clock.systemUTC());
-        return new ChunkedAeadCodec(keyring, random);
+        AttachmentKeyring keyring = new AttachmentKeyring(roots.keyring().resolve(AttachmentKeyring.DEFAULT_FILE_NAME), storages, DEFAULT_RANDOM, Clock.systemUTC());
+        return new ChunkedAeadCodec(keyring, DEFAULT_RANDOM);
     }
 
     @Override

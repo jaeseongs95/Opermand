@@ -21,6 +21,7 @@ import io.github.jaeseongs95.opermand.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.opermand.domain.error.TransferErrorCode;
 import io.github.jaeseongs95.opermand.domain.id.Digest;
 import io.github.jaeseongs95.opermand.domain.id.Digester;
+import io.github.jaeseongs95.opermand.domain.target.PosixPythonExecutable;
 import io.github.jaeseongs95.opermand.domain.target.WindowsDirectory;
 import io.github.jaeseongs95.opermand.domain.target.WindowsPythonExecutable;
 import io.github.jaeseongs95.opermand.domain.text.SourceText;
@@ -223,8 +224,30 @@ public final class PythonSourceReceiver {
 
     /** A CreateProcess argument in double quotes: a run of backslashes before a quote is doubled and the quote escaped, and a run at the end is doubled. */
     private static String windowsQuoted(String value) {
-        String escaped = value.replaceAll("(\\\\*)\"", "$1$1\\\\\"").replaceAll("(\\\\+)\\z", "$1$1");
-        return "\"" + escaped + "\"";
+        StringBuilder out = new StringBuilder(value.length() + 4).append('"');
+        int backslashes = 0;
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (c == '\\') {
+                backslashes++;
+            } else if (c == '"') {
+                for (int j = 0; j < backslashes * 2; j++) {
+                    out.append('\\');
+                }
+                backslashes = 0;
+                out.append("\\\"");
+            } else {
+                for (int j = 0; j < backslashes; j++) {
+                    out.append('\\');
+                }
+                backslashes = 0;
+                out.append(c);
+            }
+        }
+        for (int j = 0; j < backslashes * 2; j++) {
+            out.append('\\');
+        }
+        return out.append('"').toString();
     }
 
     /** A JSON array of strings, as {@code JSON.stringify} writes it: no white space. */

@@ -254,12 +254,14 @@ class EmbeddedSshServerTest {
         try (ClientSession session = client.open(server, USER, PASSWORD)) {
             SftpClient sftp = sftp(session);
             server.injectSftpFault(SftpFault.of(SftpFault.Operation.OPEN_FOR_READ, "big.bin", SftpFault.Failure.CONNECTION_DROPPED).afterBytes(100_000));
-            assertThatThrownBy(() -> {
-                try (InputStream in = sftp.read("/big.bin")) {
-                    in.readAllBytes();
-                }
-            }).isInstanceOf(IOException.class);
+            assertThatThrownBy(() -> readAll(sftp, "/big.bin")).isInstanceOf(IOException.class);
             assertThat(session.waitFor(EnumSet.of(ClientSessionEvent.CLOSED), LIMIT)).contains(ClientSessionEvent.CLOSED);
+        }
+    }
+
+    private static byte[] readAll(SftpClient sftp, String path) throws IOException {
+        try (InputStream in = sftp.read(path)) {
+            return in.readAllBytes();
         }
     }
 

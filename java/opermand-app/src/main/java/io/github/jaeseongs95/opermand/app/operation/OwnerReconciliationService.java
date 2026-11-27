@@ -88,11 +88,10 @@ public class OwnerReconciliationService implements OwnerReconciliation {
     public ReconcileOutcome reconcile(OperationId id, ReconciliationEvidence evidence) {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(evidence, "evidence");
-        Optional<Operation> found = readTx.execute(status -> journal.find(id));
-        if (found == null || found.isEmpty()) {
+        Operation current = readTx.execute(status -> journal.find(id).orElse(null));
+        if (current == null) {
             return new ReconcileOutcome.NotFound(id);
         }
-        Operation current = found.orElseThrow();
         if (current.state() != OperationState.UNKNOWN) {
             return new ReconcileOutcome.NotWaiting(current);
         }

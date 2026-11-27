@@ -150,12 +150,12 @@ public class StagedFileService {
         Objects.requireNonNull(owner, "owner");
         Objects.requireNonNull(fileName, "fileName");
         RequestKey key = requestKey(operationKey);
-        Optional<ArtifactRecord> existing = readTx.execute(status -> {
+        ArtifactRecord existing = readTx.execute(status -> {
             requireOpen();
-            return registry.findStagedByKey(owner, key.value());
+            return registry.findStagedByKey(owner, key.value()).orElse(null);
         });
-        if (existing != null && existing.isPresent()) {
-            return sameBegin(existing.orElseThrow(), fileName, sizeBytes);
+        if (existing != null) {
+            return sameBegin(existing, fileName, sizeBytes);
         }
         return reserve(owner, key, fileName, sizeBytes);
     }
@@ -311,8 +311,8 @@ public class StagedFileService {
     }
 
     private Optional<Operation> acceptedBy(StagedAction action) {
-        Optional<Operation> found = readTx.execute(status -> journal.findByRequestKey(action.requestKey()));
-        return found == null ? Optional.empty() : found.filter(operation -> operation.id().equals(action.requestId()));
+        Operation found = readTx.execute(status -> journal.findByRequestKey(action.requestKey()).orElse(null));
+        return Optional.ofNullable(found).filter(operation -> operation.id().equals(action.requestId()));
     }
 
     private void adopt(StagedAction reserved, Operation accepted) {
@@ -340,10 +340,12 @@ public class StagedFileService {
                 throw e;
             }
             // The write transaction rolled back cleanly (PostgreSQL-safe, no 25P02): read the winning action in a fresh read-only transaction.
-            Optional<StagedAction> earlier = readTx.execute(status -> registry.actions(source.id()).stream()
-                .filter(action -> action.operationKey().equals(key.value())).findFirst());
-            return (earlier == null ? Optional.<StagedAction>empty() : earlier)
-                .map(found -> answerEarlier(found, inputDigest)).orElseThrow(() -> e);
+            StagedAction earlier = readTx.execute(status -> registry.actions(source.id()).stream()
+                .filter(action -> action.operationKey().equals(key.value())).findFirst().orElse(null));
+            if (earlier != null) {
+                return answerEarlier(earlier, inputDigest);
+            }
+            throw e;
         }
         return publishCopy(request, key, source, reserved);
     }
@@ -501,10 +503,9 @@ public class StagedFileService {
         Objects.requireNonNull(evidence, "evidence");
         record ActionTarget(ArtifactRecord record, StagedAction action) {
         }
-        Optional<ActionTarget> target = readTx.execute(status -> registry.actionOf(operation)
-            .flatMap(action -> registry.find(action.artifactId()).map(record -> new ActionTarget(record, action))));
-        if (target != null && target.isPresent()) {
-            ActionTarget found = target.orElseThrow();
+        ActionTarget found = readTx.execute(status -> registry.actionOf(operation)
+            .flatMap(action -> registry.find(action.artifactId()).map(record -> new ActionTarget(record, action))).orElse(null));
+        if (found != null) {
             settle(found.record(), found.action(), state, evidence);
         }
     }

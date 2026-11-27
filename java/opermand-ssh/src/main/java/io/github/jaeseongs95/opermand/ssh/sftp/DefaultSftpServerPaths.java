@@ -4,6 +4,7 @@ import io.github.jaeseongs95.opermand.app.remote.RemoteTarget;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
@@ -20,6 +21,7 @@ public final class DefaultSftpServerPaths implements SftpServerPaths {
     private final List<SftpServerPath> named;
 
     /** The usual places only. */
+    @Autowired
     public DefaultSftpServerPaths() {
         this(List.of());
     }

@@ -6,21 +6,21 @@ import java.util.Objects;
 /**
  * The {@code data} of {@code artifact-read} (public-contract.mjs:66-67, {@code artifactPage}): one base64 page of a downloaded file. {@code bytes} is the size of
  * the page before encoding (at most 256 KiB), {@code totalBytes} the size of the file (at most 64 MiB), {@code nextOffset} where the next page starts.
- * {@code encoding} is the constant {@code "base64"}; {@link #ENCODING} names it.
+ * {@code encoding} is the constant {@code "base64"}; {@link #BASE64_ENCODING} names it.
  */
 @JsonInclude(JsonInclude.Include.ALWAYS)
 public record ArtifactPage(String id, String artifactId, String fileName, String encoding, String data, long offsetBytes, long bytes, long nextOffset, long totalBytes,
                            String sha256, boolean eof, long expiresAt) {
 
     /** The only encoding of a page. */
-    public static final String ENCODING = "base64";
+    public static final String BASE64_ENCODING = "base64";
 
     public ArtifactPage {
         WireFormat.IDENTIFIER.require(id, "id");
         WireFormat.IDENTIFIER.require(artifactId, "artifactId");
         Objects.requireNonNull(fileName, "fileName");
-        if (!ENCODING.equals(encoding)) {
-            throw new IllegalArgumentException("encoding must be " + ENCODING);
+        if (!BASE64_ENCODING.equals(encoding)) {
+            throw new IllegalArgumentException("encoding must be " + BASE64_ENCODING);
         }
         Objects.requireNonNull(data, "data");
         WireNumber.NON_NEGATIVE.require(offsetBytes, "offsetBytes");

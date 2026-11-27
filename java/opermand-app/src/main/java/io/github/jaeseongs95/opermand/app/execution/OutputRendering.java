@@ -49,6 +49,21 @@ final class OutputRendering {
         long size() {
             return (long) json.length + text.length;
         }
+
+        @Override
+        public boolean equals(Object other) {
+            return other instanceof Rendered that && java.util.Arrays.equals(json, that.json) && java.util.Arrays.equals(text, that.text);
+        }
+
+        @Override
+        public int hashCode() {
+            return 31 * java.util.Arrays.hashCode(json) + java.util.Arrays.hashCode(text);
+        }
+
+        @Override
+        public String toString() {
+            return "Rendered[jsonBytes=" + json.length + ", textBytes=" + text.length + "]";
+        }
     }
 
     /**

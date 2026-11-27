@@ -292,11 +292,10 @@ public class ExecutionDispatcher {
      * and leaves the operation as the journal has it for recovery after a restart (defect D-0051).
      */
     private void refuseOrCancel(OperationId id, DispatchFailure failure) {
-        Optional<Operation> found = readTx.execute(status -> journal.find(id));
-        if (found == null || found.isEmpty()) {
+        Operation current = readTx.execute(status -> journal.find(id).orElse(null));
+        if (current == null) {
             return;
         }
-        Operation current = found.orElseThrow();
         Instant now = clock.instant();
         Optional<Operation> next = switch (current.state()) {
             case TERMINATING -> Optional.of(current.settle(ExecutionOutcome.notDispatched(ExecutionReason.CANCEL, List.of()), now));
@@ -321,11 +320,10 @@ public class ExecutionDispatcher {
      * be stored is {@code OPERATION_OUTCOME_PERSISTENCE_FAILED} and leaves the operation to recovery.
      */
     private void settle(OperationId id, ExecutionReport report) {
-        Optional<Operation> found = readTx.execute(status -> journal.find(id));
-        if (found == null || found.isEmpty()) {
+        Operation current = readTx.execute(status -> journal.find(id).orElse(null));
+        if (current == null) {
             return;
         }
-        Operation current = found.orElseThrow();
         if (!current.state().isActive()) {
             LOG.warn("An operation was settled by something else while it ran; its outcome is not stored again");
             return;

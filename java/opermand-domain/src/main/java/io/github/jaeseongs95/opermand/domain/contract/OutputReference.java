@@ -13,15 +13,15 @@ public record OutputReference(long version, String captureSource, String sshComp
                               String sha256, Long expiresAt) {
 
     /** The contract's output reference version. */
-    public static final long VERSION = 1L;
+    public static final long FORMAT_VERSION = 1L;
     /** The output is the adapter's result after redaction, not raw bytes from the wire. */
     public static final String CAPTURE_SOURCE = "redacted-adapter-outcome";
     /** The SSH layer cannot say whether it saw everything the command wrote. */
     public static final String SSH_COMPLETENESS = "unknown";
 
     public OutputReference {
-        if (version != VERSION) {
-            throw new IllegalArgumentException("version must be " + VERSION);
+        if (version != FORMAT_VERSION) {
+            throw new IllegalArgumentException("version must be " + FORMAT_VERSION);
         }
         if (!CAPTURE_SOURCE.equals(captureSource)) {
             throw new IllegalArgumentException("captureSource must be " + CAPTURE_SOURCE);
@@ -39,6 +39,6 @@ public record OutputReference(long version, String captureSource, String sshComp
 
     /** An output reference with the constants of the contract filled in. */
     public static OutputReference of(String id, OutputReferenceStateWire state, Long bytes, Long snapshotBytes, String sha256, Long expiresAt) {
-        return new OutputReference(VERSION, CAPTURE_SOURCE, SSH_COMPLETENESS, id, state, bytes, snapshotBytes, sha256, expiresAt);
+        return new OutputReference(FORMAT_VERSION, CAPTURE_SOURCE, SSH_COMPLETENESS, id, state, bytes, snapshotBytes, sha256, expiresAt);
     }
 }

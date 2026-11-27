@@ -365,7 +365,7 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
                 };
             }
             try {
-                int handleBits = client.stat(handle).getPermissions() & 0777;
+                int handleBits = client.stat(handle).getPermissions() & 0_777;
                 if (handleBits != modeBits) {
                     return new PermissionResult.Refused(TransferErrorCode.INVALID_REQUEST, new FileDiagnostic.None());
                 }
@@ -384,7 +384,7 @@ public class MinaRemoteFileTransfer implements RemoteFileTransfer {
             if (FileKind.of(current) != FileKind.REGULAR) {
                 return new PermissionResult.Refused(TransferErrorCode.UNSAFE_PATH, new FileDiagnostic.None());
             }
-            int bits = current.getPermissions() & 0777;
+            int bits = current.getPermissions() & 0_777;
             return bits == modeBits
                 ? new PermissionResult.Applied()
                 : new PermissionResult.Refused(TransferErrorCode.INVALID_REQUEST, new FileDiagnostic.None());

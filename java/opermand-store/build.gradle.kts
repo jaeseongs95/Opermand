@@ -25,7 +25,7 @@ dependencies {
 // "./gradlew :opermand-store:test" and "check" both run every case once.
 // The source set is read from the project's extension here, outside the task's block: inside it, "extensions" is the task's own and has no JavaPluginExtension.
 val testSourceSet = extensions.getByType<JavaPluginExtension>().sourceSets.named("test")
-val zoneTest by tasks.registering(Test::class) {
+val zoneTest = tasks.register<Test>("zoneTest") {
     description = "Runs the cases tagged zone in a JVM whose default time zone has daylight saving time."
     group = "verification"
     testClassesDirs = testSourceSet.get().output.classesDirs

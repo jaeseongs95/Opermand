@@ -20,7 +20,9 @@ import io.github.jaeseongs95.opermand.domain.command.PolicyName;
 import io.github.jaeseongs95.opermand.domain.command.TargetRule;
 import io.github.jaeseongs95.opermand.domain.error.RequestErrorCode;
 import io.github.jaeseongs95.opermand.domain.error.RequestRefusedException;
+import io.github.jaeseongs95.opermand.domain.operation.Elevation;
 import io.github.jaeseongs95.opermand.domain.path.PathSyntax;
+import io.github.jaeseongs95.opermand.domain.target.SourceRuntime;
 import io.github.jaeseongs95.opermand.domain.target.Target;
 import io.github.jaeseongs95.opermand.domain.target.TargetCapabilities;
 import io.github.jaeseongs95.opermand.domain.target.TargetOs;
@@ -123,17 +125,27 @@ public final class WindowsTargetPlatform implements TargetPlatform {
     }
 
     /**
-     * A source run on a Windows target needs the Python the administrator configured for the target, which this call is not given: the port has no parameter for it.
-     * Until it has one, the platform refuses the call; a caller that holds the target's interpreter uses {@link #prepareSource(SourceText, SourceArguments,
-     * WindowsDirectory, WindowsPythonExecutable, boolean)}. The capabilities of the target say {@code pythonSource} false when no interpreter is configured, so a caller
-     * that reads them never gets here.
+     * The command that runs a Python source on a Windows target with its configured interpreter (stage 4 design B-3, defect SSH_PORTAL-D-0170).
+     * A non-Windows runtime is refused with {@link RequestErrorCode#TARGET_CAPABILITY_UNSUPPORTED}; {@link Elevation#SUDO} asks for the administrator
+     * token check inside the receiver.
      */
     @Override
-    public PreparedCommand prepareSource(SourceText source, SourceArguments args, WorkingDirectory workdir) {
-        throw new RequestRefusedException(RequestErrorCode.TARGET_CAPABILITY_UNSUPPORTED);
+    public PreparedCommand prepareSource(SourceText source, SourceArguments args, WorkingDirectory workdir, SourceRuntime runtime, Elevation elevation) {
+        Objects.requireNonNull(workdir, "workdir");
+        Objects.requireNonNull(runtime, "runtime");
+        Objects.requireNonNull(elevation, "elevation");
+        if (!(runtime instanceof SourceRuntime.WindowsPython windows)) {
+            throw new RequestRefusedException(RequestErrorCode.TARGET_CAPABILITY_UNSUPPORTED);
+        }
+        WindowsDirectory cwd = switch (workdir) {
+            case WorkingDirectory.Default none -> new WindowsDirectory("C:\\");
+            case WorkingDirectory.At at -> new WindowsDirectory(at.directory().value());
+            case WorkingDirectory.DriveRoot root -> root.directory();
+        };
+        return receiver.prepareWindows(source, args, cwd, windows.python(), elevation == Elevation.SUDO);
     }
 
-    /** The command that runs a Python source with the interpreter of the target; {@code elevate} asks for the administrator check inside the receiver. */
+    /** Convenience overload with an explicit {@link WindowsDirectory}, {@link WindowsPythonExecutable} and boolean elevation flag. */
     public PreparedCommand prepareSource(SourceText source, SourceArguments args, WindowsDirectory cwd, WindowsPythonExecutable interpreter, boolean elevate) {
         return receiver.prepareWindows(source, args, cwd, interpreter, elevate);
     }

@@ -145,10 +145,16 @@ class ArtifactBudgetRecoveryTest {
         jdbc.update("UPDATE storage_budget SET charged_bytes = 0, item_count = 0 WHERE scope = 'ARTIFACT'");
     }
 
-    /** The quarantine is the one place the store never deletes from; the test removes what it put there, so the shared context sees none of it. */
+    /** Cleans up the quarantine file and detaches any captured reaper log appenders so the shared context stays isolated. */
     @AfterEach
-    void removeTheQuarantinedFile() throws IOException {
-        Files.deleteIfExists(quarantined(LEGACY));
+    void tearDown() throws IOException {
+        try {
+            Logger reaperLog = (Logger) LoggerFactory.getLogger(ArtifactReaper.class);
+            appenders.forEach(reaperLog::detachAppender);
+            appenders.clear();
+        } finally {
+            Files.deleteIfExists(quarantined(LEGACY));
+        }
     }
 
     @Test
@@ -475,7 +481,7 @@ class ArtifactBudgetRecoveryTest {
             });
     }
 
-    /** The events {@link ArtifactReaper} logs from now on; the appender is detached by {@link #detachTheReaperLog()}. */
+    /** The events {@link ArtifactReaper} logs from now on; the appender is detached by {@link #tearDown()}. */
     private List<ILoggingEvent> captureReaperLog() {
         Logger reaperLog = (Logger) LoggerFactory.getLogger(ArtifactReaper.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
@@ -483,13 +489,6 @@ class ArtifactBudgetRecoveryTest {
         reaperLog.addAppender(appender);
         appenders.add(appender);
         return appender.list;
-    }
-
-    @AfterEach
-    void detachTheReaperLog() {
-        Logger reaperLog = (Logger) LoggerFactory.getLogger(ArtifactReaper.class);
-        appenders.forEach(reaperLog::detachAppender);
-        appenders.clear();
     }
 
     private Path quarantined(ArtifactId id) {

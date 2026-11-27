@@ -47,7 +47,7 @@ public final class PlatformFixtures {
 
     /** A release of the tool with the given integrity. */
     public AgentRelease release(AgentCliProviderId tool, String integrity) {
-        AgentCliProvider provider = CodexCliProvider.ID.equals(tool) ? new CodexCliProvider() : new ClaudeCliProvider();
+        AgentCliProvider provider = CodexCliProvider.PROVIDER_ID.equals(tool) ? new CodexCliProvider() : new ClaudeCliProvider();
         String name = provider.packageName();
         String file = name.substring(name.lastIndexOf('/') + 1);
         return AgentRelease.verify(provider, name, VERSION, "https://registry.npmjs.org/" + name + "/-/" + file + "-" + VERSION + ".tgz", integrity, digester);

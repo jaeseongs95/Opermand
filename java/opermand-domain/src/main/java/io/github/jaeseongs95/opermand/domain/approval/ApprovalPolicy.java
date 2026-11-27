@@ -31,6 +31,11 @@ public final class ApprovalPolicy {
         this.requestCapacity = Objects.requireNonNull(requestCapacity, "requestCapacity");
     }
 
+    /** The configured capacity for open requests (also bounds in-memory private source plans). */
+    public Capacity requestCapacity() {
+        return requestCapacity;
+    }
+
     /**
      * Whether a new request may enter. Maintenance refuses first; then the store: it is full when the number of open requests (those not yet in a terminal state)
      * has reached the capacity. A terminal operation is history and does not occupy the store (2.x kept it for an hour in memory).

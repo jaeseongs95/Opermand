@@ -8,9 +8,11 @@ import io.github.jaeseongs95.opermand.domain.text.Utf8Text;
 import java.util.Objects;
 
 /**
- * A script to run on the target through a fixed launcher. The source text itself is not stored: it lives only in the private plan of the running process, so a
- * restart finds the operation unknown instead of running a plan nobody can verify (2.x operation_source). What is stored identifies the plan: its digest, the digest
- * and the length of the source, the arguments as JSON, the working directory and the revision of the environment it was planned against.
+ * A script to run on the target through a fixed launcher. The source text itself is not stored: it lives only in the in-memory private plan registry
+ * ({@code SourcePlanRegistry}) of the running process. Across a restart, in-flight operations become {@code UNKNOWN} as usual, while queued {@code SOURCE}
+ * operations are refused before dispatch with {@code PRIVATE_PLAN} at {@code SOURCE_PLAN} ({@code NOT_DISPATCHED}) instead of running a plan nobody can verify
+ * (stage 4 design B-3, 2.x operation_source). What is stored identifies the plan: its digest, the digest and the length of the source, the arguments as JSON,
+ * the working directory and the revision of the environment it was planned against.
  *
  * @param launcher the fixed launcher command; the source never appears in it
  * @param planDigest the digest of the whole execution plan

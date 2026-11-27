@@ -46,7 +46,7 @@ public class SftpUploader {
     /** 32 KiB per SFTP packet: fits every SFTP v3 server's maximum packet payload while streaming directly over an open handle. */
     private static final int BLOCK_BYTES = 32 * 1024;
     /** {@code 0600}: read and write for the owner, nothing for anybody else. */
-    private static final int OWNER_ONLY = 0600;
+    private static final int OWNER_ONLY = 0_600;
 
     private final RemotePathChecker checker;
     private final AtomicReplacer replacer;
@@ -224,7 +224,7 @@ public class SftpUploader {
             return Optional.empty();
         }
         try {
-            SftpClient.Attributes attributes = new SftpClient.Attributes().perms(present.state().permissions() & 0777);
+            SftpClient.Attributes attributes = new SftpClient.Attributes().perms(present.state().permissions() & 0_777);
             if (request.access() instanceof io.github.jaeseongs95.opermand.app.remote.FileAccess.Elevated) {
                 // An elevated server (sudo sftp-server) is root, whose new file belongs to root: the owner and group the file had are given back on the handle (only root may).
                 attributes.owner(present.state().userId(), present.state().groupId());

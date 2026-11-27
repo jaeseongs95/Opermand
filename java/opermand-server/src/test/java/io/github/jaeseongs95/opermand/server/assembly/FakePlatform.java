@@ -21,7 +21,9 @@ import io.github.jaeseongs95.opermand.domain.agentcli.AgentRelease;
 import io.github.jaeseongs95.opermand.domain.classify.CommandClassification;
 import io.github.jaeseongs95.opermand.domain.command.CommandLineGrammar;
 import io.github.jaeseongs95.opermand.domain.command.TargetRule;
+import io.github.jaeseongs95.opermand.domain.operation.Elevation;
 import io.github.jaeseongs95.opermand.domain.path.PathSyntax;
+import io.github.jaeseongs95.opermand.domain.target.SourceRuntime;
 import io.github.jaeseongs95.opermand.domain.target.Target;
 import io.github.jaeseongs95.opermand.domain.target.TargetCapabilities;
 import io.github.jaeseongs95.opermand.domain.target.TargetOs;
@@ -76,7 +78,7 @@ final class FakePlatform implements TargetPlatform {
     }
 
     @Override
-    public PreparedCommand prepareSource(SourceText source, SourceArguments args, WorkingDirectory workdir) {
+    public PreparedCommand prepareSource(SourceText source, SourceArguments args, WorkingDirectory workdir, SourceRuntime runtime, Elevation elevation) {
         throw new IllegalStateException("The file use cases do not prepare sources");
     }
 

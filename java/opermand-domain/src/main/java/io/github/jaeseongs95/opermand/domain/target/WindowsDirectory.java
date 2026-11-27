@@ -25,4 +25,14 @@ public record WindowsDirectory(String value) {
             new WindowsRemotePath(value);
         }
     }
+
+    /** True when this directory is a Windows drive root such as {@code C:\} or {@code C:/}. */
+    public boolean isDriveRoot() {
+        return DRIVE_ROOT.matcher(value).matches();
+    }
+
+    /** True when {@code text} is a Windows drive root such as {@code C:\} or {@code C:/}. */
+    public static boolean isDriveRoot(String text) {
+        return text != null && DRIVE_ROOT.matcher(text).matches();
+    }
 }

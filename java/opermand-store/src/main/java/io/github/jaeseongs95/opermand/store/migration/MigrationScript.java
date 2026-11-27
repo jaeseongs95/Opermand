@@ -35,6 +35,22 @@ record MigrationScript(long version, String file, byte[] bytes, String digest) {
         return new String(bytes, StandardCharsets.UTF_8).replace(LONG_TEXT, longTextType);
     }
 
+    @Override
+    public boolean equals(Object other) {
+        return other instanceof MigrationScript that && version == that.version && java.util.Objects.equals(file, that.file)
+            && java.util.Arrays.equals(bytes, that.bytes) && java.util.Objects.equals(digest, that.digest);
+    }
+
+    @Override
+    public int hashCode() {
+        return 31 * java.util.Objects.hash(version, file, digest) + java.util.Arrays.hashCode(bytes);
+    }
+
+    @Override
+    public String toString() {
+        return "MigrationScript[version=" + version + ", file=" + file + ", bytes=" + bytes.length + ", digest=" + digest + "]";
+    }
+
     /** Every script under {@code location} (a folder of the classpath and its subfolders), in number order. A number used twice is a failure. */
     static List<MigrationScript> load(String location) {
         List<MigrationScript> scripts = new ArrayList<>();

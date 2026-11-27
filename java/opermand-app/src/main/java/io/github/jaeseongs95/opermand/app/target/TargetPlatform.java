@@ -14,7 +14,9 @@ import io.github.jaeseongs95.opermand.domain.classify.CommandClass;
 import io.github.jaeseongs95.opermand.domain.classify.CommandClassification;
 import io.github.jaeseongs95.opermand.domain.command.CommandLineGrammar;
 import io.github.jaeseongs95.opermand.domain.command.TargetRule;
+import io.github.jaeseongs95.opermand.domain.operation.Elevation;
 import io.github.jaeseongs95.opermand.domain.path.PathSyntax;
+import io.github.jaeseongs95.opermand.domain.target.SourceRuntime;
 import io.github.jaeseongs95.opermand.domain.target.Target;
 import io.github.jaeseongs95.opermand.domain.target.TargetCapabilities;
 import io.github.jaeseongs95.opermand.domain.target.TargetOs;
@@ -59,7 +61,7 @@ public interface TargetPlatform {
      * A script run as a command: the receiver is a fixed program that takes the source on its standard input, checks its bytes and digest, and only then runs it
      * (python-source-v1). The source and the arguments are data for the receiver; no part of them is in the command line.
      */
-    PreparedCommand prepareSource(SourceText source, SourceArguments args, WorkingDirectory workdir);
+    PreparedCommand prepareSource(SourceText source, SourceArguments args, WorkingDirectory workdir, SourceRuntime runtime, Elevation elevation);
 
     /** Whether the target has an allowed-root rule for file paths and in which syntax it is compared: none on Linux, the root comparison on Windows. */
     PathPolicyBinding pathPolicy(Target target);

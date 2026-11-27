@@ -12,13 +12,13 @@ import java.util.regex.Pattern;
 public record SecretReference(String provider, String name) {
 
     private static final Pattern SHAPE = Pattern.compile("secret://([a-z][a-z0-9-]{0,31})/([A-Za-z0-9][A-Za-z0-9_.-]{0,63})");
-    private static final Pattern PROVIDER = Pattern.compile("[a-z][a-z0-9-]{0,31}");
-    private static final Pattern NAME = Pattern.compile("[A-Za-z0-9][A-Za-z0-9_.-]{0,63}");
+    private static final Pattern PROVIDER_PATTERN = Pattern.compile("[a-z][a-z0-9-]{0,31}");
+    private static final Pattern NAME_PATTERN = Pattern.compile("[A-Za-z0-9][A-Za-z0-9_.-]{0,63}");
 
     public SecretReference {
         Objects.requireNonNull(provider, "provider");
         Objects.requireNonNull(name, "name");
-        if (!PROVIDER.matcher(provider).matches() || !NAME.matcher(name).matches()) {
+        if (!PROVIDER_PATTERN.matcher(provider).matches() || !NAME_PATTERN.matcher(name).matches()) {
             throw new IllegalArgumentException("Invalid secret reference");
         }
     }

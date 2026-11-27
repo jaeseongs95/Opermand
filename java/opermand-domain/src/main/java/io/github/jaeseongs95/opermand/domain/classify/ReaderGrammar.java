@@ -62,7 +62,7 @@ record ReaderGrammar(Style style, Set<String> flags, Set<String> valueFlags, Set
     /** Whether the argument words (the words after the program name) stay within the grammar. */
     GrammarMatch match(List<String> words) {
         if (style == Style.ANY) {
-            return GrammarMatch.ACCEPTED;
+            return GrammarMatch.MATCHED;
         }
         List<String> operandWords = new ArrayList<>();
         boolean optionsEnded = false;

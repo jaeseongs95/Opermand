@@ -17,7 +17,7 @@ import org.apache.sshd.sftp.client.SftpClient;
  */
 record LeafState(long size, long modifiedMillis, int permissions, int userId, int groupId) {
 
-    private static final int PERMISSION_BITS = 07777;
+    private static final int PERMISSION_BITS = 0_7777;
 
     /** The state the attributes show. */
     static LeafState of(SftpClient.Attributes attributes) {

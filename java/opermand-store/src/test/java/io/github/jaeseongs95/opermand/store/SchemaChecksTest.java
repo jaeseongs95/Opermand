@@ -162,14 +162,16 @@ class SchemaChecksTest {
     @DisplayName("S2-DB-02: the dispatch reasons and stages of the domain are accepted by the columns of a refused result")
     void dispatchReasonsAndStagesAreAccepted() {
         jdbc.update("DELETE FROM operation_result");
+        int inserted = 0;
         for (DispatchReason reason : DispatchReason.values()) {
             for (DispatchStage stage : DispatchStage.values()) {
-                jdbc.update("INSERT INTO operation_result (operation_id, result_kind, result_flag, exit_kind, failure_kind, dispatch_kind, dispatch_reason, dispatch_stage,"
+                inserted += jdbc.update("INSERT INTO operation_result (operation_id, result_kind, result_flag, exit_kind, failure_kind, dispatch_kind, dispatch_reason, dispatch_stage,"
                     + " evidence_kind, result_texts_attachment_id) VALUES ('" + OP + "', 'REFUSED', 'FAILED', 'NO_EXIT', 'NONE', 'REFUSED', '" + reason.name() + "', '" + stage.name()
                     + "', 'NO_EVIDENCE', '" + ATT + "')");
                 jdbc.update("DELETE FROM operation_result");
             }
         }
+        assertThat(inserted).isEqualTo(DispatchReason.values().length * DispatchStage.values().length);
     }
 
     @Test

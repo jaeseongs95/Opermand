@@ -19,14 +19,22 @@ import java.util.regex.Pattern;
  * @param enabled whether the target takes requests
  * @param os the operating system family
  * @param windows the settings only a Windows target has
+ * @param posixPython the optional Python executable override on a Linux target; defaults to {@link PosixPythonExecutable#DEFAULT} when unset
  * @param queueCapacity a queue capacity of this target's own, or the default
  * @param maxConcurrency a concurrency of this target's own, or the default
  * @param desktop how the remote desktop is reached
  */
 public record Target(TargetId id, TargetDisplayName displayName, ProfileAlias readProfile, ProfileAlias writeProfile, ProfileAlias credentialRevision, Toggle enabled,
-                     TargetOs os, WindowsRuntime windows, CapacityOverride queueCapacity, CapacityOverride maxConcurrency, DesktopSettings desktop) {
+                     TargetOs os, WindowsRuntime windows, Setting<PosixPythonExecutable> posixPython, CapacityOverride queueCapacity, CapacityOverride maxConcurrency,
+                     DesktopSettings desktop) {
 
     private static final Pattern ALIAS = Pattern.compile("[a-z][a-z0-9_-]{0,31}");
+
+    /** Convenience constructor for targets without an explicit POSIX Python override. */
+    public Target(TargetId id, TargetDisplayName displayName, ProfileAlias readProfile, ProfileAlias writeProfile, ProfileAlias credentialRevision, Toggle enabled,
+                  TargetOs os, WindowsRuntime windows, CapacityOverride queueCapacity, CapacityOverride maxConcurrency, DesktopSettings desktop) {
+        this(id, displayName, readProfile, writeProfile, credentialRevision, enabled, os, windows, Setting.unset(), queueCapacity, maxConcurrency, desktop);
+    }
 
     public Target {
         Objects.requireNonNull(id, "id");
@@ -37,6 +45,7 @@ public record Target(TargetId id, TargetDisplayName displayName, ProfileAlias re
         Objects.requireNonNull(enabled, "enabled");
         Objects.requireNonNull(os, "os");
         Objects.requireNonNull(windows, "windows");
+        Objects.requireNonNull(posixPython, "posixPython");
         Objects.requireNonNull(queueCapacity, "queueCapacity");
         Objects.requireNonNull(maxConcurrency, "maxConcurrency");
         Objects.requireNonNull(desktop, "desktop");
@@ -46,6 +55,9 @@ public record Target(TargetId id, TargetDisplayName displayName, ProfileAlias re
         }
         if (os != TargetOs.WINDOWS && !windows.isEmpty()) {
             throw new IllegalArgumentException("Windows runtime settings require a Windows target");
+        }
+        if (os != TargetOs.LINUX && posixPython.isGiven()) {
+            throw new IllegalArgumentException("POSIX Python executable requires a Linux target");
         }
         if (!desktop.fits(os)) {
             throw new IllegalArgumentException("Invalid desktop backend for target platform");
@@ -62,12 +74,25 @@ public record Target(TargetId id, TargetDisplayName displayName, ProfileAlias re
         return new TargetCapabilities(onWindows ? CommandShell.WINDOWS_POWERSHELL_5_1 : CommandShell.POSIX, true, true, !onWindows || windows.python().isGiven(), true, true);
     }
 
+    /**
+     * The Python runtime this target uses for {@code SOURCE} operations: always given on Linux (configured path or {@link PosixPythonExecutable#DEFAULT}),
+     * and given on Windows only when {@link WindowsRuntime#python()} is configured.
+     */
+    public Setting<SourceRuntime> sourceRuntime() {
+        return switch (os) {
+            case LINUX -> Setting.given(new SourceRuntime.Posix(posixPython.orElse(PosixPythonExecutable.DEFAULT)));
+            case WINDOWS -> windows.python() instanceof Setting.Given<WindowsPythonExecutable> py
+                ? Setting.given(new SourceRuntime.WindowsPython(py.value())) : Setting.unset();
+        };
+    }
+
     /** Writes every field into a canonical form, for the revision of the target. */
     CanonicalForm describeTo(CanonicalForm form) {
         form.field("target.id", id.value()).field("target.displayName", displayName.value()).field("target.readProfile", readProfile.value())
             .field("target.writeProfile", writeProfile.value()).field("target.credentialRevision", credentialRevision.value()).field("target.enabled", enabled.name())
             .field("target.os", os.name());
         windows.describeTo(form);
+        posixPython.describeTo(form, "posix.python", PosixPythonExecutable::value);
         queueCapacity.describeTo(form, "target.queueCapacity");
         maxConcurrency.describeTo(form, "target.maxConcurrency");
         return desktop.describeTo(form);

@@ -28,10 +28,15 @@ import io.github.jaeseongs95.opermand.domain.target.Toggle;
 import io.github.jaeseongs95.opermand.domain.error.RequestErrorCode;
 import io.github.jaeseongs95.opermand.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.opermand.domain.id.Sha256Digester;
+import io.github.jaeseongs95.opermand.domain.operation.Elevation;
 import io.github.jaeseongs95.opermand.domain.path.PathSyntax;
 import io.github.jaeseongs95.opermand.domain.path.PosixRemotePath;
 import io.github.jaeseongs95.opermand.domain.path.WindowsRemotePath;
+import io.github.jaeseongs95.opermand.domain.target.PosixPythonExecutable;
+import io.github.jaeseongs95.opermand.domain.target.SourceRuntime;
 import io.github.jaeseongs95.opermand.domain.target.TargetOs;
+import io.github.jaeseongs95.opermand.domain.target.WindowsDirectory;
+import io.github.jaeseongs95.opermand.domain.target.WindowsPythonExecutable;
 import io.github.jaeseongs95.opermand.domain.text.CommandText;
 import io.github.jaeseongs95.opermand.domain.text.SourceText;
 import java.util.List;
@@ -136,19 +141,33 @@ class TargetPlatformsTest {
     }
 
     @Test
-    @DisplayName("S3-TP-06 a Linux source runs in / when no directory is given and in the given one otherwise; a Windows source needs the target's interpreter and is refused without it")
+    @DisplayName("S3-TP-06 D-0170 D-0172 Linux and Windows prepareSource dispatch by SourceRuntime and Elevation, refusing mismatched runtimes")
     void sources() {
         SourceText source = new SourceText("print('ok')\n");
+        SourceRuntime posixDefault = new SourceRuntime.Posix(PosixPythonExecutable.DEFAULT);
+        SourceRuntime posixCustom = new SourceRuntime.Posix(new PosixPythonExecutable("/usr/local/bin/python3.12"));
+        SourceRuntime winPython = new SourceRuntime.WindowsPython(new WindowsPythonExecutable("C:\\Python312\\python.exe"));
 
-        PreparedCommand inRoot = linux.prepareSource(source, SourceArguments.none(), new WorkingDirectory.Default());
-        PreparedCommand inDirectory = linux.prepareSource(source, SourceArguments.none(), new WorkingDirectory.At(new PosixRemotePath("/srv/work")));
+        PreparedCommand inRoot = linux.prepareSource(source, SourceArguments.none(), new WorkingDirectory.Default(), posixDefault, Elevation.NONE);
+        PreparedCommand inDirectory = linux.prepareSource(source, SourceArguments.none(), new WorkingDirectory.At(new PosixRemotePath("/srv/work")), posixCustom, Elevation.SUDO);
 
         assertThat(inRoot.kind()).isEqualTo(CommandKind.SOURCE);
         assertThat(inRoot.commandLine()).contains("'/usr/bin/python3'");
         assertThat(inRoot.commandLine()).endsWith(" '/'").doesNotContain("'/srv/work'");
-        assertThat(inDirectory.commandLine()).contains("'/srv/work'");
+        assertThat(inDirectory.commandLine()).startsWith("'sudo' '-n' '--' '/usr/local/bin/python3.12'").contains("'/srv/work'");
         assertThat(new String(inRoot.stdin().bytes(), java.nio.charset.StandardCharsets.UTF_8)).isEqualTo("print('ok')\n");
-        assertThatThrownBy(() -> windows.prepareSource(source, SourceArguments.none(), new WorkingDirectory.Default()))
+
+        PreparedCommand winDefault = windows.prepareSource(source, SourceArguments.none(), new WorkingDirectory.Default(), winPython, Elevation.NONE);
+        PreparedCommand winWork = windows.prepareSource(source, SourceArguments.none(), new WorkingDirectory.At(new WindowsRemotePath("C:\\work")), winPython, Elevation.SUDO);
+        PreparedCommand winDriveRoot = windows.prepareSource(source, SourceArguments.none(), new WorkingDirectory.DriveRoot(new WindowsDirectory("D:\\")), winPython, Elevation.NONE);
+        assertThat(winDefault.kind()).isEqualTo(CommandKind.SOURCE);
+        assertThat(winDefault.commandLine()).startsWith("powershell.exe ");
+        assertThat(new String(winWork.stdin().bytes(), java.nio.charset.StandardCharsets.UTF_8)).contains("\"cwd\":\"C:\\\\work\"").contains("\"elevate\":true");
+        assertThat(new String(winDriveRoot.stdin().bytes(), java.nio.charset.StandardCharsets.UTF_8)).contains("\"cwd\":\"D:\\\\\"");
+
+        assertThatThrownBy(() -> windows.prepareSource(source, SourceArguments.none(), new WorkingDirectory.Default(), posixDefault, Elevation.NONE))
+            .isInstanceOfSatisfying(RequestRefusedException.class, refused -> assertThat(refused.code()).isEqualTo(RequestErrorCode.TARGET_CAPABILITY_UNSUPPORTED));
+        assertThatThrownBy(() -> linux.prepareSource(source, SourceArguments.none(), new WorkingDirectory.Default(), winPython, Elevation.NONE))
             .isInstanceOfSatisfying(RequestRefusedException.class, refused -> assertThat(refused.code()).isEqualTo(RequestErrorCode.TARGET_CAPABILITY_UNSUPPORTED));
     }
 

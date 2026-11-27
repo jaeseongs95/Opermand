@@ -3,7 +3,6 @@ package io.github.jaeseongs95.opermand.ssh.sftp;
 import java.io.IOException;
 import org.apache.sshd.client.channel.ChannelSubsystem;
 import org.apache.sshd.client.session.ClientSession;
-import org.apache.sshd.common.AttributeRepository;
 import org.apache.sshd.common.SshConstants;
 import org.apache.sshd.common.channel.StreamingChannel;
 import org.apache.sshd.common.session.Session;
@@ -15,13 +14,13 @@ import org.apache.sshd.common.util.buffer.Buffer;
  * {@link GuardedSftpClient#createSftpChannelSubsystem}, which this class overrides with a channel whose open request is {@code exec} with the command line. Everything else
  * (the version negotiation, every operation, the pipelined streams) is MINA's own code, so an elevated transfer runs the same adapter code as a plain one.
  *
- * <p>The constructor of {@code DefaultSftpClient} opens the channel before a subclass can set a field, so the command line travels as an attribute of the session
- * for the length of the call; the call holds the session's monitor, so two openings on one session do not see each other's command. The channel of the client belongs to
- * it: closing the client closes the channel and with it the program on the target.
+ * <p>The constructor of {@code DefaultSftpClient} opens the channel before a subclass can set a field, so the command line travels in a thread-local for the length of the
+ * synchronous constructor call (the same pattern as {@link GuardedSftpClient}); nothing is shared between concurrent openings on one session. The channel of the client belongs
+ * to it: closing the client closes the channel and with it the program on the target.
  */
 final class ExecSftpClient extends GuardedSftpClient {
 
-    private static final AttributeRepository.AttributeKey<String> COMMAND = new AttributeRepository.AttributeKey<>();
+    private static final ThreadLocal<String> PENDING_COMMAND = new ThreadLocal<>();
     private static final String EXEC_REQUEST = "exec";
 
     private ExecSftpClient(ClientSession session) throws IOException {
@@ -37,19 +36,22 @@ final class ExecSftpClient extends GuardedSftpClient {
      * @throws IOException when the program does not answer the SFTP handshake (it did not start, {@code sudo} refused) or the connection fails
      */
     static ExecSftpClient open(ClientSession session, String commandLine) throws IOException {
-        synchronized (session) {
-            session.setAttribute(COMMAND, commandLine);
-            try {
-                return guarding(() -> new ExecSftpClient(session));
-            } finally {
-                session.removeAttribute(COMMAND);
+        String outer = PENDING_COMMAND.get();
+        PENDING_COMMAND.set(commandLine);
+        try {
+            return guarding(() -> new ExecSftpClient(session));
+        } finally {
+            if (outer == null) {
+                PENDING_COMMAND.remove();
+            } else {
+                PENDING_COMMAND.set(outer);
             }
         }
     }
 
     @Override
     protected ChannelSubsystem createSftpChannelSubsystem(ClientSession session) {
-        return new ExecChannel(session.getAttribute(COMMAND));
+        return new ExecChannel(PENDING_COMMAND.get());
     }
 
     /** The channel of the client: MINA's own SFTP channel with another open request. */

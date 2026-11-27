@@ -73,17 +73,20 @@ public class CapacityService {
 
     /** The stored limits; the first call of a new installation stores the defaults (two first writers: the loser rolls back and reads the winner in a fresh read-only TX). */
     public CapacityState current() {
-        Optional<CapacityState> existing = readTx.execute(status -> store.read());
-        if (existing != null && existing.isPresent()) {
-            return existing.orElseThrow();
+        CapacityState existing = readTx.execute(status -> store.read().orElse(null));
+        if (existing != null) {
+            return existing;
         }
         CapacityState initial = defaults();
         try {
             return Objects.requireNonNull(writeTx.execute(status -> store.initialize(initial)), "capacity");
         } catch (DuplicateKeyException e) {
             LOG.info("Another writer initialized the runtime capacity first; reading the stored state in a fresh transaction", e);
-            Optional<CapacityState> winner = readTx.execute(status -> store.read());
-            return winner == null ? initial : winner.orElseThrow(() -> new IllegalStateException("The runtime capacity row vanished after a duplicate insert", e));
+            CapacityState winner = readTx.execute(status -> store.read().orElse(null));
+            if (winner == null) {
+                throw new IllegalStateException("The runtime capacity row vanished after a duplicate insert", e);
+            }
+            return winner;
         }
     }
 

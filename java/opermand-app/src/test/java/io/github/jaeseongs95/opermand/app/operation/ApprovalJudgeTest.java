@@ -48,6 +48,7 @@ import io.github.jaeseongs95.opermand.domain.error.DispatchStage;
 import io.github.jaeseongs95.opermand.domain.file.FileBinding;
 import io.github.jaeseongs95.opermand.domain.file.FileName;
 import io.github.jaeseongs95.opermand.domain.id.ArtifactId;
+import io.github.jaeseongs95.opermand.domain.operation.Elevation;
 import io.github.jaeseongs95.opermand.domain.id.Digest;
 import io.github.jaeseongs95.opermand.domain.id.Digester;
 import io.github.jaeseongs95.opermand.domain.id.OwnerId;
@@ -348,7 +349,8 @@ class ApprovalJudgeTest {
         }
 
         @Override
-        public PreparedCommand prepareSource(SourceText source, SourceArguments args, WorkingDirectory workdir) {
+        public PreparedCommand prepareSource(SourceText source, SourceArguments args, WorkingDirectory workdir,
+                                             io.github.jaeseongs95.opermand.domain.target.SourceRuntime runtime, Elevation elevation) {
             throw new IllegalStateException("not used by the judge");
         }
 

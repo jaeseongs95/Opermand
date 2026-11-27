@@ -5,11 +5,11 @@ import io.github.jaeseongs95.opermand.domain.agentcli.AgentCliProviderId;
 /** The OpenAI Codex command-line tool distributed via the public npm registry. */
 public final class CodexCliProvider extends NpmCliProvider {
 
-    public static final AgentCliProviderId ID = new AgentCliProviderId("codex");
+    public static final AgentCliProviderId PROVIDER_ID = new AgentCliProviderId("codex");
 
     @Override
     public AgentCliProviderId id() {
-        return ID;
+        return PROVIDER_ID;
     }
 
     @Override

@@ -62,6 +62,27 @@ class TargetTest {
         assertThatThrownBy(() -> new WindowsDirectory("C:\\" + "a".repeat(600))).isInstanceOf(IllegalArgumentException.class);
         Target withoutPython = TargetFixtures.windows("win", WindowsRuntime.none(), new DesktopSettings.NoDesktop());
         assertThat(withoutPython.capabilities().pythonSource()).as("a Windows target needs a configured Python for source requests").isFalse();
+        assertThat(withoutPython.sourceRuntime()).isEqualTo(Setting.unset());
+        Target withWinPython = TargetFixtures.windows("win2",
+            new WindowsRuntime(Setting.unset(), Setting.given(new WindowsPythonExecutable("C:\\Python312\\python.exe"))),
+            new DesktopSettings.NoDesktop());
+        assertThat(withWinPython.sourceRuntime()).isEqualTo(Setting.given(new SourceRuntime.WindowsPython(new WindowsPythonExecutable("C:\\Python312\\python.exe"))));
+        assertThat(base.sourceRuntime()).isEqualTo(Setting.given(new SourceRuntime.Posix(PosixPythonExecutable.DEFAULT)));
+        PosixPythonExecutable customPosix = new PosixPythonExecutable("/opt/venv/bin/python3.12");
+        Target linuxWithPosixPython = new Target(base.id(), base.displayName(), base.readProfile(), base.writeProfile(), base.credentialRevision(), base.enabled(), base.os(),
+            base.windows(), Setting.given(customPosix), base.queueCapacity(), base.maxConcurrency(), base.desktop());
+        assertThat(linuxWithPosixPython.sourceRuntime()).isEqualTo(Setting.given(new SourceRuntime.Posix(customPosix)));
+        assertThatThrownBy(() -> new Target(withWinPython.id(), withWinPython.displayName(), withWinPython.readProfile(), withWinPython.writeProfile(),
+            withWinPython.credentialRevision(), withWinPython.enabled(), withWinPython.os(), withWinPython.windows(), Setting.given(customPosix),
+            withWinPython.queueCapacity(), withWinPython.maxConcurrency(), withWinPython.desktop()))
+            .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("POSIX");
+        assertThat(new PosixPythonExecutable("/usr/bin/python").value()).isEqualTo("/usr/bin/python");
+        assertThat(new PosixPythonExecutable("/opt/py/bin/python3.12.1").value()).isEqualTo("/opt/py/bin/python3.12.1");
+        String tooLongPosix = "/" + "a/".repeat(260) + "python3";
+        for (String badPosix : new String[] {"", "python3", "/usr/bin/perl", "/usr/bin/python3/", "/usr//bin/python3", "/usr/./bin/python3",
+            "/usr/bin/../bin/python3", "/opt/py/python 3", "/usr/bin/python3\n", tooLongPosix}) {
+            assertThatThrownBy(() -> new PosixPythonExecutable(badPosix)).as("posix executable %s", badPosix).isInstanceOf(IllegalArgumentException.class);
+        }
     }
 
     @Test

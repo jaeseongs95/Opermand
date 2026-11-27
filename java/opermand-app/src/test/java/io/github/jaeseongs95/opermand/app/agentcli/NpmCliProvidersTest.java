@@ -34,7 +34,7 @@ class NpmCliProvidersTest {
     void npmProvidersExposeExpectedMetadata() {
         AgentCliCatalog catalog = new AgentCliCatalog(List.of(codex, claude));
         assertThat(catalog.providers().stream().map(AgentCliProvider::id).toList())
-            .containsExactly(CodexCliProvider.ID, ClaudeCliProvider.ID);
+            .containsExactly(CodexCliProvider.PROVIDER_ID, ClaudeCliProvider.PROVIDER_ID);
         assertThat(codex.packageName()).isEqualTo("@openai/codex");
         assertThat(codex.command()).isEqualTo("codex");
         assertThat(codex.credentialFileName()).isEqualTo(".codex/auth.json");

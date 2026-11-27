@@ -13,12 +13,12 @@ import java.util.regex.Pattern;
  */
 public record FixedRemoteCommand(String label, String commandLine) {
 
-    private static final Pattern LABEL = Pattern.compile("[a-z][a-z0-9-]{0,31}");
+    private static final Pattern LABEL_PATTERN = Pattern.compile("[a-z][a-z0-9-]{0,31}");
 
     public FixedRemoteCommand {
         Objects.requireNonNull(label, "label");
         Objects.requireNonNull(commandLine, "commandLine");
-        if (!LABEL.matcher(label).matches()) {
+        if (!LABEL_PATTERN.matcher(label).matches()) {
             throw new IllegalArgumentException("A fixed command label is 1 to 32 characters of a-z 0-9 - and starts with a letter");
         }
         if (commandLine.isBlank() || commandLine.indexOf('\0') >= 0) {

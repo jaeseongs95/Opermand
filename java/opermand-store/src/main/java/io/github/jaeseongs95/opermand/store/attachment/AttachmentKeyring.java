@@ -271,7 +271,35 @@ public class AttachmentKeyring {
         ACTIVE, RETIRED
     }
 
-    private record KeyRecord(String keyId, KeyStatus status, Instant createdAt, byte[] rawKey) {
+    private static final class KeyRecord {
+        private final String keyId;
+        private final KeyStatus status;
+        private final Instant createdAt;
+        private final byte[] rawKey;
+
+        private KeyRecord(String keyId, KeyStatus status, Instant createdAt, byte[] rawKey) {
+            this.keyId = keyId;
+            this.status = status;
+            this.createdAt = createdAt;
+            this.rawKey = rawKey;
+        }
+
+        String keyId() {
+            return keyId;
+        }
+
+        KeyStatus status() {
+            return status;
+        }
+
+        Instant createdAt() {
+            return createdAt;
+        }
+
+        byte[] rawKey() {
+            return rawKey;
+        }
+
         SecretKey secretKey() {
             return new SecretKeySpec(rawKey, "AES");
         }

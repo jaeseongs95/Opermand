@@ -11,7 +11,7 @@ import java.util.Objects;
 public record OutputLimits(Duration ttl, long maxOutputBytes, long budgetBytes, int maxCount, long diskMarginBytes) {
 
     /** How long an output is kept after its reservation. */
-    public static final Duration TTL = Duration.ofHours(1);
+    public static final Duration DEFAULT_TTL = Duration.ofHours(1);
     /** The size one output may hold. */
     public static final long MAX_OUTPUT_BYTES = 16L * 1024 * 1024;
     /** The sum of the charges of all outputs. */
@@ -37,7 +37,7 @@ public record OutputLimits(Duration ttl, long maxOutputBytes, long budgetBytes, 
 
     /** The limits of the product. */
     public static OutputLimits defaults() {
-        return new OutputLimits(TTL, MAX_OUTPUT_BYTES, BUDGET_BYTES, MAX_COUNT, DISK_MARGIN_BYTES);
+        return new OutputLimits(DEFAULT_TTL, MAX_OUTPUT_BYTES, BUDGET_BYTES, MAX_COUNT, DISK_MARGIN_BYTES);
     }
 
     /** The free bytes a disk needs for a reservation; saturates instead of overflowing. */

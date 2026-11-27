@@ -51,6 +51,6 @@ record OperandRules(int max, List<String> first, Predicate<String> each) {
         if (operands.size() > limit) {
             return GrammarMatch.rejectedAt(operands.get(limit));
         }
-        return GrammarMatch.ACCEPTED;
+        return GrammarMatch.MATCHED;
     }
 }

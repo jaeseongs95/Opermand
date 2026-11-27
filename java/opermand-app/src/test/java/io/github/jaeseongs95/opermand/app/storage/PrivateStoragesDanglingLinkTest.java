@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -23,9 +24,20 @@ class PrivateStoragesDanglingLinkTest {
 
     @Test
     @DisplayName("S-D0146-01 D-0146 a link without a target where the private file should be is left as it is and then refused as 'not a regular file', not as NoSuchFileException")
-    void aDanglingLinkIsNotARegularFile(@TempDir Path folder) throws IOException {
+    void aDanglingLinkIsNotARegularFile(@TempDir Path folder) {
         Path link = folder.resolve("known_hosts");
-        Files.createSymbolicLink(link, folder.resolve("missing-target"));
+        boolean linked;
+        try {
+            Files.createSymbolicLink(link, folder.resolve("missing-target"));
+            linked = true;
+        } catch (IOException | UnsupportedOperationException e) {
+            linked = false;
+        }
+        if (List.of(System.getProperty("portal.test.require", "").split(",")).contains("links")) {
+            assertThat(linked).as("this run requires 'links', and the machine could not create a symbolic link").isTrue();
+        } else {
+            Assumptions.assumeTrue(linked, "the file store or the account of the test cannot make a symbolic link");
+        }
 
         assertThatCode(() -> storages.createPrivateFile(link)).doesNotThrowAnyException();
 

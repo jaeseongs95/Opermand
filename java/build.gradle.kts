@@ -2,6 +2,7 @@
 // versions come from the Spring Boot BOM and the Spring AI BOM, and a build file names a version only for a library that neither BOM manages.
 
 plugins {
+    jacoco
     id("org.sonarqube") version "7.5.0.8588"
 }
 
@@ -15,6 +16,9 @@ val springBootVersion = property("springBootVersion")
 
 allprojects {
     group = "io.github.jaeseongs95.opermand"
+    repositories {
+        mavenCentral()
+    }
 }
 
 sonar {
@@ -22,6 +26,7 @@ sonar {
         property("sonar.projectKey", "opermand")
         property("sonar.projectName", "Opermand")
         property("sonar.sourceEncoding", "UTF-8")
+        property("sonar.coverage.jacoco.xmlReportPaths", layout.buildDirectory.file("reports/jacoco/root/jacocoRootReport.xml").get().asFile.absolutePath)
     }
 }
 
@@ -64,10 +69,6 @@ val hostSessionVariable = Regex("(AGENT_GOVERNANCE|AGS_|CLAUDE|CODEX|GEMINI|ANTH
 subprojects {
     apply(plugin = "java-library")
     apply(plugin = "jacoco")
-
-    repositories {
-        mavenCentral()
-    }
 
     extensions.configure<JavaPluginExtension> {
         toolchain {
@@ -167,7 +168,25 @@ subprojects {
     }
 }
 
+val jacocoRootReport = tasks.register<org.gradle.testing.jacoco.tasks.JacocoReport>("jacocoRootReport") {
+    description = "Aggregates JaCoCo coverage across all modules from every executed test task."
+    group = "verification"
+    val javaSubprojects = subprojects.filter { it.name != "opermand-arch-checks" }
+    dependsOn(javaSubprojects.map { it.tasks.named("classes") })
+    mustRunAfter(subprojects.map { it.tasks.withType<Test>() })
+    additionalSourceDirs.from(javaSubprojects.map { it.extensions.getByType<JavaPluginExtension>().sourceSets.named("main").map { ss -> ss.allSource.srcDirs } })
+    sourceDirectories.from(javaSubprojects.map { it.extensions.getByType<JavaPluginExtension>().sourceSets.named("main").map { ss -> ss.allSource.srcDirs } })
+    classDirectories.from(javaSubprojects.map { it.extensions.getByType<JavaPluginExtension>().sourceSets.named("main").map { ss -> ss.output.classesDirs } })
+    executionData.from(subprojects.map { sp -> sp.fileTree(sp.layout.buildDirectory.dir("jacoco")) { include("*.exec") } })
+    reports {
+        xml.required.set(true)
+        xml.outputLocation.set(layout.buildDirectory.file("reports/jacoco/root/jacocoRootReport.xml"))
+        html.required.set(false)
+    }
+}
+
 tasks.named("sonar") {
     dependsOn(subprojects.map { it.tasks.named("classes") })
     dependsOn(subprojects.map { it.tasks.named("testClasses") })
+    mustRunAfter(jacocoRootReport)
 }

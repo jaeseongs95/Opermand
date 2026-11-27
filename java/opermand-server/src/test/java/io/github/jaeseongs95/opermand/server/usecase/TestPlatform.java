@@ -30,7 +30,9 @@ import io.github.jaeseongs95.opermand.domain.command.WindowsPolicyName;
 import io.github.jaeseongs95.opermand.domain.command.TargetRule;
 import io.github.jaeseongs95.opermand.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.opermand.domain.error.TransferErrorCode;
+import io.github.jaeseongs95.opermand.domain.operation.Elevation;
 import io.github.jaeseongs95.opermand.domain.path.PathSyntax;
+import io.github.jaeseongs95.opermand.domain.target.SourceRuntime;
 import io.github.jaeseongs95.opermand.domain.target.Target;
 import io.github.jaeseongs95.opermand.domain.target.TargetCapabilities;
 import io.github.jaeseongs95.opermand.domain.target.TargetOs;
@@ -118,8 +120,8 @@ final class TestPlatform implements TargetPlatform {
     }
 
     @Override
-    public PreparedCommand prepareSource(SourceText source, SourceArguments args, WorkingDirectory workdir) {
-        throw new IllegalStateException("The command runner does not prepare sources");
+    public PreparedCommand prepareSource(SourceText source, SourceArguments args, WorkingDirectory workdir, SourceRuntime runtime, Elevation elevation) {
+        return new PreparedCommand("source:" + runtime, new StdinBytes(source.value().getBytes(java.nio.charset.StandardCharsets.UTF_8)), CommandKind.SOURCE);
     }
 
     @Override

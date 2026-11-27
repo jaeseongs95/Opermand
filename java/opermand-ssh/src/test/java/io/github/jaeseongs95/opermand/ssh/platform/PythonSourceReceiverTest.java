@@ -29,6 +29,7 @@ import io.github.jaeseongs95.opermand.domain.error.ExecutionAttempt;
 import io.github.jaeseongs95.opermand.domain.error.RequestErrorCode;
 import io.github.jaeseongs95.opermand.domain.error.RequestRefusedException;
 import io.github.jaeseongs95.opermand.domain.id.Sha256Digester;
+import io.github.jaeseongs95.opermand.domain.target.PosixPythonExecutable;
 import io.github.jaeseongs95.opermand.domain.target.WindowsDirectory;
 import io.github.jaeseongs95.opermand.domain.target.WindowsPythonExecutable;
 import io.github.jaeseongs95.opermand.domain.text.SourceText;

@@ -20,11 +20,11 @@ import io.github.jaeseongs95.opermand.domain.id.Digester;
 public record AgentRelease(AgentCliProviderId provider, String packageName, String version, String tarball, String integrity, Digest releaseDigest) {
 
     /** Three numbers of up to six digits without leading zeros: no tag, range, pre-release or build part. */
-    private static final Pattern VERSION = Pattern.compile("(0|[1-9][0-9]{0,5})(\\.(0|[1-9][0-9]{0,5})){2}");
+    private static final Pattern VERSION_PATTERN = Pattern.compile("(0|[1-9][0-9]{0,5})(\\.(0|[1-9][0-9]{0,5})){2}");
     /** Generic printable package identifier without whitespace, control characters, or path traversal. */
-    private static final Pattern PACKAGE = Pattern.compile("[A-Za-z0-9@._:/-]{1,214}");
+    private static final Pattern PACKAGE_PATTERN = Pattern.compile("[A-Za-z0-9@._:/-]{1,214}");
     /** Generic checksum token ({@code <algorithm>-<encoded>} or {@code <algorithm>:<encoded>}) without whitespace or control characters. */
-    private static final Pattern INTEGRITY = Pattern.compile("[a-z0-9]{3,16}[-:][A-Za-z0-9+/=_-]{16,256}");
+    private static final Pattern INTEGRITY_PATTERN = Pattern.compile("[a-z0-9]{3,16}[-:][A-Za-z0-9+/=_-]{16,256}");
     private static final String DIGEST_LABEL = "sha256:";
 
     public AgentRelease {
@@ -34,14 +34,14 @@ public record AgentRelease(AgentCliProviderId provider, String packageName, Stri
         Objects.requireNonNull(tarball, "tarball");
         Objects.requireNonNull(integrity, "integrity");
         Objects.requireNonNull(releaseDigest, "releaseDigest");
-        if (!PACKAGE.matcher(packageName).matches() || packageName.contains("..")) {
+        if (!PACKAGE_PATTERN.matcher(packageName).matches() || packageName.contains("..")) {
             throw new IllegalArgumentException("Invalid CLI package name");
         }
-        if (!VERSION.matcher(version).matches()) {
+        if (!VERSION_PATTERN.matcher(version).matches()) {
             throw new IllegalArgumentException("Invalid CLI release version");
         }
         requireHttpsDistributionUrl(tarball);
-        if (!INTEGRITY.matcher(integrity).matches()) {
+        if (!INTEGRITY_PATTERN.matcher(integrity).matches()) {
             throw new IllegalArgumentException("Invalid CLI distribution integrity");
         }
     }
@@ -61,7 +61,7 @@ public record AgentRelease(AgentCliProviderId provider, String packageName, Stri
         if (!name.equals(provider.packageName())) {
             throw new IllegalArgumentException("Invalid CLI release");
         }
-        if (!VERSION.matcher(version).matches()) {
+        if (!VERSION_PATTERN.matcher(version).matches()) {
             throw new IllegalArgumentException("Invalid CLI release version");
         }
         if (!tarball.equals(provider.distributionUrl(version))) {

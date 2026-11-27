@@ -135,19 +135,24 @@ public final class WindowsCommandWrapper {
     private String workdirPrelude(WorkingDirectory workdir) {
         return switch (workdir) {
             case WorkingDirectory.Default() -> "";
+            case WorkingDirectory.DriveRoot(WindowsDirectory root) -> encodeWorkdir(root.value());
             case WorkingDirectory.At(RemotePath directory) -> {
                 if (!(directory instanceof WindowsRemotePath windows)) {
                     throw new IllegalArgumentException("A Windows target takes a Windows path");
                 }
-                byte[] bytes = windows.value().getBytes(StandardCharsets.UTF_8);
-                if (bytes.length > WindowsDirectory.MAX_BYTES) {
-                    throw new RequestRefusedException(RequestErrorCode.INVALID_OPERATION_INPUT);
-                }
-                yield scripts.fill(RemoteScript.WINDOWS_WORKDIR, Map.of(
-                    "IMPORT_MANAGEMENT", importModule(MANAGEMENT_MODULE, false),
-                    "WORKDIR_BASE64", Base64.getEncoder().encodeToString(bytes)));
+                yield encodeWorkdir(windows.value());
             }
         };
+    }
+
+    private String encodeWorkdir(String path) {
+        byte[] bytes = path.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length > WindowsDirectory.MAX_BYTES) {
+            throw new RequestRefusedException(RequestErrorCode.INVALID_OPERATION_INPUT);
+        }
+        return scripts.fill(RemoteScript.WINDOWS_WORKDIR, Map.of(
+            "IMPORT_MANAGEMENT", importModule(MANAGEMENT_MODULE, false),
+            "WORKDIR_BASE64", Base64.getEncoder().encodeToString(bytes)));
     }
 
     /**

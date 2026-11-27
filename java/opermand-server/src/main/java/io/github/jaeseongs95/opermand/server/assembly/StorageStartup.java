@@ -33,7 +33,7 @@ import io.github.jaeseongs95.opermand.store.output.OutputStartupCheck;
 @Order(StartupStep.STORAGE)
 public class StorageStartup implements StartupStep {
 
-    private final StartupProtection protection;
+    private final StartupProtection startupProtection;
     private final MaintenanceStore maintenance;
     private final ArtifactStartupCheck artifacts;
     private final OutputStartupCheck outputs;
@@ -42,18 +42,18 @@ public class StorageStartup implements StartupStep {
     private final TransactionOperations writeTx;
 
     @Autowired
-    public StorageStartup(StartupProtection protection, MaintenanceStore maintenance, ArtifactStartupCheck artifacts, OutputStartupCheck outputs, Clock clock,
+    public StorageStartup(StartupProtection startupProtection, MaintenanceStore maintenance, ArtifactStartupCheck artifacts, OutputStartupCheck outputs, Clock clock,
                           PlatformTransactionManager transactionManager) {
-        this(protection, maintenance, artifacts, outputs, clock, readOnly(transactionManager), new TransactionTemplate(transactionManager));
+        this(startupProtection, maintenance, artifacts, outputs, clock, readOnly(transactionManager), new TransactionTemplate(transactionManager));
     }
 
-    public StorageStartup(StartupProtection protection, MaintenanceStore maintenance, ArtifactStartupCheck artifacts, OutputStartupCheck outputs, Clock clock) {
-        this(protection, maintenance, artifacts, outputs, clock, TransactionOperations.withoutTransaction(), TransactionOperations.withoutTransaction());
+    public StorageStartup(StartupProtection startupProtection, MaintenanceStore maintenance, ArtifactStartupCheck artifacts, OutputStartupCheck outputs, Clock clock) {
+        this(startupProtection, maintenance, artifacts, outputs, clock, TransactionOperations.withoutTransaction(), TransactionOperations.withoutTransaction());
     }
 
-    private StorageStartup(StartupProtection protection, MaintenanceStore maintenance, ArtifactStartupCheck artifacts, OutputStartupCheck outputs, Clock clock,
+    private StorageStartup(StartupProtection startupProtection, MaintenanceStore maintenance, ArtifactStartupCheck artifacts, OutputStartupCheck outputs, Clock clock,
                            TransactionOperations readTx, TransactionOperations writeTx) {
-        this.protection = protection;
+        this.startupProtection = startupProtection;
         this.maintenance = maintenance;
         this.artifacts = artifacts;
         this.outputs = outputs;
@@ -70,7 +70,7 @@ public class StorageStartup implements StartupStep {
 
     @Override
     public void run() {
-        protection.verify();
+        startupProtection.verify();
         Consumer<Runnable> inTransaction = work -> writeTx.executeWithoutResult(status -> work.run());
         artifacts.reconcile(inTransaction);
         if (Boolean.TRUE.equals(readTx.execute(status -> maintenance.occupied()))) {

@@ -52,6 +52,8 @@ class SqlBuilderStoreTest {
         String url = jdbc.execute((ConnectionCallback<String>) connection -> connection.getMetaData().getURL());
         String product = jdbc.execute((ConnectionCallback<String>) connection -> connection.getMetaData().getDatabaseProductName());
 
+        assertThat(url).isNotBlank();
+        assertThat(product).isNotBlank();
         SqlBuilder.requireSame(url, product);
         sql.requireSame(product);
     }

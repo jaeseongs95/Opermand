@@ -21,7 +21,7 @@ import org.junit.jupiter.api.Test;
  */
 class MigrationRunnerSourceTest {
 
-    private static final Path SOURCES = Path.of("src/main/java/io/github/jaeseongs95/portal/store/migration");
+    private static final Path SOURCES = Path.of("src/main/java/io/github/jaeseongs95/opermand/store/migration");
     private static final Pattern BLOCK_COMMENT = Pattern.compile("/\\*.*?\\*/", Pattern.DOTALL);
     private static final Pattern LINE_COMMENT = Pattern.compile("//[^\\n]*");
     private static final Pattern WAITING = Pattern.compile("\\bsleep\\b|\\bThread\\.|\\bRetry|\\bTimeUnit\\b|\\bExecutor|\\bTimer\\b|\\bAwaitility\\b|\\bScheduled|\\bwait\\s*\\(|\\bLockSupport\\b");

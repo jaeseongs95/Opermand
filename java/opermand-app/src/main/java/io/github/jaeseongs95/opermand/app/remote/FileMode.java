@@ -7,7 +7,7 @@ package io.github.jaeseongs95.opermand.app.remote;
  */
 public record FileMode(int bits) {
 
-    private static final int MAX = 0777;
+    private static final int MAX = 0_777;
 
     public FileMode {
         if (bits < 0 || bits > MAX) {

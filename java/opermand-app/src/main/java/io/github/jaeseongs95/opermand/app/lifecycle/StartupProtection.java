@@ -19,10 +19,10 @@ import io.github.jaeseongs95.opermand.app.storage.StorageProtection;
 @Order(StartupStep.PROTECTION)
 public class StartupProtection implements StartupStep {
 
-    private final StorageProtection protection;
+    private final StorageProtection storageProtection;
 
-    public StartupProtection(StorageProtection protection) {
-        this.protection = protection;
+    public StartupProtection(StorageProtection storageProtection) {
+        this.storageProtection = storageProtection;
     }
 
     @Override
@@ -32,7 +32,7 @@ public class StartupProtection implements StartupStep {
 
     /** Throws {@link IllegalStateException} naming the folder and carrying the cause when a folder cannot be used (it is not a folder, or the file store cannot make it private to its owner). */
     public void verify() {
-        if (protection.check() instanceof ProtectionCheck.Unprotected unprotected) {
+        if (storageProtection.check() instanceof ProtectionCheck.Unprotected unprotected) {
             throw new IllegalStateException("The " + unprotected.area() + " folder cannot be used; the application does not start and deletes nothing", unprotected.cause());
         }
     }

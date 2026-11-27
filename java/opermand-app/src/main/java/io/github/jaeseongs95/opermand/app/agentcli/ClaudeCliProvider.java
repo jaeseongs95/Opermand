@@ -5,11 +5,11 @@ import io.github.jaeseongs95.opermand.domain.agentcli.AgentCliProviderId;
 /** The Anthropic Claude Code command-line tool distributed via the public npm registry. */
 public final class ClaudeCliProvider extends NpmCliProvider {
 
-    public static final AgentCliProviderId ID = new AgentCliProviderId("claude");
+    public static final AgentCliProviderId PROVIDER_ID = new AgentCliProviderId("claude");
 
     @Override
     public AgentCliProviderId id() {
-        return ID;
+        return PROVIDER_ID;
     }
 
     @Override

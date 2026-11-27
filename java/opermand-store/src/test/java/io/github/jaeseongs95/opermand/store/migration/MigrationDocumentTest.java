@@ -18,7 +18,7 @@ import org.junit.jupiter.api.Test;
 class MigrationDocumentTest {
 
     private static final Path DOCUMENT = Path.of("../docs/migration/migration-runner.md");
-    private static final Path RUNNER = Path.of("src/main/java/io/github/jaeseongs95/portal/store/migration/MigrationRunner.java");
+    private static final Path RUNNER = Path.of("src/main/java/io/github/jaeseongs95/opermand/store/migration/MigrationRunner.java");
 
     @Test
     @DisplayName("S-D0109-23: the document has the sections on Flyway, the differences, the correspondence, the expand choice and the removed tests, and the runner's javadoc says why Flyway is not used")
@@ -30,5 +30,24 @@ class MigrationDocumentTest {
 
         String javadoc = Files.readString(RUNNER, StandardCharsets.UTF_8);
         assertThat(javadoc).contains("Flyway").contains("flyway-database");
+    }
+
+    @Test
+    @DisplayName("MigrationScript value equality compares script bytes by content and formats a compact summary")
+    void migrationScriptEqualityByContent() {
+        MigrationScript a = MigrationScript.of(1L, "V1__init.sql", "SELECT 1;".getBytes(StandardCharsets.UTF_8));
+        MigrationScript b = MigrationScript.of(1L, "V1__init.sql", "SELECT 1;".getBytes(StandardCharsets.UTF_8));
+        MigrationScript diffVersion = MigrationScript.of(2L, "V1__init.sql", "SELECT 1;".getBytes(StandardCharsets.UTF_8));
+        MigrationScript diffFile = MigrationScript.of(1L, "V1__other.sql", "SELECT 1;".getBytes(StandardCharsets.UTF_8));
+        MigrationScript diffBytes = MigrationScript.of(1L, "V1__init.sql", "SELECT 2;".getBytes(StandardCharsets.UTF_8));
+        MigrationScript diffDigest = new MigrationScript(1L, "V1__init.sql", "SELECT 1;".getBytes(StandardCharsets.UTF_8), "other-digest");
+
+        assertThat(a).isEqualTo(b).hasSameHashCodeAs(b)
+            .isNotEqualTo(diffVersion)
+            .isNotEqualTo(diffFile)
+            .isNotEqualTo(diffBytes)
+            .isNotEqualTo(diffDigest)
+            .isNotEqualTo("not-a-script");
+        assertThat(a.toString()).contains("V1__init.sql").contains("bytes=9");
     }
 }

@@ -20,6 +20,7 @@ import java.util.Deque;
 import java.util.List;
 import java.util.Set;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 
@@ -48,6 +49,7 @@ public final class PosixPrivateStorage implements PrivateStorage {
     private final PermissionReader reader;
 
     /** The rule of the product: the permissions are what the file store reports. */
+    @Autowired
     public PosixPrivateStorage() {
         this(path -> Files.getPosixFilePermissions(path, LinkOption.NOFOLLOW_LINKS));
     }
