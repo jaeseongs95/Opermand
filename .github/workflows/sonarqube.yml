@@ -2,12 +2,7 @@ name: SonarQube
 
 on:
   push:
-    branches: [main, develop, 'feature/v300-**']
-    paths:
-      - 'java/**'
-      - '.github/workflows/sonarqube.yml'
-  pull_request:
-    branches: [main]
+    branches: [develop]
     paths:
       - 'java/**'
       - '.github/workflows/sonarqube.yml'
@@ -25,32 +20,16 @@ jobs:
     name: SonarQube Analysis
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Fork pull requests cannot access repository secrets.
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           persist-credentials: false
           fetch-depth: 0
-      - name: Check for Java 3.0 Gradle workspace
-        id: java_check
-        shell: bash
-        run: |
-          if [ -f java/gradlew ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping Java SonarQube analysis: java/gradlew is not present on this branch yet."
-          fi
       - uses: actions/setup-java@v5
-        if: steps.java_check.outputs.present == 'true'
         with:
           distribution: temurin
           java-version: '25'
       - name: SonarQube Analysis
-        if: steps.java_check.outputs.present == 'true'
         working-directory: java
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
