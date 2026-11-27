@@ -26,6 +26,8 @@ sonar {
         property("sonar.projectKey", "opermand")
         property("sonar.projectName", "Opermand")
         property("sonar.sourceEncoding", "UTF-8")
+        property("sonar.verbose", "false")
+        property("sonar.log.level", "INFO")
         property("sonar.coverage.jacoco.xmlReportPaths", layout.buildDirectory.file("reports/jacoco/root/jacocoRootReport.xml").get().asFile.absolutePath)
     }
 }
