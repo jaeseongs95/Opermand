@@ -30,7 +30,7 @@
 
 ## 2. 도구 목록 (24개)
 
-접두어 없는 upstream 이름. 포털이 `BRIDGE_UI_TOOL_PREFIX`(기본 `ssh-approval-bridge_`)를 붙인다(`config/settings-contract.json` defaults).
+접두어 없는 upstream 이름. 포털이 `BRIDGE_UI_TOOL_PREFIX`(기본 `opermand_`)를 붙인다(`config/settings-contract.json` defaults).
 
 | # | 도구 | 구분(visibility) | 소스(등록·스키마·설명) |
 | --- | --- | --- | --- |
@@ -60,7 +60,7 @@
 | 24 | ui-read-command-output | appOnly (설명은 `toolDescriptions`가 아니라 호출 옵션 `description`으로 덮어씀, 그래서 문구가 다른 ui 도구와 달리 'Owner UI only:'로 시작하지 않음) | `server.mjs:33(미사용),85-93` |
 
 - annotations: 공개 도구(1~15)는 `{readOnlyHint: readOnly, destructiveHint: !readOnly, idempotentHint: readOnly}` (`public-contract.mjs:171-174`). 읽기 전용은 targets, observe, artifact-status, artifact-read, desktop-observe 5개. show/ui 도구(16~24)는 `{readOnlyHint, destructiveHint: !readOnly}`만 가진다(`server.mjs:35-38`, idempotentHint 없음). 읽기 전용은 show-ui-probe, show-approval, show-file-transfer, ui-download-link, ui-read-command-output.
-- `_meta`: 공개 도구 1~15에는 `_meta`가 없다. 16~18은 `{ui:{resourceUri, visibility:["model","app"]}}`, 19~24는 `{ui:{visibility:["app"]}}` (`server.mjs:38`). `resourceUri`는 `ui://ssh-approval/card-${sha256(uiHtml)}.html`로 실행 때 계산된다(`server.mjs:15`, `src/domain/validation.mjs:5`). 파일에는 템플릿 문자열로 적었다.
+- `_meta`: 공개 도구 1~15에는 `_meta`가 없다. 16~18은 `{ui:{resourceUri, visibility:["model","app"]}}`, 19~24는 `{ui:{visibility:["app"]}}` (`server.mjs:38`). `resourceUri`는 `ui://opermand/card-${sha256(uiHtml)}.html`로 실행 때 계산된다(`server.mjs:15`, `src/domain/validation.mjs:5`). 파일에는 템플릿 문자열로 적었다.
 - title: 소스에 도구 title 지정이 없어 모든 도구 파일에 `title`이 없다.
 - 응답 봉투: 공개 도구 1~15만 Contract 2.0 봉투를 쓴다. show-*·ui-* 도구는 봉투 없이 `structuredContent`와 `_meta.sshApproval`(예: show-ui-probe `server.mjs:43`)을 쓴다(각 도구 파일 최상위 `portalRules.outputSchema`에 적음).
 - 실패 응답: 공개 도구는 `isError: true` + 봉투(`ok:false`) (`public-contract.mjs:167`). show-*·ui-* 도구는 `results.mjs:105-130`의 `refused()` 형식(일반 문구 'Request refused or failed. Check authentication, state, limits and permissions.' 또는 context/source/read 거절 JSON/문구)이다. 이 `refused()` 본문 문구는 기준본에 도구 파일로 옮기지 않았다(봉투 아님). Java가 같은 문구를 내야 하는지 여부는 확인이 필요하다(미확인 항목 참조).
@@ -191,7 +191,7 @@ hook에서 `portal-files.mjs`가 받는 하위 명령·인자 (hooks JSON에서 
 | 호스트(파일) | 이벤트 | 인자 | timeout | 기타 의미 필드 | 소스 |
 | --- | --- | --- | --- | --- | --- |
 | claude-code (`hooks/claude-code.json`) | SessionStart (1번째) | `--host claude-code` | 10 | - | claude-code.json:5 |
-| claude-code | SessionStart (2번째) | `--host claude-code --wait` | 86400 | `async: true`, `asyncRewake: true`, `rewakeMessage: "[SSH Approval Portal completion notice]"`, `rewakeSummary: "SSH completion notification"` | claude-code.json:6 |
+| claude-code | SessionStart (2번째) | `--host claude-code --wait` | 86400 | `async: true`, `asyncRewake: true`, `rewakeMessage: "[Opermand completion notice]"`, `rewakeSummary: "SSH completion notification"` | claude-code.json:6 |
 | claude-code | UserPromptSubmit | `--host claude-code` | 10 | - | claude-code.json:9 |
 | claude-code | PostToolUse | `--host claude-code` | 10 | - | claude-code.json:12 |
 | claude-code | Stop | `--host claude-code --wait` | 86400 | `async: true`, `asyncRewake: true`, 위와 같은 rewakeMessage·rewakeSummary | claude-code.json:15 |
@@ -240,7 +240,7 @@ hook에서 `portal-files.mjs`가 받는 하위 명령·인자 (hooks JSON에서 
 
 - 입력 스키마(`inputSchema`)는 노출본과 키·값이 같아야 하고 키 순서만 무시한다(draft-07 `$schema` 포함, 확장 키 없음). 입력 쪽 부가 규칙은 최상위 `portalRules`에 있다.
 - 서버가 알리는 `serverInfo.version`은 비교하지 않는다(`server.json`에 사유 기록).
-- `resourceUri`는 카드 HTML의 SHA-256에 따라 변하므로 패턴(`^ui://ssh-approval/card-[a-f0-9]{64}\.html$`)으로 비교한다.
+- `resourceUri`는 카드 HTML의 SHA-256에 따라 변하므로 패턴(`^ui://opermand/card-[a-f0-9]{64}\.html$`)으로 비교한다.
 - 봉투의 `ok`/`data`/`error` 관계(`.refine`)는 outputSchema가 아니라 `portalRules.outputSchema`와 `mcp/envelope.schema.json`(독립 봉투 스키마, SDK 공개본이 아님)으로 검증하고, `error.code` 정규식도 거기서 검증한다.
 
 ### 8.1 비교 규칙 (JUnit 계약 시험)
@@ -308,7 +308,7 @@ hook에서 `portal-files.mjs`가 받는 하위 명령·인자 (hooks JSON에서 
 
 - `instructions`: 기준본의 `{sourceUrl}`을 그 시험 실행의 실제 `BRIDGE_SOURCE_URL` 값(비면 이 판의 공개 저장소 태그 URL)으로 바꾼 뒤 문자열 전체를 비교한다.
 - hooks: 플러그인 매니페스트(`claude-plugin.json`, `codex-plugin.json`)의 `version`은 제품 판을 따르므로 `serverInfo.version`처럼 비교하지 않는다. 나머지 필드는 전부 비교한다.
-- 관리자 HTTP 오류 본문: 4xx·5xx 본문은 RFC 9457 `application/problem+json`이다. `type = urn:ssh-approval-portal:error:<CODE>`, `title = <CODE>`, 확장 속성 `code`·`retryable`·`executionAttempted`(B-7). `admin-routes.json`의 `{error:'…'}` 문장은 2.4.2 기록이며 3.0 비교 대상이 아니다. 비교 대상은 메서드·경로·`auth30`·성공 응답 모양이다.
+- 관리자 HTTP 오류 본문: 4xx·5xx 본문은 RFC 9457 `application/problem+json`이다. `type = urn:opermand:error:<CODE>`, `title = <CODE>`, 확장 속성 `code`·`retryable`·`executionAttempted`(B-7). `admin-routes.json`의 `{error:'…'}` 문장은 2.4.2 기록이며 3.0 비교 대상이 아니다. 비교 대상은 메서드·경로·`auth30`·성공 응답 모양이다.
 - `admin-routes.json`의 `auth`는 2.4.2 동작 기록이고, 3.0 시험은 `auth30`으로 판정한다.
 - 보안 계층이 컨트롤러 앞에서 내는 401·403·429·503 본문은 `envelope.schema.json`의 `x-portal-errorCodes.webLayerCodes`의 코드를 `code`로 쓰는 같은 `ProblemDetail`이다. 이 코드는 `ErrorCode` 열거형이 소유하지 않으므로 `ErrorCodeBaselineTest`의 217개 합계에 들어가지 않는다.
 - 설정 키는 `settings-contract.json`의 `allowedKeys`(허용)와 `removedKeys`(옛 키, 이유 포함)로만 가른다. 접두 `BRIDGE_`를 가진 키가 둘 다에 없으면 시작이 멈춘다(`unknownKeyPolicy`).

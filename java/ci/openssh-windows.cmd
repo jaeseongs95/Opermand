@@ -1,5 +1,5 @@
 @echo off
-rem Prepares a real Windows OpenSSH server on a one-shot GitHub Windows runner for the Gradle task :portal-ssh:realOpenSshTest
+rem Prepares a real Windows OpenSSH server on a one-shot GitHub Windows runner for the Gradle task :opermand-ssh:realOpenSshTest
 rem (stage 3 design 7.3, decision D3-11). Modelled on the 2.x test/windows-ssh-ci.ps1.
 rem
 rem Why this is a cmd script and not Java: creating a local Windows account, installing the OpenSSH Server feature and running sshd as SYSTEM (a scheduled task) are

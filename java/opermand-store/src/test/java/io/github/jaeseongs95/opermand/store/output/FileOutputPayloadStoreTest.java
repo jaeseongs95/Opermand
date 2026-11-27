@@ -1,0 +1,323 @@
+package io.github.jaeseongs95.opermand.store.output;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.channels.Channels;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.security.SecureRandom;
+import java.time.Clock;
+import java.time.Duration;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+import io.github.jaeseongs95.opermand.app.output.FormatSpan;
+import io.github.jaeseongs95.opermand.app.output.OutputFormat;
+import io.github.jaeseongs95.opermand.app.output.OutputFormats;
+import io.github.jaeseongs95.opermand.app.output.OutputId;
+import io.github.jaeseongs95.opermand.app.output.StreamFrame;
+import io.github.jaeseongs95.opermand.app.output.StreamKind;
+import io.github.jaeseongs95.opermand.app.storage.PayloadRead;
+import io.github.jaeseongs95.opermand.domain.error.ExecutionErrorCode;
+import io.github.jaeseongs95.opermand.domain.error.RequestRefusedException;
+import io.github.jaeseongs95.opermand.domain.id.Digest;
+import io.github.jaeseongs95.opermand.domain.id.Sha256Digester;
+import io.github.jaeseongs95.opermand.store.StorageRoots;
+import io.github.jaeseongs95.opermand.store.TestStorage;
+import io.github.jaeseongs95.opermand.store.attachment.AttachmentKeyring;
+import io.github.jaeseongs95.opermand.store.attachment.ChunkedAeadCodec;
+
+/** The file part of the output store on a temporary folder; no Spring and no database. */
+class FileOutputPayloadStoreTest {
+
+    private static final byte[] E2_82 = {(byte) 0xe2, (byte) 0x82};
+    private static final byte[] AC_FF_00 = {(byte) 0xac, (byte) 0xff, 0};
+
+    private FileOutputPayloadStore store(Path folder, long maxOutputBytes) {
+        OutputLimits limits = new OutputLimits(Duration.ofHours(1), maxOutputBytes, maxOutputBytes * 8, 1000, 0L);
+        StorageRoots roots = new StorageRoots(folder, folder);
+        SecureRandom random = new SecureRandom();
+        AttachmentKeyring keyring = new AttachmentKeyring(roots.keyring().resolve(AttachmentKeyring.DEFAULT_FILE_NAME), TestStorage.rules(), random, Clock.systemUTC());
+        return new FileOutputPayloadStore(new OutputFiles(roots, TestStorage.rules()), new Sha256Digester(), limits, new ChunkedAeadCodec(keyring, random));
+    }
+
+    private OutputId id(String hexDigit) {
+        return new OutputId(hexDigit.repeat(48));
+    }
+
+    private byte[] utf8(String text) {
+        return text.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private byte[] readAll(PayloadRead read) throws IOException {
+        try (read) {
+            return Channels.newInputStream(read.channel()).readAllBytes();
+        }
+    }
+
+    @Test
+    @DisplayName("RC-A-496: partial stdout and stderr frames are on disk when append returns (kind byte, 4-byte big-endian length, data) and survive a new store; "
+        + "cursor paging belongs to the output-read use case")
+    void framesAreDurableBeforeFinish(@TempDir Path folder) throws IOException {
+        FileOutputPayloadStore store = store(folder, 1024);
+        OutputId id = id("1");
+
+        assertThat(store.append(id, new StreamFrame(StreamKind.STDOUT, E2_82))).isEqualTo(7L);
+        assertThat(store.append(id, new StreamFrame(StreamKind.STDERR, AC_FF_00))).isEqualTo(15L);
+
+        byte[] expected = {0, 0, 0, 0, 2, (byte) 0xe2, (byte) 0x82, 1, 0, 0, 0, 3, (byte) 0xac, (byte) 0xff, 0};
+        byte[] rawSpool = Files.readAllBytes(folder.resolve(id.value() + ".stream"));
+        assertThat(new String(rawSpool, 0, 4, StandardCharsets.UTF_8)).isEqualTo("PAE1");
+        FileOutputPayloadStore restarted = store(folder, 1024);
+        assertThat(readAll(restarted.openStream(id))).isEqualTo(expected);
+        assertThat(restarted.retainedBytes(id)).isEqualTo(15L);
+    }
+
+    @Test
+    @DisplayName("RC-A-500: the spool never grows beyond the per-output limit, a frame is cut to what fits, and the committed bytes stay after a capture that is too large")
+    void truncationBoundsTheSpool(@TempDir Path folder) throws IOException {
+        FileOutputPayloadStore store = store(folder, 128);
+        OutputId id = id("2");
+        Path spool = folder.resolve(id.value() + ".stream");
+
+        assertThat(store.append(id, new StreamFrame(StreamKind.STDOUT, "a".repeat(200).getBytes(StandardCharsets.US_ASCII)))).isEqualTo(128L);
+        assertThat(store.retainedBytes(id)).isEqualTo(128L);
+        byte[] decoded = readAll(store.openStream(id));
+        assertThat(decoded).hasSize(128);
+        assertThat(ByteBuffer.wrap(decoded).getInt(1)).as("5 header bytes leave 123 data bytes").isEqualTo(123);
+
+        assertThat(store.append(id, new StreamFrame(StreamKind.STDERR, utf8("lost")))).isEqualTo(128L);
+        assertThat(store.retainedBytes(id)).isEqualTo(128L);
+
+        assertThatThrownBy(() -> store.finish(id, utf8("{}"), utf8("x".repeat(200)))).isInstanceOfSatisfying(RequestRefusedException.class,
+            e -> assertThat(e.code()).isEqualTo(ExecutionErrorCode.OUTPUT_CAPACITY));
+        assertThat(Files.exists(folder.resolve(id.value() + ".out"))).isFalse();
+        assertThat(Files.exists(folder.resolve(id.value() + ".part"))).isFalse();
+        byte[] kept = readAll(store.openStream(id));
+        assertThat(kept).hasSize(128);
+        assertThat(kept[5]).isEqualTo((byte) 'a');
+        assertThat(new String(Files.readAllBytes(spool), 0, 4, StandardCharsets.UTF_8)).isEqualTo("PAE1");
+        assertThat(store.retainedBytes(id)).isEqualTo(128L);
+    }
+
+    @Test
+    @DisplayName("RC-A-507: both renderings are stored one after the other byte for byte (text blocks, UTF-8, empty), with the digest of each 16 KiB page, and read back after a restart; "
+        + "page assembly at UTF-8 boundaries belongs to the output-read use case")
+    void renderingsAreStoredExactly(@TempDir Path folder) throws IOException {
+        Sha256Digester digester = new Sha256Digester();
+        FileOutputPayloadStore store = store(folder, 4 * 1024 * 1024);
+        OutputId id = id("3");
+        String unit = "한글🙂\r\n";
+        byte[] json = utf8("{\"failed\":true,\"texts\":[\"\",\"" + unit.repeat(11000).replace("\r\n", "\\r\\n") + "\",\"\"],\"data\":{\"nested\":[\"SENTINEL\",17]}}");
+        byte[] text = utf8("\n" + unit.repeat(11000) + "\n\n{\n  \"nested\": [\n    \"SENTINEL\",\n    17\n  ]\n}");
+
+        OutputFormats formats = store.finish(id, json, text);
+
+        FormatSpan jsonSpan = formats.spans().get(OutputFormat.JSON);
+        FormatSpan textSpan = formats.spans().get(OutputFormat.TEXT);
+        assertThat(jsonSpan.offsetBytes()).isZero();
+        assertThat(jsonSpan.sizeBytes()).isEqualTo(json.length);
+        assertThat(textSpan.offsetBytes()).isEqualTo(json.length);
+        assertThat(textSpan.sizeBytes()).isEqualTo(text.length);
+        assertThat(jsonSpan.pageDigests()).hasSize((json.length + 16383) / 16384);
+        assertThat(textSpan.pageDigests()).hasSize((text.length + 16383) / 16384).hasSizeGreaterThan(1);
+        assertThat(textSpan.sha256()).isEqualTo(digester.digest(text));
+        byte[] rawOut = Files.readAllBytes(folder.resolve(id.value() + ".out"));
+        assertThat(new String(rawOut, 0, 4, StandardCharsets.UTF_8)).isEqualTo("PAE1");
+        assertThat(new String(rawOut, StandardCharsets.UTF_8)).doesNotContain("SENTINEL");
+        assertThat(store.retainedBytes(id)).isEqualTo((long) json.length + text.length);
+        assertThat(Files.exists(folder.resolve(id.value() + ".part"))).isFalse();
+
+        FileOutputPayloadStore restarted = store(folder, 4 * 1024 * 1024);
+        assertThat(readAll(restarted.openFormat(id, OutputFormat.JSON, jsonSpan))).isEqualTo(json);
+        assertThat(readAll(restarted.openFormat(id, OutputFormat.TEXT, textSpan))).isEqualTo(text);
+
+        OutputId emptyId = id("4");
+        OutputFormats empty = store.finish(emptyId, utf8("{\"failed\":false,\"texts\":[]}"), new byte[0]);
+        assertThat(empty.spans().get(OutputFormat.TEXT).sizeBytes()).isZero();
+        assertThat(empty.spans().get(OutputFormat.TEXT).pageDigests()).isEmpty();
+        assertThat(readAll(store.openFormat(emptyId, OutputFormat.TEXT, empty.spans().get(OutputFormat.TEXT)))).isEmpty();
+
+        OutputId smallId = id("5");
+        OutputFormats small = store.finish(smallId, utf8("{}"), utf8("a한🙂z"));
+        assertThat(new String(readAll(store.openFormat(smallId, OutputFormat.TEXT, small.spans().get(OutputFormat.TEXT))), StandardCharsets.UTF_8)).isEqualTo("a한🙂z");
+
+        assertThatThrownBy(() -> new FormatSpan(-1L, 0L, new Digest("a".repeat(64)), List.of())).isInstanceOf(IllegalArgumentException.class);
+        store.delete(id);
+        assertThat(store.retainedBytes(id)).isZero();
+        assertThat(Files.exists(folder.resolve(id.value() + ".out"))).isFalse();
+    }
+
+    @Test
+    @DisplayName("RC-A-511 (S-D0117-01, S-D0117-03: a second hard link and rights that others have are no longer refused): only verified bytes are returned: a damaged byte is refused, "
+        + "and an output id cannot leave the folder; the authorization check per read belongs to the output-read use case")
+    void onlyVerifiedBytesAreReturned(@TempDir Path folder) throws IOException {
+        FileOutputPayloadStore store = store(folder, 1024 * 1024);
+        OutputId id = id("6");
+        byte[] json = utf8("{\"failed\":false,\"texts\":[\"" + "SAFE ".repeat(20000) + "\"]}");
+        OutputFormats finished = store.finish(id, json, utf8("SAFE ".repeat(20000)));
+        FormatSpan span = finished.spans().get(OutputFormat.JSON);
+        FormatSpan textSpan = finished.spans().get(OutputFormat.TEXT);
+        Path out = folder.resolve(id.value() + ".out");
+        assertThat(readAll(store.openFormat(id, OutputFormat.JSON, span))).isEqualTo(json);
+
+        byte[] original = Files.readAllBytes(out);
+        byte[] damagedJson = original.clone();
+        damagedJson[128] = (byte) (damagedJson[128] ^ 1);
+        Files.write(out, damagedJson);
+        assertThatThrownBy(() -> store.openFormat(id, OutputFormat.JSON, span)).isInstanceOfSatisfying(RequestRefusedException.class,
+            e -> assertThat(e.code()).isEqualTo(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED));
+
+        byte[] damagedText = original.clone();
+        damagedText[damagedText.length - 1] = (byte) (damagedText[damagedText.length - 1] ^ 1);
+        Files.write(out, damagedText);
+        assertThatThrownBy(() -> store.openFormat(id, OutputFormat.TEXT, textSpan)).isInstanceOfSatisfying(RequestRefusedException.class,
+            e -> assertThat(e.code()).isEqualTo(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED));
+
+        Files.write(out, original);
+        assertThat(readAll(store.openFormat(id, OutputFormat.JSON, span))).isEqualTo(json);
+
+        // S-D0117-03, S-D0117-01: a second hard link and rights that others have are not reasons to refuse a read (3.0 does not look at them); what the store made is owner only.
+        TestStorage.assertOwnerOnly(out);
+        Path extra = folder.resolve("extra-link");
+        Files.createLink(extra, out);
+        assertThat(readAll(store.openFormat(id, OutputFormat.JSON, span))).as("a second hard link is read as the file it is").isEqualTo(json);
+        Files.delete(extra);
+        TestStorage.openUp(out);
+        assertThat(readAll(store.openFormat(id, OutputFormat.JSON, span))).isEqualTo(json);
+
+        assertThatThrownBy(() -> new OutputId("../unsafe")).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("RC-A-510: payload files without a manifest are listed by id (foreign names are not) and moved to the quarantine folder, never deleted; a second file of the same name is kept too")
+    void orphansAreListedAndQuarantined(@TempDir Path folder) throws IOException {
+        FileOutputPayloadStore store = store(folder, 1024);
+        OutputId orphan = id("f");
+        Files.write(folder.resolve(orphan.value() + ".part"), new byte[0]);
+        store.append(orphan, new StreamFrame(StreamKind.STDOUT, utf8("x")));
+        Files.write(folder.resolve("manifest.sqlite"), utf8("not a payload"));
+        Files.write(folder.resolve("e".repeat(47) + ".out"), utf8("short name"));
+        Files.write(folder.resolve(orphan.value() + ".txt"), utf8("other suffix"));
+
+        assertThat(store.stored()).containsExactly(orphan);
+        assertThat(store.usable().usableBytes()).isPositive();
+
+        store.quarantine(orphan);
+
+        assertThat(store.stored()).isEmpty();
+        Path quarantine = folder.resolve("quarantine");
+        assertThat(Files.exists(quarantine.resolve(orphan.value() + ".part"))).isTrue();
+        assertThat(Files.exists(quarantine.resolve(orphan.value() + ".stream"))).isTrue();
+
+        Files.write(folder.resolve(orphan.value() + ".part"), utf8("again"));
+        store.quarantine(orphan);
+        assertThat(Files.exists(quarantine.resolve(orphan.value() + ".part.1"))).isTrue();
+        store.delete(orphan);
+    }
+
+    @Test
+    @DisplayName("S3-AR-06 / RC-A-182 / RC-A-183: openStream delivers the spool as it is stored and streamDigest is the SHA-256 of those bytes; a spool changed on the disk gives another digest")
+    void theSpoolIsOpenedAndHashedAsItIsStored(@TempDir Path folder) throws IOException {
+        FileOutputPayloadStore store = store(folder, 1024);
+        OutputId id = id("3");
+        store.append(id, new StreamFrame(StreamKind.STDOUT, utf8("hello ")));
+        store.append(id, new StreamFrame(StreamKind.STDERR, utf8("oops")));
+
+        byte[] streamed = readAll(store.openStream(id));
+        Digest digest = store.streamDigest(id);
+
+        byte[] rawSpool = Files.readAllBytes(folder.resolve(id.value() + ".stream"));
+        assertThat(new String(rawSpool, 0, 4, StandardCharsets.UTF_8)).isEqualTo("PAE1");
+        assertThat(new String(rawSpool, StandardCharsets.UTF_8)).doesNotContain("hello");
+        assertThat(streamed).hasSize(5 + 6 + 5 + 4);
+        assertThat(digest).isEqualTo(new Sha256Digester().digest(streamed));
+        assertThat(store.streamDigest(id)).as("the same input, the same digest").isEqualTo(digest);
+
+        byte[] changed = rawSpool.clone();
+        changed[changed.length - 1] = (byte) (changed[changed.length - 1] ^ 0x01);
+        Files.write(folder.resolve(id.value() + ".stream"), changed);
+
+        assertThatThrownBy(() -> store.streamDigest(id)).as("a tampered encrypted spool fails closed").isInstanceOfSatisfying(RequestRefusedException.class,
+            e -> assertThat(e.code()).isEqualTo(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED));
+    }
+
+    @Test
+    @DisplayName("S3-AR-06: an output without a spool (never written, or finished and its spool removed) is refused as OUTPUT_CAPTURE_FAILED, by openStream and by streamDigest")
+    void anOutputWithoutASpoolHasNoStream(@TempDir Path folder) {
+        FileOutputPayloadStore store = store(folder, 1024);
+        OutputId never = id("4");
+        OutputId finished = id("5");
+        store.append(finished, new StreamFrame(StreamKind.STDOUT, utf8("x")));
+        store.finish(finished, utf8("{}"), utf8("x"));
+
+        for (OutputId id : List.of(never, finished)) {
+            assertThatThrownBy(() -> store.openStream(id)).isInstanceOfSatisfying(RequestRefusedException.class,
+                e -> assertThat(e.code()).isEqualTo(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED));
+            assertThatThrownBy(() -> store.streamDigest(id)).isInstanceOfSatisfying(RequestRefusedException.class,
+                e -> assertThat(e.code()).isEqualTo(ExecutionErrorCode.OUTPUT_CAPTURE_FAILED));
+        }
+    }
+
+    @Test
+    @DisplayName("D-0150: moveIntoPlace replaces an existing target file and falls back to REPLACE_EXISTING when ATOMIC_MOVE is unsupported")
+    void moveIntoPlaceReplacesExistingTargetAcrossOperatingSystems(@TempDir Path folder) throws IOException {
+        AtomicInteger calls = new AtomicInteger();
+        OutputFiles files = new OutputFiles(new StorageRoots(folder, folder), TestStorage.rules(), (src, dst, options) -> {
+            int attempt = calls.incrementAndGet();
+            if (attempt == 1) {
+                assertThat(options).containsExactlyInAnyOrder(StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+                throw new AtomicMoveNotSupportedException(src.toString(), dst.toString(), "overlayfs");
+            }
+            assertThat(options).containsExactly(StandardCopyOption.REPLACE_EXISTING);
+            Files.move(src, dst, options);
+        }, dir -> { });
+        Path part = folder.resolve("a".repeat(48) + ".part");
+        Path target = folder.resolve("a".repeat(48) + ".out");
+        Files.writeString(target, "stale");
+        Files.writeString(part, "fresh");
+
+        files.moveIntoPlace(part, target);
+
+        assertThat(calls).hasValue(2);
+        assertThat(Files.exists(part)).isFalse();
+        assertThat(Files.readString(target)).isEqualTo("fresh");
+    }
+
+    @Test
+    @DisplayName("D-0151: syncDirectory continues after rename when a filesystem rejects directory fsync with IOException or UnsupportedOperationException")
+    void syncDirectoryDegradesGracefullyWhenUnsupported(@TempDir Path folder) throws IOException {
+        for (RuntimeExceptionOrIo failure : List.of(
+            new RuntimeExceptionOrIo(new IOException("EINVAL: directory fsync unsupported"), null),
+            new RuntimeExceptionOrIo(null, new UnsupportedOperationException("no dir fsync")))) {
+            Path sub = Files.createTempDirectory(folder, "sync-");
+            OutputFiles files = new OutputFiles(new StorageRoots(sub, sub), TestStorage.rules(), Files::move, dir -> {
+                if (failure.io != null) {
+                    throw failure.io;
+                }
+                throw failure.unsupported;
+            });
+            Path part = sub.resolve("b".repeat(48) + ".part");
+            Path target = sub.resolve("b".repeat(48) + ".out");
+            Files.writeString(part, "payload");
+
+            files.moveIntoPlace(part, target);
+
+            assertThat(Files.exists(part)).isFalse();
+            assertThat(Files.readString(target)).isEqualTo("payload");
+        }
+    }
+
+    private record RuntimeExceptionOrIo(IOException io, UnsupportedOperationException unsupported) {
+    }
+}

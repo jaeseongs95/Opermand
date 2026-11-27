@@ -1,0 +1,91 @@
+package io.github.jaeseongs95.opermand.ssh.hostkey;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Objects;
+
+import org.apache.sshd.client.keyverifier.AcceptAllServerKeyVerifier;
+import org.apache.sshd.client.keyverifier.RejectAllServerKeyVerifier;
+import org.apache.sshd.client.keyverifier.ServerKeyVerifier;
+import org.springframework.stereotype.Component;
+
+import io.github.jaeseongs95.opermand.app.remote.SshSettings;
+import io.github.jaeseongs95.opermand.domain.target.ConnectionProfile;
+import io.github.jaeseongs95.opermand.domain.target.Setting;
+import io.github.jaeseongs95.opermand.ssh.profile.PrivateFiles;
+import io.github.jaeseongs95.opermand.ssh.profile.ProfileConfigException;
+
+/**
+ * The host key policy of the SSH adapter (stage 3 design 3.6, decision D3-10): it gives the session code the MINA {@link ServerKeyVerifier} to use for a profile.
+ *
+ * <ul>
+ * <li><b>A pinned key wins.</b> A profile with a {@code trustedHostKey} accepts only the key with that fingerprint, in every mode ({@link PinnedFingerprintVerifier},
+ * CR-19). In {@code tofu} mode an accepted pinned key is also recorded when the host is not recorded yet.
+ * <li><b>Without a pin the mode decides</b> ({@code SshSettings.hostKeyMode}): {@code tofu} (the default) records the first key of a host and refuses a different one later;
+ * {@code strict} accepts only a host that is already recorded; {@code insecure} accepts every key and is kept for compatibility.
+ * <li><b>The record is a {@code known_hosts} file</b> (OpenSSH's format, MINA's {@code DefaultKnownHostsServerKeyVerifier}), so a key that was trusted stays trusted after a
+ * restart. 2.x kept the keys in memory and trusted again at every start. The file is created, with its folder, when it is missing, and only its owner can use it; an existing
+ * file is used as it is, whoever else may change it, and a path that is not a regular file is refused when the policy is built. A key that was refused changes nothing in
+ * the file.
+ * <li><b>Reports.</b> A refused key is reported to {@link HostKeyEvents} with its code and fingerprints; the {@code insecure} mode is reported once, when this bean is built.
+ * </ul>
+ *
+ * <p>One policy serves every profile: {@link #verifierFor} builds the small verifier of a profile, and all of them share the one record.
+ */
+@Component
+public final class ServerKeyPolicy {
+
+    private final HostKeyEvents events;
+    private final RecordedKeyVerifier recorded;
+
+    public ServerKeyPolicy(SshSettings settings, PrivateFiles privateFiles, HostKeyEvents events) {
+        Objects.requireNonNull(settings, "settings");
+        Objects.requireNonNull(privateFiles, "privateFiles");
+        this.events = Objects.requireNonNull(events, "events");
+        // The verifiers below are made with new, not as beans (Principles 3.1): they hold the settings of this one installation (the mode and the file) and the MINA classes
+        // cannot carry an annotation; the policy is the one bean that owns them.
+        this.recorded = switch (settings.hostKeyMode()) {
+            case INSECURE -> {
+                events.insecureModeActive();
+                yield new RecordedKeyVerifier(settings.hostKeyMode(), AcceptAllServerKeyVerifier.INSTANCE, events);
+            }
+            case TOFU -> new RecordedKeyVerifier(settings.hostKeyMode(), new ObservingKnownHosts(AcceptAllServerKeyVerifier.INSTANCE, preparedFile(settings.knownHosts(), privateFiles)), events);
+            case STRICT -> new RecordedKeyVerifier(settings.hostKeyMode(), new ObservingKnownHosts(RejectAllServerKeyVerifier.INSTANCE, preparedFile(settings.knownHosts(), privateFiles)), events);
+        };
+    }
+
+    /**
+     * The verifier for the connections of a profile: the pin of the profile when it has one, the mode of the installation otherwise. A pinned key that is blank is a
+     * configuration error and is refused with an {@link IllegalArgumentException}.
+     */
+    public ServerKeyVerifier verifierFor(ConnectionProfile profile) {
+        Objects.requireNonNull(profile, "profile");
+        return switch (profile.pinnedHostKey()) {
+            case Setting.Given<String> given -> new PinnedKeyVerifier(new PinnedFingerprintVerifier(given.value()), recorded, events);
+            case Setting.Unset<String> unset -> recorded;
+        };
+    }
+
+    /**
+     * Makes sure the file and its folder exist, created private to the owner when they are missing, and that the path is a regular file. A file that exists is used as it is,
+     * whoever else may change it (decision D-0117).
+     */
+    private Path preparedFile(Path file, PrivateFiles privateFiles) {
+        try {
+            if (Files.isSymbolicLink(file) && !Files.exists(file)) {
+                // A link follows to a target that is not there: nothing is created behind it (that would write where the link points), and the answer is the one for any
+                // path that is not a regular file (defect SSH_PORTAL-D-0146), not an I/O failure of the creation.
+                throw new ProfileConfigException(ProfileConfigException.Code.KNOWN_HOSTS_UNSAFE, "The file of known hosts " + file + " is not a regular file");
+            }
+            privateFiles.createPrivateFile(file);
+            if (!Files.isRegularFile(file)) {
+                throw new ProfileConfigException(ProfileConfigException.Code.KNOWN_HOSTS_UNSAFE, "The file of known hosts " + file + " is not a regular file");
+            }
+            return file;
+        } catch (IOException e) {
+            throw new UncheckedIOException("The file of known hosts " + file + " could not be prepared", e);
+        }
+    }
+}

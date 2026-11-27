@@ -1,0 +1,264 @@
+package io.github.jaeseongs95.opermand.store.artifact;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.util.Set;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+
+import io.github.jaeseongs95.opermand.app.artifact.ArtifactPayloadStore;
+import io.github.jaeseongs95.opermand.app.artifact.ArtifactRegistry;
+import io.github.jaeseongs95.opermand.app.artifact.ArtifactReservation;
+import io.github.jaeseongs95.opermand.app.artifact.ReleaseReason;
+import io.github.jaeseongs95.opermand.app.storage.DiskCheck;
+import io.github.jaeseongs95.opermand.app.storage.DiskSpace;
+import io.github.jaeseongs95.opermand.app.storage.PayloadRead;
+import io.github.jaeseongs95.opermand.app.storage.PayloadWrite;
+import io.github.jaeseongs95.opermand.domain.error.ArtifactErrorCode;
+import io.github.jaeseongs95.opermand.domain.error.RequestRefusedException;
+import io.github.jaeseongs95.opermand.domain.id.ArtifactId;
+import io.github.jaeseongs95.opermand.store.StoreTest;
+import io.github.jaeseongs95.opermand.store.TestSavepoints;
+
+/**
+ * The three refusals of {@code reserve} on a disk that the test controls (defect D-0012, design 5.2, cases S3-AR-01 to S3-AR-05): the budget is 10,000 bytes, one file
+ * is at most 8,000 bytes and 1,000 bytes of disk must stay free after a file is set aside. The disk's usable space and the bytes in quarantine are values the test sets,
+ * so each rule is shown with the one number that decides it.
+ *
+ * <p>"1090B" is the size of the upload that the defect report said was refused as over quota while the disk had room (2.x cause unconfirmed; the Java store is shown to
+ * accept it whenever the budget has room and the disk is not short).
+ */
+@StoreTest
+@Import({JdbcArtifactRegistry.class, ArtifactMapper.class, ArtifactTestStorage.class, ArtifactReservationOrderTest.Disk.class})
+class ArtifactReservationOrderTest {
+
+    private static final long BUDGET = 10_000L;
+    private static final long FILE_LIMIT = 8_000L;
+    private static final long MARGIN = 1_000L;
+    private static final long THE_DEFECT_SIZE = 1_090L;
+
+    @TestConfiguration(proxyBeanMethods = false)
+    static class Disk {
+        @Bean
+        ArtifactLimits artifactLimits() {
+            return new ArtifactLimits(BUDGET, FILE_LIMIT, ArtifactLimits.CHUNK_BYTES, ArtifactLimits.UPLOAD_TTL, MARGIN);
+        }
+
+        @Bean
+        ScriptedDisk scriptedDisk() {
+            return new ScriptedDisk();
+        }
+    }
+
+    private final ArtifactFixtures fixtures = new ArtifactFixtures();
+    private final ArtifactRegistry registry;
+    private final ScriptedDisk disk;
+    private final TestSavepoints savepoints;
+
+    ArtifactReservationOrderTest(ArtifactRegistry registry, ScriptedDisk disk, TestSavepoints savepoints) {
+        this.registry = registry;
+        this.disk = disk;
+        this.savepoints = savepoints;
+        disk.reset();
+    }
+
+    private DiskCheck diskCheck() {
+        return DiskCheck.measure(disk::usable);
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {1_000_000_000_000L, Long.MAX_VALUE, THE_DEFECT_SIZE + MARGIN})
+    @DisplayName("S3-AR-01 (D-0012): a 1090 byte upload is accepted when the budget has room and the disk keeps the margin, whatever the usable space is above that")
+    void theDefectSizeIsAcceptedWhenTheBudgetHasRoom(long usableBytes) {
+        disk.usable(usableBytes);
+
+        ArtifactReservation reservation = registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at(), diskCheck());
+
+        assertThat(reservation).isInstanceOf(ArtifactReservation.Reserved.class);
+        assertThat(registry.budget().chargedBytes()).isEqualTo(THE_DEFECT_SIZE);
+    }
+
+    @Test
+    @DisplayName("S3-AR-02: a refusal by the budget is BudgetExceeded with the live rows, the request and the budget; the bytes held in quarantine are no part of it")
+    void aBudgetRefusalShowsTheLiveBytes() {
+        disk.usable(1_000_000_000_000L);
+        fixtures.reservedId(registry.reserve(fixtures.upload(6_000L), fixtures.at(), diskCheck()));
+        fixtures.reservedId(registry.reserve(fixtures.upload(3_000L), fixtures.at(), diskCheck()));
+        disk.retained(3_500L);
+
+        ArtifactReservation refused = registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at(), diskCheck());
+
+        assertThat(refused).isEqualTo(new ArtifactReservation.BudgetExceeded(THE_DEFECT_SIZE, 9_000L, BUDGET));
+        assertThat(registry.holding()).hasSize(2);
+    }
+
+    @ParameterizedTest
+    @ValueSource(longs = {0L, 1_000_000_000_000L, Long.MAX_VALUE})
+    @DisplayName("S3-AR-03: the budget's verdict does not depend on the disk: the same refusal for a disk with no room, a big one and an unreadable-by-size one")
+    void theBudgetVerdictIgnoresTheDisk(long usableBytes) {
+        fixtures.reservedId(registry.reserve(fixtures.upload(FILE_LIMIT), fixtures.at(), diskCheck()));
+        disk.usable(usableBytes);
+
+        assertThat(registry.reserve(fixtures.upload(2_500L), fixtures.at(), diskCheck())).isEqualTo(new ArtifactReservation.BudgetExceeded(2_500L, FILE_LIMIT, BUDGET));
+    }
+
+    @Test
+    @DisplayName("S3-AR-03: a refusal by the disk is DiskSpaceInsufficient (another variant than the budget's) with the request, the usable space and the margin, and no row is created")
+    void aDiskRefusalIsAnotherVariantWithItsOwnValues() {
+        disk.usable(THE_DEFECT_SIZE + MARGIN - 1);
+
+        ArtifactReservation refused = registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at(), diskCheck());
+
+        assertThat(refused).isEqualTo(new ArtifactReservation.DiskSpaceInsufficient(THE_DEFECT_SIZE, THE_DEFECT_SIZE + MARGIN - 1, MARGIN));
+        assertThat(refused).isNotInstanceOf(ArtifactReservation.BudgetExceeded.class);
+        assertThat(registry.holding()).isEmpty();
+        assertThat(registry.budget().chargedBytes()).isZero();
+    }
+
+    @Test
+    @DisplayName("S-D0012-15 (store half): the size a target announced for a download is judged by the disk with the scripted usable space: one byte short is DiskSpaceInsufficient (not a budget refusal) and the row keeps its empty reservation; with the margin kept it is Reserved")
+    void anAnnouncedSizeIsJudgedByTheDisk() {
+        disk.usable(1_000_000_000_000L);
+        ArtifactId download = fixtures.reservedId(registry.reserve(fixtures.download(0), fixtures.at(), diskCheck()));
+        long announced = 5_000L;
+        disk.usable(announced + MARGIN - 1);
+
+        ArtifactReservation refused = registry.sizeDownload(download, announced, diskCheck());
+
+        assertThat(refused).isEqualTo(new ArtifactReservation.DiskSpaceInsufficient(announced, announced + MARGIN - 1, MARGIN));
+        assertThat(registry.find(download).orElseThrow().spec().sizeBytes()).isZero();
+        assertThat(registry.budget().chargedBytes()).isEqualTo(1);
+
+        disk.usable(announced + MARGIN);
+        assertThat(registry.sizeDownload(download, announced, diskCheck())).isEqualTo(new ArtifactReservation.Reserved(download));
+        assertThat(registry.budget().chargedBytes()).isEqualTo(announced);
+    }
+
+    @Test
+    @DisplayName("S3-AR-03: a disk that cannot be read is not a refusal: ARTIFACT_STORAGE_IO_ERROR with the cause kept, and no row is created")
+    void anUnreadableDiskIsAnIoErrorAndNotARefusal() {
+        disk.failToRead(new UncheckedIOException(new IOException("the volume is gone")));
+
+        assertThatThrownBy(() -> savepoints.run(() -> registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at(), diskCheck()))).isInstanceOfSatisfying(RequestRefusedException.class, e -> {
+            assertThat(e.code()).isEqualTo(ArtifactErrorCode.ARTIFACT_STORAGE_IO_ERROR);
+            assertThat(e.getCause()).isInstanceOf(UncheckedIOException.class);
+        });
+        assertThat(registry.holding()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S3-AR-04: the order is the file limit, then the budget, then the disk, and one answer at a time, also when the disk cannot be read")
+    void theOrderIsLimitBudgetDisk() {
+        disk.usable(1_000_000_000_000L);
+        ArtifactId filler = fixtures.reservedId(registry.reserve(fixtures.upload(FILE_LIMIT), fixtures.at(), diskCheck()));
+        disk.failToRead(new UncheckedIOException(new IOException("the volume is gone")));
+
+        // 9,000 is over the file limit, over the budget with the filler, and the disk is unreadable: the limit speaks first.
+        assertThat(registry.reserve(fixtures.upload(9_000L), fixtures.at(), diskCheck())).isEqualTo(new ArtifactReservation.FileTooLarge(9_000L, FILE_LIMIT));
+        // 2,500 is within the limit, over the budget with the filler, and the disk is unreadable: the budget speaks before the disk is asked.
+        assertThat(registry.reserve(fixtures.upload(2_500L), fixtures.at(), diskCheck())).isEqualTo(new ArtifactReservation.BudgetExceeded(2_500L, FILE_LIMIT, BUDGET));
+
+        registry.release(filler, ReleaseReason.REFUSED);
+        disk.usable(0L);
+        // the budget has room again and the disk is short: only now the disk speaks.
+        assertThat(registry.reserve(fixtures.upload(2_500L), fixtures.at(), diskCheck())).isEqualTo(new ArtifactReservation.DiskSpaceInsufficient(2_500L, 0L, MARGIN));
+    }
+
+    @Test
+    @DisplayName("S-D0012-03 (store half; replaces S3-AR-05): bytes held in quarantine are not charged to the budget, even when they are more than the whole budget: the file is accepted, and the budget view shows the two figures apart")
+    void heldBytesAreShownApartAndNeverRefuseAFile() {
+        disk.usable(1_000_000_000_000L);
+        disk.retained(BUDGET + 5_000L);
+
+        ArtifactReservation reservation = registry.reserve(fixtures.upload(THE_DEFECT_SIZE), fixtures.at(), diskCheck());
+
+        assertThat(reservation).isInstanceOf(ArtifactReservation.Reserved.class);
+        assertThat(registry.budget().chargedBytes()).as("only the live row is charged").isEqualTo(THE_DEFECT_SIZE);
+        assertThat(registry.budget().retainedBytes()).as("the quarantine is shown to the owner").isEqualTo(BUDGET + 5_000L);
+        assertThat(registry.budget().remainingBytes()).as("and does not shrink what a new transfer may take").isEqualTo(BUDGET - THE_DEFECT_SIZE);
+    }
+
+    /** A payload store that is only a disk: it answers the usable space and the retained bytes the test sets, or fails to read them. */
+    static final class ScriptedDisk implements ArtifactPayloadStore, RetainedPayloads {
+
+        private long usableBytes = Long.MAX_VALUE;
+        private long retainedBytes;
+        private RuntimeException failure;
+
+        void reset() {
+            usableBytes = Long.MAX_VALUE;
+            retainedBytes = 0L;
+            failure = null;
+        }
+
+        void usable(long bytes) {
+            this.usableBytes = bytes;
+            this.failure = null;
+        }
+
+        void retained(long bytes) {
+            this.retainedBytes = bytes;
+        }
+
+        void failToRead(RuntimeException cause) {
+            this.failure = cause;
+        }
+
+        @Override
+        public DiskSpace usable() {
+            if (failure != null) {
+                throw failure;
+            }
+            return new DiskSpace(usableBytes);
+        }
+
+        @Override
+        public Held held() {
+            return new Held(retainedBytes > 0 ? 1L : 0L, retainedBytes);
+        }
+
+        @Override
+        public PayloadWrite append(ArtifactId id, long offset, byte[] data) {
+            throw new IllegalStateException("The scripted disk stores no payload");
+        }
+
+        @Override
+        public void truncate(ArtifactId id, long length) {
+            throw new IllegalStateException("The scripted disk stores no payload");
+        }
+
+        @Override
+        public long length(ArtifactId id) {
+            throw new IllegalStateException("The scripted disk stores no payload");
+        }
+
+        @Override
+        public PayloadRead open(ArtifactId id) {
+            throw new IllegalStateException("The scripted disk stores no payload");
+        }
+
+        @Override
+        public void delete(ArtifactId id) {
+            throw new IllegalStateException("The scripted disk stores no payload");
+        }
+
+        @Override
+        public void quarantine(ArtifactId id) {
+            throw new IllegalStateException("The scripted disk stores no payload");
+        }
+
+        @Override
+        public Set<ArtifactId> stored() {
+            return Set.of();
+        }
+    }
+}

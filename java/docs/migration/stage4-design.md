@@ -144,7 +144,7 @@ U5·U6·U8은 U4 뒤에 병렬로 할 수 있다. U18~U21은 이 개정(U0r)이 
 - 완료 사례: S4-SE-01~16, S4-DT-01~09.
 
 ### A.4 U5 MCP 도구 24개·SOURCE 실행기
-- `web.mcp.McpServerConfiguration`: 서버 정보(이름 `SSH Approval Portal`, 판 = 프로젝트 판), `instructions`(기준본 문장 + `{sourceUrl}` 치환, B-9), 리소스(카드), 도구 등록.
+- `web.mcp.McpServerConfiguration`: 서버 정보(이름 `Opermand`, 판 = 프로젝트 판), `instructions`(기준본 문장 + `{sourceUrl}` 치환, B-9), 리소스(카드), 도구 등록.
 - `web.mcp.PublicToolDefinitions`(공개 15개), `web.mcp.UiToolDefinitions`(`show-*` 3개, `ui-*` 6개), `web.mcp.ArtifactChunkCodec`, `web.mcp.CardResource`.
   - 도구 정의 `[결정]`: 도구별 `description`·`inputSchema`·`outputSchema`·`annotations`는 제품의 main 자원 `mcp/tools/<이름>.json`에 두고 Spring AI의 프로그램 방식 도구 명세로 등록한다. record에서 스키마를 생성하지 않는다. 근거: 기준본과 키 순서 무시 동일이 완료 조건이고(S4-CB-01), 생성기는 Zod 유래 스키마의 세부(`(?![\s\S])`, `anyOf` null 등)를 같은 모양으로 내지 않는다. 시험 기준본(`src/test/resources/contract`)과 제품 정의(`src/main/resources/mcp`)는 역할이 다른 두 파일이고, S4-CB-01이 둘을 대조한다.
   - 입력 검증: 스키마 검증 뒤의 도구별 규칙(`portalRules`)은 `app` 유스케이스 입력 record의 생성자와 도구 어댑터에 둔다. 규칙 위반은 `ok=false` 봉투다.
@@ -315,7 +315,7 @@ U5·U6·U8은 U4 뒤에 병렬로 할 수 있다. U18~U21은 이 개정(U0r)이 
 - MCP 도구 결과: 성공은 `structuredContent` = 봉투, `content[0]` = 봉투 JSON 문자열. 실패는 같은 모양에 `isError: true`(기준본 `x-portal-wire` 유지). `desktop-observe`의 이미지 `content[1]`도 그대로다.
 - 명령 출력: MCP `observe`의 `outputPage`와 관리자 `GET /api/outputs/{id}`는 같은 도메인 record `OutputPage`를 쓴다. 관리자 경로의 `offset`·`limit`·`format`은 `cursor`·`maxBytes`·인코딩으로 옮긴다. S3 11.4 「출력 JSON 모양」을 닫는다.
 - 변환 한 곳: `web.presentation.RefusalResult`(코드, 재시도 가능, 실행 시도 여부, 선택 세부값)를 `PortalException`과 `ArtifactRefusal`에서 만든다. `ResultPresenter`가 이것을 (a) MCP 봉투(`ErrorData`)와 (b) `ProblemDetail`로 바꾸는 유일한 곳이다.
-  - `ProblemDetail`: `type = urn:ssh-approval-portal:error:<CODE>`, `title = <CODE>`, 확장 속성 `code`·`retryable`·`executionAttempted`. HTTP 상태는 `HttpStatusTable` 한 곳에서 정한다. 모든 `ErrorCode` 상수가 상태를 가지는지 시험한다(S4-ER-02). 컨트롤러 앞에서 보안 계층이 내는 응답(401·403·429·503)은 `ErrorCode`가 아니라 기준본 `x-portal-errorCodes.webLayerCodes`의 여섯 코드이고 같은 `ProblemDetail` 모양이다(`type = urn:ssh-approval-portal:error:<CODE>`, `retryable`은 `LOGIN_THROTTLED`·`LOGIN_BUSY`만 true, `executionAttempted`는 false). 상태는 이 표가 아니라 `web.security.SecurityRefusal`이 기준본 값으로 정한다.
+  - `ProblemDetail`: `type = urn:opermand:error:<CODE>`, `title = <CODE>`, 확장 속성 `code`·`retryable`·`executionAttempted`. HTTP 상태는 `HttpStatusTable` 한 곳에서 정한다. 모든 `ErrorCode` 상수가 상태를 가지는지 시험한다(S4-ER-02). 컨트롤러 앞에서 보안 계층이 내는 응답(401·403·429·503)은 `ErrorCode`가 아니라 기준본 `x-portal-errorCodes.webLayerCodes`의 여섯 코드이고 같은 `ProblemDetail` 모양이다(`type = urn:opermand:error:<CODE>`, `retryable`은 `LOGIN_THROTTLED`·`LOGIN_BUSY`만 true, `executionAttempted`는 false). 상태는 이 표가 아니라 `web.security.SecurityRefusal`이 기준본 값으로 정한다.
   - `ArtifactRefusal`의 숫자(요청 바이트·예산·여유 공간)는 MCP 봉투에 넣지 않는다(봉투 `errorData`는 세 필드만, `additionalProperties: false`). 관리자 `ProblemDetail`의 확장 속성 `detail`로만 낸다. S3 11.4 「ArtifactRefusal 값을 오류 봉투로 옮기는 일」을 이렇게 닫는다.
 - 컨트롤러는 예외를 잡지 않는다. 관리자 쪽은 `AdminExceptionHandler` 하나, MCP 쪽은 도구 어댑터의 공통 감싸개 하나가 `ResultPresenter`를 부른다.
 
@@ -335,7 +335,7 @@ U5·U6·U8은 U4 뒤에 병렬로 할 수 있다. U18~U21은 이 개정(U0r)이 
 - **TLS**: 3.0.0 기본은 2.x와 같다. 앱은 루프백 HTTP만 열고 HTTPS 종단은 앞단이 맡는다. feature-map의 `portal.py` 행(230행)에 적힌 「선택 TLS 구성(`PemCertificateSource`·`AcmeCertificateSource`)」은 **2.x에 없던 새 기능**이므로 「삭제하지 않는다」는 규칙의 대상이 아니다. 이 문서는 그것을 3.0.0 범위에 넣지 않고 미정으로 둔다(F.6 항목 5): PEM은 Spring Boot의 SSL 번들(`server.ssl.bundle`, 새 라이브러리 없음)로 되지만 포트별 적용과 설정 키가 늘어 기준본을 바꾸게 되고, ACME는 RFC 8555 클라이언트 라이브러리가 필요해 **승인 필요**다(후보 미조사).
 
 ### B-9 AGPL 13조 안내
-`[결정]` 설정 키 `BRIDGE_SOURCE_URL`(바인딩 `bridge.source.url`). 비면 이 판의 공개 저장소 태그 URL(`https://github.com/jaeseongs95/ssh-approval-portal/tree/v<판>`)이고, 운영자가 수정판을 돌리면 그 소스 URL을 적는다. https URL만 받는다.
+`[결정]` 설정 키 `BRIDGE_SOURCE_URL`(바인딩 `bridge.source.url`). 비면 이 판의 공개 저장소 태그 URL(`https://github.com/jaeseongs95/Opermand/tree/v<판>`)이고, 운영자가 수정판을 돌리면 그 소스 URL을 적는다. https URL만 받는다.
 - 표시: 관리 UI 바닥글 「Source code (AGPL-3.0-or-later)」 링크, MCP `instructions` 마지막 문장(B-1.4). 값은 `web.presentation.SourceOffer` record 하나가 들고 두 곳이 같은 값을 쓴다.
 
 ### B-10 unknown 예산 거절의 표시와 소유자 정리
@@ -605,7 +605,7 @@ U5·U6·U8은 U4 뒤에 병렬로 할 수 있다. U18~U21은 이 개정(U0r)이 
 | U7 | S4-UI-04 | unknown 예산 80%·100% | 배너가 보이고 링크가 정리 목록으로 | `AdminUiPlaywrightTest` |
 | U7 | S4-UI-05 | 정리 목록에서 한 건 「완료로 정리」 | 확인 대화상자 뒤 목록에서 빠짐 | `AdminUiPlaywrightTest` |
 | U7 | S4-UI-06 | 바닥글 | 「Source code (AGPL-3.0-or-later)」가 `BRIDGE_SOURCE_URL`(빈 값이면 판 태그 URL)로 | `AdminUiPlaywrightTest` |
-| U7 | S4-UI-07 | MCP Apps 카드 리소스 | URI `ui://ssh-approval/card-<sha256>.html`, CSP `_meta` 기준본과 같음 | `CardResourceTest` |
+| U7 | S4-UI-07 | MCP Apps 카드 리소스 | URI `ui://opermand/card-<sha256>.html`, CSP `_meta` 기준본과 같음 | `CardResourceTest` |
 | U7 | S4-UI-08 | 로그인 전 화면 로드와 OIDC 실패 경로 | 로그인 전에 `/app.js`·`/assets/**`의 ES 모듈이 모두 200(`static`, 검토 N12), 제공자 오류는 `/login?error`에 거절 문구, 허용 계정이 아니면 403 금지 화면, 어느 쪽도 세션 쿠키 없음 | `AdminUiPlaywrightTest` |
 | U8 | S4-RK-01 | Jev 꺼짐 | 위험 평가 호출 0, 자동 승인 없음 | `JevRiskEvaluatorTest` |
 | U8 | S4-RK-02 | Jev 켜짐, 호출 상한 도달 | 상한 뒤 호출 0, 소유자 승인으로 넘어감 | `JevRiskEvaluatorTest` |

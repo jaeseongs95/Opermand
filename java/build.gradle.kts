@@ -1,6 +1,10 @@
 // Shared build of the 3.0.0 Java product (docs/migration/foundation-cases.md). Module-specific dependencies live in each module's build.gradle.kts;
 // versions come from the Spring Boot BOM and the Spring AI BOM, and a build file names a version only for a library that neither BOM manages.
 
+plugins {
+    id("org.sonarqube") version "7.5.0.8588"
+}
+
 // A Gradle service a build script takes by injection, for the work a task does when it runs (FileSystemOperations: the isolated test folders are emptied before a test run, D-0111).
 interface InjectedFileSystem {
     @get:javax.inject.Inject
@@ -10,7 +14,15 @@ interface InjectedFileSystem {
 val springBootVersion = property("springBootVersion")
 
 allprojects {
-    group = "io.github.jaeseongs95.portal"
+    group = "io.github.jaeseongs95.opermand"
+}
+
+sonar {
+    properties {
+        property("sonar.projectKey", "opermand")
+        property("sonar.projectName", "Opermand")
+        property("sonar.sourceEncoding", "UTF-8")
+    }
 }
 
 // The sizes of the test JVMs are Gradle's own unless a run states them: this build fixes no heap, no processor count and no fork count. Development Principles 7.4: "the Gradle
@@ -19,7 +31,7 @@ allprojects {
 // the command line or in the gradle.properties of the Gradle user home it dedicates to this project: -Pportal.test.cpus=<n> (-XX:ActiveProcessorCount), -Pportal.test.heap=<size>
 // (maxHeapSize, for example 512m or 1g) and -Pportal.test.forks=<n> (maxParallelForks). Without them the JVM and Gradle defaults apply. A value that is not a positive
 // whole number (or, for the heap, a whole number with an optional k, m or g) stops the build while it is configured (cases S-D0111-01 to -05). The modules that must not
-// run their tests in parallel (the tasks realOpenSshTest of portal-ssh and externalDbmsTest of portal-store: a shared account on one server, a shared schema) say so in their own
+// run their tests in parallel (the tasks realOpenSshTest of opermand-ssh and externalDbmsTest of opermand-store: a shared account on one server, a shared schema) say so in their own
 // build file. A count (cpus, forks) that the pattern accepts but that is larger than an int is refused here too, with the property name and the value; the smallest heap is
 // the JVM's to refuse, with its own message.
 fun statedTestSize(name: String, valid: Regex, expected: String, isCount: Boolean = false): String? = providers.gradleProperty("portal.test.$name").orNull?.also {
@@ -46,11 +58,12 @@ val testRequire: String? = providers.gradleProperty("portal.test.require").orNul
     }
 }
 
-/** The variables the host agents set in their session (a test must not see them): the agent hosts' own, the governance suite's, and this product's BRIDGE_* / PORTAL_* settings. */
-val hostSessionVariable = Regex("(AGENT_GOVERNANCE|AGS_|CLAUDE|CODEX|GEMINI|ANTHROPIC|OPENAI|BRIDGE_|PORTAL_).*", RegexOption.IGNORE_CASE)
+/** The variables the host agents set in their session (a test must not see them): the agent hosts' own, the governance suite's, and this product's BRIDGE_* / PORTAL_* / OPERMAND_* settings. */
+val hostSessionVariable = Regex("(AGENT_GOVERNANCE|AGS_|CLAUDE|CODEX|GEMINI|ANTHROPIC|OPENAI|BRIDGE_|PORTAL_|OPERMAND_).*", RegexOption.IGNORE_CASE)
 
 subprojects {
     apply(plugin = "java-library")
+    apply(plugin = "jacoco")
 
     repositories {
         mavenCentral()
@@ -144,4 +157,17 @@ subprojects {
             exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
         }
     }
+
+    tasks.named<org.gradle.testing.jacoco.tasks.JacocoReport>("jacocoTestReport") {
+        dependsOn(tasks.named("test"))
+        reports {
+            xml.required.set(true)
+            html.required.set(false)
+        }
+    }
+}
+
+tasks.named("sonar") {
+    dependsOn(subprojects.map { it.tasks.named("classes") })
+    dependsOn(subprojects.map { it.tasks.named("testClasses") })
 }

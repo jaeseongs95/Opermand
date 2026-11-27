@@ -1,0 +1,164 @@
+package io.github.jaeseongs95.opermand.domain.agentcli;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+
+import java.lang.reflect.RecordComponent;
+import java.util.Arrays;
+import java.util.Base64;
+import java.util.stream.Stream;
+
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
+
+/**
+ * The checks of a release the registry announced (2.x agent-cli.test.mjs:17-27). The metadata is untrusted text, so every case below is a text that must be
+ * refused. The 2.x cases that pass a JSON object with extra fields cannot be written here: the factory takes the four public fields as arguments, so a private
+ * field has no place to enter (the test of the record components shows it).
+ */
+class AgentReleaseTest {
+
+    private final AgentCliFixture fx = new AgentCliFixture();
+
+    @ParameterizedTest(name = "[{index}] {0}")
+    @ValueSource(strings = {"codex", "claude"})
+    @DisplayName("RC-A-089 the official public release of each provider is kept as the six public fields")
+    void keepsOnlyThePublicFields(String wire) {
+        AgentCliProviderId id = AgentCliProviderId.parse(wire);
+        AgentCliProvider provider = fx.provider(id);
+
+        AgentRelease release = fx.release(provider, "1.2.3");
+        AgentRelease again = fx.release(provider, "1.2.3");
+
+        assertThat(release).isEqualTo(again);
+        assertThat(release.provider()).isEqualTo(id);
+        assertThat(release.packageName()).isEqualTo(provider.packageName());
+        assertThat(release.version()).isEqualTo("1.2.3");
+        assertThat(release.tarball()).isEqualTo(fx.tarball(provider, "1.2.3"));
+        assertThat(release.digestMatches(fx.digester)).isTrue();
+        assertThat(release.toString()).doesNotContain("private");
+        assertThat(Arrays.stream(AgentRelease.class.getRecordComponents()).map(RecordComponent::getName).toList())
+                .containsExactly("provider", "packageName", "version", "tarball", "integrity", "releaseDigest");
+    }
+
+    @Test
+    @DisplayName("TC-D0061-01 the release digest is the CanonicalForm SHA-256 of the five fields and does not couple AgentRelease to any vendor or registry")
+    void releaseDigestHasAFixedVector() {
+        AgentRelease release = fx.release(fx.codex, "1.2.3");
+        io.github.jaeseongs95.opermand.domain.id.Digest expected = new io.github.jaeseongs95.opermand.domain.id.CanonicalForm()
+                .field("provider", "codex")
+                .field("packageName", fx.codex.packageName())
+                .field("version", "1.2.3")
+                .field("tarball", fx.tarball(fx.codex, "1.2.3"))
+                .field("integrity", fx.integrity)
+                .digest(fx.digester);
+
+        assertThat(release.releaseDigest()).isEqualTo(expected);
+        assertThat(release.releaseDigestLabel()).isEqualTo("sha256:" + expected.hex());
+        assertThat(fx.release(fx.codex, "1.2.4").releaseDigest()).isNotEqualTo(release.releaseDigest());
+        assertThat(fx.release(fx.claude, "1.2.3").releaseDigest()).isNotEqualTo(release.releaseDigest());
+
+        // Custom third-party provider with an open id, non-npm host, sha256 integrity, and own credential file proves opermand-domain is vendor-neutral (SSH_PORTAL-D-0061).
+        String sha256Integrity = "sha256:" + "a".repeat(64);
+        AgentCliProviderId customId = AgentCliProviderId.parse("acme-cli");
+        AgentCliProvider custom = new AgentCliProvider() {
+            @Override public AgentCliProviderId id() { return customId; }
+            @Override public String packageName() { return "org.acme:tool-cli"; }
+            @Override public String command() { return "tool"; }
+            @Override public String distributionUrl(String version) { return "https://releases.acme.example/tool-" + version + ".tar.gz"; }
+            @Override public void verifyIntegrity(String integrity) {
+                if (!integrity.startsWith("sha256:") || integrity.length() != 71) {
+                    throw new IllegalArgumentException("Expected sha256 hex integrity");
+                }
+            }
+            @Override public String credentialFileName() { return ".acme/credentials.json"; }
+        };
+        AgentRelease customRelease = AgentRelease.verify(custom, "org.acme:tool-cli", "2.0.0", "https://releases.acme.example/tool-2.0.0.tar.gz", sha256Integrity, fx.digester);
+        assertThat(customRelease.tarball()).isEqualTo("https://releases.acme.example/tool-2.0.0.tar.gz");
+        assertThat(customRelease.integrity()).isEqualTo(sha256Integrity);
+        assertThat(customRelease.digestMatches(fx.digester)).isTrue();
+        assertThatThrownBy(() -> AgentRelease.verify(custom, "org.acme:tool-cli", "2.0.0", "https://releases.acme.example/tool-2.0.0.tar.gz", fx.integrity, fx.digester))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @ParameterizedTest(name = "[{index}] {0}")
+    @ValueSource(strings = {"latest", "^1.2.3", "1.2", "01.2.3", "1.2.3-rc.1", "1.2.3+build", "1.2.3;id", "1.2.3\n", "9999999.2.3", "../../etc"})
+    @DisplayName("RC-A-090 an unstable or unbounded version is refused")
+    void refusesVersionsThatAreNotStable(String version) {
+        assertThatThrownBy(() -> fx.release(fx.codex, version)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("S2-AG-03 the largest version of six digits per part and zero parts are accepted")
+    void acceptsTheVersionBounds() {
+        assertThat(fx.release(fx.codex, "999999.999999.999999").version()).isEqualTo("999999.999999.999999");
+        assertThat(fx.release(fx.codex, "0.0.0").version()).isEqualTo("0.0.0");
+    }
+
+    @ParameterizedTest(name = "[{index}] {0}")
+    @ValueSource(strings = {
+        "http://releases.example.test/acme/tool-alpha/alpha-cli-1.2.3.tgz",
+        "https://evil.test/acme/tool-alpha/alpha-cli-1.2.3.tgz",
+        "https://releases.example.test.evil.test/acme/tool-alpha/alpha-cli-1.2.3.tgz",
+        "https://u:p@releases.example.test/acme/tool-alpha/alpha-cli-1.2.3.tgz",
+        "https://releases.example.test:444/acme/tool-alpha/alpha-cli-1.2.3.tgz",
+        "https://releases.example.test/acme/tool-alpha/alpha-cli-1.2.3.tgz?token=private",
+        "https://releases.example.test/acme/tool-alpha/alpha-cli-1.2.3.tgz#part",
+        "https://releases.example.test/acme/tool-alpha/other.tgz"})
+    @DisplayName("RC-A-091 an alternative distribution address is refused")
+    void refusesAlternativeDistribution(String tarball) {
+        assertThatThrownBy(() -> AgentRelease.verify(fx.codex, fx.codex.packageName(), "1.2.3", tarball, fx.integrity, fx.digester))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    @DisplayName("RC-A-092 metadata of another package, or with a missing part, is refused")
+    void refusesMalformedMetadata() {
+        String tarball = fx.tarball(fx.codex, "1.2.3");
+
+        assertThatThrownBy(() -> AgentRelease.verify(fx.codex, "other/pkg", "1.2.3", tarball, fx.integrity, fx.digester))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> AgentRelease.verify(fx.codex, null, "1.2.3", tarball, fx.integrity, fx.digester)).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> AgentRelease.verify(fx.codex, fx.codex.packageName(), null, tarball, fx.integrity, fx.digester)).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> AgentRelease.verify(fx.codex, fx.codex.packageName(), "1.2.3", null, fx.integrity, fx.digester)).isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> AgentRelease.verify(fx.codex, fx.codex.packageName(), "1.2.3", tarball, null, fx.digester)).isInstanceOf(NullPointerException.class);
+    }
+
+    @ParameterizedTest(name = "[{index}] {0}")
+    @MethodSource("badIntegrities")
+    @DisplayName("RC-A-092 a malformed generic integrity token is refused by AgentRelease")
+    void refusesBadChecksums(String integrity) {
+        assertThatThrownBy(() -> fx.release(fx.codex, "1.2.3", integrity)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    static Stream<String> badIntegrities() {
+        String valid = "sha512-" + Base64.getEncoder().encodeToString(sevens(64));
+        return Stream.of(
+            "sha1-abcd",
+            "no-prefix",
+            valid + " ",
+            valid + "\n",
+            "SHA512-abcdef0123456789",
+            "");
+    }
+
+    private static byte[] sevens(int length) {
+        byte[] bytes = new byte[length];
+        Arrays.fill(bytes, (byte) 7);
+        return bytes;
+    }
+
+    @Test
+    @DisplayName("S2-AG-04 a release whose five fields were edited no longer matches its digest")
+    void detectsAnEditedRelease() {
+        AgentRelease original = fx.release(fx.codex, "1.2.3");
+        AgentRelease edited = new AgentRelease(original.provider(), original.packageName(), "1.2.4", fx.tarball(fx.codex, "1.2.4"), original.integrity(),
+                original.releaseDigest());
+
+        assertThat(original.digestMatches(fx.digester)).isTrue();
+        assertThat(edited.digestMatches(fx.digester)).isFalse();
+    }
+}

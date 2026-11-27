@@ -1,5 +1,5 @@
 #!/bin/sh
-# Prepares a real OpenSSH server on a one-shot GitHub Linux runner for the Gradle task :portal-ssh:realOpenSshTest (stage 3 design 7.3, decision D3-11).
+# Prepares a real OpenSSH server on a one-shot GitHub Linux runner for the Gradle task :opermand-ssh:realOpenSshTest (stage 3 design 7.3, decision D3-11).
 #
 # Why this is a shell script and not Java: creating an operating system account, writing a sudoers rule and starting an sshd are operating system administration.
 # The JDK has no API for any of them, and the product has no business doing them, so the job that prepares the test environment does it (the same category as the

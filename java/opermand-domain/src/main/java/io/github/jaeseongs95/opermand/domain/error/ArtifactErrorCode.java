@@ -1,0 +1,32 @@
+package io.github.jaeseongs95.opermand.domain.error;
+
+/**
+ * Failures of staged files, uploads, downloads and the artifact store. {@code ARTIFACT_STORAGE_FULL} is not in this list: it is {@link ExecutionErrorCode#ARTIFACT_STORAGE_FULL}
+ * (stage 3 design, decision D3-03), next to {@code ARTIFACT_QUOTA}, so that one wire code has one enum.
+ *
+ * <p>{@code ARTIFACT_STORAGE_UNSAFE} means that the storage path cannot be used for this purpose: a regular file or a folder is not what is at the path, or the file store
+ * cannot make a new path private to its owner. It is never given for who may use an existing path, who owns it or a link (decision D-0117); {@code retryable} is false, the
+ * owner fixes the storage location.
+ */
+public enum ArtifactErrorCode implements ErrorCode {
+    ARTIFACT_INVALID_CHUNK, ARTIFACT_READ_UNAVAILABLE, ARTIFACT_INVALID_FILENAME, ARTIFACT_INVALID_HASH, ARTIFACT_LIMIT, ARTIFACT_SEQUENCE_OR_SIZE,
+    ARTIFACT_NOT_WRITABLE, ARTIFACT_INCOMPLETE_OR_EXPIRED, ARTIFACT_HASH_MISMATCH, ARTIFACT_UNKNOWN, ARTIFACT_MAINTENANCE, ARTIFACT_STALE_TARGET,
+    ARTIFACT_WRONG_PROTOCOL, ARTIFACT_ALREADY_SUBMITTED, ARTIFACT_REQUEST_UNAVAILABLE, ARTIFACT_INVALID_RANGE, ARTIFACT_NOT_READY, ARTIFACT_BINDING_OR_RETENTION,
+    ARTIFACT_CHANGED, ARTIFACT_TARGET_VERIFIER_UNAVAILABLE, INVALID_OPERATION_KEY, INVALID_FILE_NAME, INVALID_FILE_SIZE, INVALID_FILE_HASH, INVALID_ARTIFACT_CHUNK,
+    INVALID_FILE_FLAG, INVALID_REMOTE_PATH, ARTIFACT_NOT_FOUND, ARTIFACT_INCOMPLETE, ARTIFACT_BUSY, ARTIFACT_CHUNK_CONFLICT, STAGED_FILE_CONSUMED,
+    STAGED_FILE_CHANGED, OPAQUE_ADMISSION_BUSY, OPAQUE_ACTION_CONFLICT, OPAQUE_ACTION_RECONCILIATION_REQUIRED, ARTIFACT_EXPIRED, STAGED_FILE_EXPIRED,
+    FILE_TOO_LARGE, CHUNK_HASH_MISMATCH, ARTIFACT_PERMISSION_DENIED, ARTIFACT_STORAGE_IO_ERROR, OPAQUE_FILES_CLOSED,
+    ARTIFACT_STORAGE_UNSAFE, ARTIFACT_INTERNAL_ERROR;
+
+    /** A closed file service comes back after maintenance: {@code retryable = code === 'ARTIFACT_MAINTENANCE'} (public-contract.mjs:165). */
+    @Override
+    public boolean retryableByDefault() {
+        return this == ARTIFACT_MAINTENANCE;
+    }
+
+    /** Every artifact refusal is an answer to a transfer request, not to an execution (the transferRefusals rows carry executionAttempted false). */
+    @Override
+    public ExecutionAttempt attemptByDefault() {
+        return ExecutionAttempt.NOT_ATTEMPTED;
+    }
+}

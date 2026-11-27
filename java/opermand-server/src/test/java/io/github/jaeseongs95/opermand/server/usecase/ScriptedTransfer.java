@@ -1,0 +1,204 @@
+package io.github.jaeseongs95.opermand.server.usecase;
+
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.channels.Channels;
+import java.time.Instant;
+import java.util.List;
+import java.util.Objects;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicInteger;
+
+import io.github.jaeseongs95.opermand.app.remote.CommandKind;
+import io.github.jaeseongs95.opermand.app.remote.DownloadRequest;
+import io.github.jaeseongs95.opermand.app.remote.DownloadResult;
+import io.github.jaeseongs95.opermand.app.remote.ElevationPlan;
+import io.github.jaeseongs95.opermand.app.remote.ElevationRequest;
+import io.github.jaeseongs95.opermand.app.remote.ElevationResult;
+import io.github.jaeseongs95.opermand.app.remote.ExecReply;
+import io.github.jaeseongs95.opermand.app.remote.ExecutionControl;
+import io.github.jaeseongs95.opermand.app.remote.ExecutionLimits;
+import io.github.jaeseongs95.opermand.app.remote.ExecutionReport;
+import io.github.jaeseongs95.opermand.app.remote.FileAccess;
+import io.github.jaeseongs95.opermand.app.remote.FileDiagnostic;
+import io.github.jaeseongs95.opermand.app.remote.PayloadSink;
+import io.github.jaeseongs95.opermand.app.remote.PayloadSource;
+import io.github.jaeseongs95.opermand.app.remote.PermissionRequest;
+import io.github.jaeseongs95.opermand.app.remote.PermissionResult;
+import io.github.jaeseongs95.opermand.app.remote.PreparedCommand;
+import io.github.jaeseongs95.opermand.app.remote.RemoteExecution;
+import io.github.jaeseongs95.opermand.app.remote.RemoteFileTransfer;
+import io.github.jaeseongs95.opermand.app.remote.RemoteTarget;
+import io.github.jaeseongs95.opermand.app.remote.ReplaceMethod;
+import io.github.jaeseongs95.opermand.app.remote.RestoreEvidence;
+import io.github.jaeseongs95.opermand.app.remote.SinkResult;
+import io.github.jaeseongs95.opermand.app.remote.StdinBytes;
+import io.github.jaeseongs95.opermand.app.remote.TransferFailureCause;
+import io.github.jaeseongs95.opermand.app.remote.UnconfirmedCause;
+import io.github.jaeseongs95.opermand.app.remote.UploadRequest;
+import io.github.jaeseongs95.opermand.app.remote.UploadResult;
+import io.github.jaeseongs95.opermand.app.storage.PayloadRead;
+import io.github.jaeseongs95.opermand.domain.error.TransferErrorCode;
+import io.github.jaeseongs95.opermand.domain.id.Digest;
+import io.github.jaeseongs95.opermand.domain.id.Sha256Digester;
+import io.github.jaeseongs95.opermand.domain.operation.CleanupState;
+import io.github.jaeseongs95.opermand.domain.operation.ExecutionReason;
+import io.github.jaeseongs95.opermand.domain.path.RemotePath;
+import io.github.jaeseongs95.opermand.domain.path.WindowsRemotePath;
+
+/**
+ * The SFTP boundary of the use case tests, the other thing that is not real: a {@link RemoteFileTransfer} that answers what the test says and counts what it did. It
+ * follows the contract of the real adapter in what the use cases depend on: on a Windows path it runs the link probe first, on a Windows elevated request it runs the
+ * administrator probe next (each through the {@link ScriptedExecutor}, which calls the guard once as {@code MinaRemoteExecutor} does), and then it calls the guard once
+ * before the SFTP work itself (as {@code MinaRemoteFileTransfer#withLease} does). The counters rise only after the SFTP guard passed and no cancel stopped the transfer.
+ */
+final class ScriptedTransfer implements RemoteFileTransfer {
+
+    static final String WINDOWS_REPARSE_PROBE = "powershell.exe -NoLogo reparse-probe";
+
+    /** What the transfer answers to an upload. */
+    @FunctionalInterface
+    interface UploadBehavior {
+
+        UploadResult run(UploadRequest request);
+    }
+
+    /** What the transfer answers to a download; it may write to the sink first. */
+    @FunctionalInterface
+    interface DownloadBehavior {
+
+        DownloadResult run(DownloadRequest request, PayloadSink sink);
+    }
+
+    private final ScriptedExecutor executor;
+    private final AtomicInteger uploadsSent = new AtomicInteger();
+    private final AtomicInteger downloadsSent = new AtomicInteger();
+    private final List<byte[]> uploaded = new CopyOnWriteArrayList<>();
+    private volatile UploadBehavior upload = publishes();
+    private volatile DownloadBehavior download = disconnects();
+
+    ScriptedTransfer(ScriptedExecutor executor) {
+        this.executor = Objects.requireNonNull(executor, "executor");
+    }
+
+    @Override
+    public UploadResult upload(UploadRequest request, PayloadSource source, ExecutionControl control) {
+        if (probeStopped(request.target(), request.path(), request.access(), control)) {
+            return new UploadResult.NotDispatched(TransferFailureCause.CANCELLED);
+        }
+        control.guard().beforeDispatch();
+        if (control.cancel().requested()) {
+            return new UploadResult.NotDispatched(TransferFailureCause.CANCELLED);
+        }
+        uploadsSent.incrementAndGet();
+        try (PayloadRead read = source.open()) {
+            uploaded.add(Channels.newInputStream(read.channel()).readAllBytes());
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return upload.run(request);
+    }
+
+    @Override
+    public DownloadResult download(DownloadRequest request, PayloadSink sink, ExecutionControl control) {
+        if (probeStopped(request.target(), request.path(), request.access(), control)) {
+            return new DownloadResult.Failed(TransferFailureCause.CANCELLED);
+        }
+        control.guard().beforeDispatch();
+        if (control.cancel().requested()) {
+            return new DownloadResult.Failed(TransferFailureCause.CANCELLED);
+        }
+        downloadsSent.incrementAndGet();
+        return download.run(request, sink);
+    }
+
+    private boolean probeStopped(RemoteTarget target, RemotePath path, FileAccess access, ExecutionControl control) {
+        if (path instanceof WindowsRemotePath && runProbe(target, WINDOWS_REPARSE_PROBE, control).outcome().reason() == ExecutionReason.CANCEL) {
+            return true;
+        }
+        if (access instanceof FileAccess.Elevated(ElevationPlan.WindowsAdministratorCheck check)
+            && runProbe(target, check.probe().commandLine(), control).outcome().reason() == ExecutionReason.CANCEL) {
+            return true;
+        }
+        return false;
+    }
+
+    private ExecutionReport runProbe(RemoteTarget target, String commandLine, ExecutionControl control) {
+        RemoteExecution execution = new RemoteExecution(target, new PreparedCommand(commandLine, StdinBytes.none(), CommandKind.COMMAND),
+            ExecutionLimits.defaults(), ExecReply.AWAITED);
+        return executor.run(execution, frame -> new SinkResult.Accepted(), control);
+    }
+
+    @Override
+    public PermissionResult applyPermissions(PermissionRequest request, ExecutionControl control) {
+        throw new IllegalStateException("The use case tests ask for no permission bits");
+    }
+
+    @Override
+    public ElevationResult checkElevation(ElevationRequest request, ExecutionControl control) {
+        throw new IllegalStateException("The use case tests ask for no elevation");
+    }
+
+    void reset() {
+        uploadsSent.set(0);
+        downloadsSent.set(0);
+        uploaded.clear();
+        upload = publishes();
+        download = disconnects();
+    }
+
+    void onUpload(UploadBehavior behavior) {
+        upload = behavior;
+    }
+
+    void onDownload(DownloadBehavior behavior) {
+        download = behavior;
+    }
+
+    int uploadsSent() {
+        return uploadsSent.get();
+    }
+
+    int downloadsSent() {
+        return downloadsSent.get();
+    }
+
+    /** The bytes the use case sent in each upload, in order. */
+    List<byte[]> uploaded() {
+        return List.copyOf(uploaded);
+    }
+
+    /** The replacement is in place and confirmed, with the digest the owner approved. */
+    UploadBehavior publishes() {
+        return request -> new UploadResult.Published(request.sha256(), Instant.now(), ReplaceMethod.POSIX_RENAME);
+    }
+
+    /** The replacement is in place and confirmed, but the content has another digest than the one the owner approved. */
+    UploadBehavior publishesAnotherDigest() {
+        return request -> new UploadResult.Published(new Digest("f".repeat(64)), Instant.now(), ReplaceMethod.POSIX_RENAME);
+    }
+
+    /** The replacement happened and then failed, and the original is confirmed back in place. */
+    UploadBehavior rollsBack() {
+        return request -> new UploadResult.RolledBack(TransferErrorCode.PERMISSION_DENIED, new FileDiagnostic.SftpStatus(3), new RestoreEvidence(Instant.now()));
+    }
+
+    /** The replacement failed and the original could not be confirmed back in place. */
+    UploadBehavior losesTheOriginal() {
+        return request -> new UploadResult.Unconfirmed(new UnconfirmedCause.RestoreUnconfirmed(".opermand-bak-1"), CleanupState.COMPLETE);
+    }
+
+    /** The file is read to the end into the sink and confirmed. */
+    DownloadBehavior fetches(byte[] content) {
+        return (request, sink) -> {
+            sink.expect(content.length);
+            sink.append(content);
+            return new DownloadResult.Fetched(content.length, new Sha256Digester().digest(content));
+        };
+    }
+
+    /** The connection is lost while the file is read. */
+    DownloadBehavior disconnects() {
+        return (request, sink) -> new DownloadResult.Failed(TransferFailureCause.TRANSPORT_LOST);
+    }
+}

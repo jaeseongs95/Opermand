@@ -7,11 +7,11 @@ pluginManagement {
     }
 }
 
-rootProject.name = "ssh-approval-portal-java"
+rootProject.name = "opermand"
 
 // Module order is the dependency order (docs/migration/foundation-cases.md, rule A-DIR): domain <- app <- (store, ssh, desktop, web) <- server;
 // client needs only domain; migrate needs only store and domain.
 include(
-    "portal-domain", "portal-app", "portal-store", "portal-ssh", "portal-desktop", "portal-web",
-    "portal-server", "portal-client", "portal-migrate", "portal-arch-checks",
+    "opermand-domain", "opermand-app", "opermand-store", "opermand-ssh", "opermand-desktop", "opermand-web",
+    "opermand-server", "opermand-client", "opermand-migrate", "opermand-arch-checks",
 )
