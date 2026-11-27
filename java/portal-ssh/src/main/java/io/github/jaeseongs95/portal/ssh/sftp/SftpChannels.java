@@ -1,17 +1,22 @@
 package io.github.jaeseongs95.portal.ssh.sftp;
 
+import io.github.jaeseongs95.portal.app.remote.ExecutionLimits;
 import java.io.Closeable;
 import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.time.Duration;
+import java.util.Objects;
+import org.apache.sshd.client.channel.ClientChannel;
 import org.apache.sshd.client.session.ClientSession;
 import org.apache.sshd.sftp.client.SftpClient;
-import org.apache.sshd.sftp.client.SftpClientFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 /**
  * Opens the SFTP subsystem channel of a session and closes the channels and streams of the file transfer. It is the one place that touches MINA's
- * {@link SftpClientFactory}, so a test can replace it to put a fault in front of an operation the embedded server cannot fail (a flush that is refused, a server extension
+ * {@link GuardedSftpClient} (MINA's client, which does not leave its channel behind when the open fails), so a test can replace it to put a fault in front of an operation the embedded server cannot fail (a flush that is refused, a server extension
  * that is not offered). The SFTP version is negotiated by MINA: the highest both sides speak (OpenSSH's {@code sftp-server} speaks 3, which is why the adapter never uses an
  * operation that needs a newer one).
  */
@@ -19,6 +24,21 @@ import org.springframework.stereotype.Component;
 public class SftpChannels {
 
     private static final Logger LOG = LoggerFactory.getLogger(SftpChannels.class);
+
+    private final Duration stopGrace;
+
+    @Autowired
+    public SftpChannels() {
+        this(ExecutionLimits.DEFAULT_STOP_GRACE);
+    }
+
+    SftpChannels(Duration stopGrace) {
+        this.stopGrace = Objects.requireNonNull(stopGrace, "stopGrace");
+    }
+
+    Duration stopGrace() {
+        return stopGrace;
+    }
 
     /**
      * Opens the subsystem channel on the session; the caller closes the returned client.
@@ -28,7 +48,21 @@ public class SftpChannels {
      * @throws IOException when the server refuses the subsystem or the connection fails
      */
     public SftpClient open(ClientSession session) throws IOException {
-        return SftpClientFactory.instance().createSftpClient(session);
+        return GuardedSftpClient.open(session);
+    }
+
+    /**
+     * Opens the subsystem channel of a transfer: as {@link #open(ClientSession)}, and a stop of the transfer (the owner's cancel or the time limit) that comes while the
+     * open is waited for cancels the open, so the wait ends at once and does not run its {@code SFTP_CHANNEL_OPEN_TIMEOUT} (defect SSH_PORTAL-D-0107). The channel of an open
+     * that was cancelled is closed when the server confirms it ({@link GuardedSftpClient}).
+     *
+     * @param session an authenticated session
+     * @param watch the watch of the transfer
+     * @return the SFTP client
+     * @throws IOException when the server refuses the subsystem, the open was cancelled or ran out of time, or the connection fails
+     */
+    public SftpClient open(ClientSession session, TransferWatch watch) throws IOException {
+        return GuardedSftpClient.whenOpening(opening -> watch.interruptWith(() -> GuardedSftpClient.giveUp(opening, watch, stopGrace)), () -> open(session));
     }
 
     /**
@@ -56,6 +90,49 @@ public class SftpChannels {
             closeable.close();
         } catch (IOException e) {
             LOG.debug("A channel or stream did not close cleanly; the result it carried stands", e);
+        }
+    }
+
+    /**
+     * Closes an SFTP client and waits boundedly for the peer to confirm its channel close, so a pooled session talking to a {@code MaxSessions=1} server has freed the slot
+     * before the next channel-open arrives (whether the next channel is the elevated {@code exec} channel or the next pooled transfer). When a stop has already been requested on
+     * {@code watch}, returns immediately after closing so cancellation or deadline handling never blocks.
+     *
+     * @param client the SFTP client to close, or {@code null}
+     * @param watch the active transfer watch, or {@code null} when closing after normal completion
+     */
+    public void closeAndAwaitQuietly(SftpClient client, TransferWatch watch) {
+        if (client == null) {
+            return;
+        }
+        closeQuietly(client);
+        ClientChannel channel = client.getClientChannel();
+        if (channel == null || channel.isClosed() || !channel.isClosing()) {
+            return;
+        }
+        if (watch != null && watch.stopRequested().isPresent()) {
+            return;
+        }
+        Duration wait = stopGrace;
+        if (watch != null) {
+            Duration remaining = watch.remaining();
+            if (remaining.compareTo(wait) < 0) {
+                wait = remaining;
+            }
+        }
+        if (wait.isZero() || wait.isNegative()) {
+            return;
+        }
+        if (watch != null) {
+            watch.interruptWith(() -> channel.close(true));
+        }
+        try {
+            channel.close(false).await(wait);
+        } catch (InterruptedIOException e) {
+            Thread.currentThread().interrupt();
+            LOG.debug("Interrupted while waiting for the SFTP channel to finish closing", e);
+        } catch (IOException e) {
+            LOG.debug("Waiting for the SFTP channel to finish closing failed; continuing", e);
         }
     }
 }

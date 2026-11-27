@@ -23,12 +23,13 @@ import org.springframework.stereotype.Component;
  * An unknown policy is a refusal ({@code PATH_POLICY_UNSUPPORTED}), never an allowance.
  *
  * <p>The inspection ({@link #inspect}) asks the server. The 2.x helpers walked the path from the root with a handle on every directory, so that a link swapped in later
- * could not redirect them. SFTP has no operation that opens a file relative to a directory handle, so that strength cannot be had. What is done instead: every
+ * could not redirect them. SFTP v3 has no {@code openat}/{@code O_NOFOLLOW} operation, so that strength cannot be had at the protocol layer. What is done instead: every
  * directory on the way and the file itself are looked at with {@code lstat} (which does not follow links), and a link, a directory where a file should be, a FIFO or any
  * other kind is {@code UNSAFE_PATH}. The server's {@code realpath} is not used: what it answers is formatted by the server (a Windows server answers {@code /C:/x}, a
- * chrooted one a path of its own) and cannot be compared with the request; asking each component is exact. The file is looked at again right before the replacement
- * ({@code FILE_CHANGED} when it differs). What stays open is the time between those checks and the use: an attacker who can swap a directory for a link in that time
- * already has the rights of the login account over that directory, which is the residual risk of decision D3-02 and goes to the security audit.
+ * chrooted one a path of its own) and cannot be compared with the request; asking each component is exact. To narrow the TOCTOU window (especially under elevated
+ * {@code sudo -n sftp-server}, defect SSH_PORTAL-D-0082), uploads keep a single exclusively created handle across {@code fsetstat(0600)}/write/read-back/{@code fsetstat(mode,owner)},
+ * downloads verify {@code fstat} on the open handle before reading a byte, and elevated {@code applyPermissions} verifies {@code fstat} before {@code fsetstat}. The
+ * remaining protocol-level window is between ancestor {@code lstat} and the single {@code open}/{@code rename} call on a directory writable by an untrusted local account.
  */
 @Component
 public class RemotePathChecker {

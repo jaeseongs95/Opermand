@@ -4,10 +4,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import io.github.jaeseongs95.portal.domain.command.ApprovalSubject;
 import io.github.jaeseongs95.portal.domain.command.CommandLineAnalysis;
+import io.github.jaeseongs95.portal.domain.command.CommandNames;
 import io.github.jaeseongs95.portal.domain.command.Completeness;
+import io.github.jaeseongs95.portal.domain.command.LinuxPolicyName;
 import io.github.jaeseongs95.portal.domain.command.NormalizedName;
+import io.github.jaeseongs95.portal.domain.command.RuleApprovalPolicy;
+import io.github.jaeseongs95.portal.domain.command.RuleLookup;
+import io.github.jaeseongs95.portal.domain.command.SourceContract;
 import io.github.jaeseongs95.portal.domain.command.SudoUse;
+import io.github.jaeseongs95.portal.domain.command.TargetRule;
+import io.github.jaeseongs95.portal.domain.id.TargetId;
+import io.github.jaeseongs95.portal.domain.operation.DecisionReason;
+import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
+import io.github.jaeseongs95.portal.domain.target.TargetConnection;
+import io.github.jaeseongs95.portal.domain.target.TargetOs;
+import io.github.jaeseongs95.portal.domain.target.Toggle;
 import io.github.jaeseongs95.portal.domain.text.CommandText;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -55,7 +68,7 @@ class PosixCommandLineGrammarTest {
     @Test
     @DisplayName("grammar contract: a complete line names at least one program and every name is a comparison key")
     void completeLinesNameTheirPrograms() {
-        List<String> completeCommands = List.of("ls -la /tmp", "ls && pwd | grep home", "sudo -n ls", "bash -lc \"ls && pwd\"", "ls $(pwd)", "ls > /tmp/file");
+        List<String> completeCommands = List.of("ls -la /tmp", "ls && pwd | grep home", "sudo -n ls", "bash -lc \"ls && pwd\"", "ls $(pwd)", "cat < /tmp/file");
         for (String command : completeCommands) {
             CommandLineAnalysis analysis = analyze(command);
             assertThat(analysis.isComplete()).as(command).isTrue();
@@ -110,12 +123,10 @@ class PosixCommandLineGrammarTest {
     // ---- 2.x cases ----
 
     @Test
-    @DisplayName("RC-A-464: every shell segment and literal substitution contributes a name, and argument risk is not looked at (23 inputs of command-line.test.mjs:5)")
+    @DisplayName("RC-A-464: every safe shell segment and literal substitution contributes a name (output redirections and exec/wrapper bypasses moved to D-0071/D-0072)")
     void everySegmentAndLiteralSubstitutionContributesNames() {
         List<Reads> cases = List.of(
-            reads("env CMD=rm sh -c \"$CMD\"", "env"),
             reads("python3 -c \"code\"", "python3"),
-            reads("find /tmp -exec rm {} +", "find"),
             reads("bash script.sh", "bash"),
             reads("ls -la /tmp", "ls"),
             reads("rm -rf /tmp/fixture", "rm"),
@@ -131,13 +142,22 @@ class PosixCommandLineGrammarTest {
             reads("sh -ec \"ls && pwd\"", "sh", "ls", "pwd"),
             reads("bash --noprofile -l -c \"ls && pwd\" extra", "bash", "ls", "pwd"),
             reads("sh -c \"ls && pwd\"", "sh", "ls", "pwd"),
+            reads("l's' /tmp", "ls"));
+        assertReadsCompletely(cases);
+
+        // Output redirections and dynamic-wrapper/find-exec cases still extract names (for deny-list) but fail closed as INCOMPLETE (SSH_PORTAL-D-0071, D-0072).
+        List<Reads> incompleteButNamed = List.of(
+            reads("env CMD=rm sh -c \"$CMD\"", "env", "sh"),
+            reads("find /tmp -exec rm {} +", "find", "rm"),
             reads("ls > /tmp/file", "ls"),
             reads("2>/tmp/file rm x", "rm"),
             reads("ls 2> /tmp/file", "ls"),
-            reads("ls >$(pwd)", "pwd", "ls"),
-            reads("l's' /tmp", "ls"));
-        assertThat(cases).as("the inputs of command-line.test.mjs:5").hasSize(23);
-        assertReadsCompletely(cases);
+            reads("ls >$(pwd)", "pwd", "ls"));
+        for (Reads expected : incompleteButNamed) {
+            CommandLineAnalysis analysis = analyze(expected.line());
+            assertThat(analysis.isComplete()).as(expected.line()).isFalse();
+            assertThat(analysis.names()).as(expected.line()).containsExactlyElementsOf(expected.names());
+        }
     }
 
     @Test
@@ -309,5 +329,150 @@ class PosixCommandLineGrammarTest {
         CommandLineAnalysis analysis = analyze("ls\t-la\t/tmp");
         assertThat(analysis.isComplete()).isTrue();
         assertThat(analysis.names()).containsExactly("ls");
+    }
+
+    // ---- SSH_PORTAL-D-0071: wrapper-hidden sudo and privilege escalation ----
+
+    @Test
+    @DisplayName("SSH_PORTAL-D-0071 prefix wrappers recursively unwrap inner commands and expose hidden sudo and target program names")
+    void prefixWrappersExposeHiddenSudoAndInnerProgram() {
+        List<Reads> wrappedSudo = List.of(
+            reads("env sudo id", "env", "sudo", "id"),
+            reads("env FOO=bar sudo -n rm -rf /tmp/x", "env", "sudo", "rm"),
+            reads("timeout 5 sudo id", "timeout", "sudo", "id"),
+            reads("timeout -s KILL 5 sudo -u root id", "timeout", "sudo", "id"),
+            reads("nice -n 10 sudo id", "nice", "sudo", "id"),
+            reads("ionice -c 3 sudo id", "ionice", "sudo", "id"),
+            reads("stdbuf -oL sudo id", "stdbuf", "sudo", "id"),
+            reads("nohup sudo id", "nohup", "sudo", "id"),
+            reads("setsid sudo id", "setsid", "sudo", "id"),
+            reads("command sudo id", "command", "sudo", "id"),
+            reads("exec sudo id", "exec", "sudo", "id"),
+            reads("env timeout 5 nice -n 5 sudo id", "env", "timeout", "nice", "sudo", "id"));
+        for (Reads expected : wrappedSudo) {
+            CommandLineAnalysis analysis = analyze(expected.line());
+            assertThat(analysis.usesSudo()).as(expected.line()).isTrue();
+            assertThat(analysis.isComplete()).as(expected.line()).isTrue();
+            assertThat(analysis.names()).as(expected.line()).containsExactlyElementsOf(expected.names());
+        }
+
+        // Benign wrapped commands still read cleanly without falsely setting usesSudo.
+        CommandLineAnalysis benign = analyze("env FOO=1 timeout 5 ls /tmp");
+        assertThat(benign.isComplete()).isTrue();
+        assertThat(benign.usesSudo()).isFalse();
+        assertThat(benign.names()).containsExactly("env", "timeout", "ls");
+    }
+
+    @Test
+    @DisplayName("SSH_PORTAL-D-0071 opaque wrappers, non-sudo privilege tools, and unknown wrapper flags fail closed and preserve usesSudo")
+    void opaqueAndPrivilegeWrappersFailClosed() {
+        for (String sudoHiding : List.of(
+            "xargs sudo rm",
+            "watch sudo id",
+            "strace sudo id",
+            "eval \"sudo id\"",
+            "timeout --unknown sudo id",
+            "env -S 'sudo id'",
+            "env /usr/bin/sudo id",
+            "su - root -c id",
+            "runuser -u root -- id",
+            "doas -x id",
+            "pkexec --unknown id",
+            "find /tmp -exec sudo rm {} +")) {
+            CommandLineAnalysis analysis = analyze(sudoHiding);
+            assertThat(analysis.usesSudo()).as(sudoHiding).isTrue();
+            assertThat(analysis.isComplete()).as(sudoHiding).isFalse();
+        }
+
+        CommandLineAnalysis doas = analyze("doas -n id");
+        assertThat(doas.usesSudo()).isTrue();
+        assertThat(doas.names()).containsExactly("doas", "id");
+
+        CommandLineAnalysis pkexec = analyze("pkexec --user root id");
+        assertThat(pkexec.usesSudo()).isTrue();
+        assertThat(pkexec.names()).containsExactly("pkexec", "id");
+
+        for (String opaque : List.of("xargs ls", "parallel ls", "watch ls", "strace ls", "chroot /mnt ls", "nsenter -a ls", "unshare -r ls", "flock /tmp/l ls")) {
+            CommandLineAnalysis analysis = analyze(opaque);
+            assertThat(analysis.isComplete()).as(opaque).isFalse();
+        }
+    }
+
+    // ---- SSH_PORTAL-D-0072: output redirections and mutating/exec flags ----
+
+    @Test
+    @DisplayName("SSH_PORTAL-D-0072 output redirections and dangerous exec/write flags are INCOMPLETE while preserving extracted names and sudo detection")
+    void outputRedirectionsAndDangerousFlagsAreIncomplete() {
+        List<String> unsafeLines = List.of(
+            "id > ~/.ssh/authorized_keys",
+            "echo key >> ~/.ssh/authorized_keys",
+            "ls >| /tmp/clobber",
+            "ls <> /tmp/rw",
+            "ls &> /tmp/both",
+            "ls &>> /tmp/both",
+            "find /tmp -exec rm {} +",
+            "find /tmp -execdir sh -c id {} ;",
+            "find /tmp -delete",
+            "sed -i 's/a/b/' /tmp/file",
+            "sed -ri 's/a/b/' /tmp/file",
+            "sed --in-place=.bak 's/a/b/' /tmp/file",
+            "awk 'BEGIN { system(\"id\") }'",
+            "awk '{ print > \"/tmp/out\" }' /tmp/in",
+            "awk '{ print | \"sh\" }' /tmp/in",
+            "tar -xf a.tar --to-command=sh",
+            "git -c core.sshCommand=id status",
+            "curl -o /tmp/out https://example.com",
+            "curl -d secret https://example.com",
+            "wget -O /tmp/out https://example.com",
+            "sort -o /tmp/out /tmp/in",
+            "rsync -e sh a b");
+        for (String line : unsafeLines) {
+            CommandLineAnalysis analysis = analyze(line);
+            assertThat(analysis.isComplete()).as(line).isFalse();
+        }
+
+        // Redirection does not hide a subsequent command or sudo in the same line.
+        CommandLineAnalysis chained = analyze("id > /tmp/out; sudo rm /tmp/x");
+        assertThat(chained.isComplete()).isFalse();
+        assertThat(chained.usesSudo()).isTrue();
+        assertThat(chained.names()).containsExactly("id", "sudo", "rm");
+
+        // Benign read-only invocations of the same tools stay COMPLETE.
+        assertReadsCompletely(List.of(
+            reads("cat < /tmp/in", "cat"),
+            reads("find /tmp -name '*.log'", "find"),
+            reads("sed -n '1,5p' /tmp/file", "sed"),
+            reads("awk '{ print $1 }' /tmp/file", "awk"),
+            reads("git status", "git"),
+            reads("sort /tmp/in", "sort")));
+    }
+
+    @Test
+    @DisplayName("SSH_PORTAL-D-0071 & D-0072 RuleApprovalPolicy never auto-approves wrapper-hidden sudo, output redirections, or mutating/exec flags under COMMAND_SET")
+    void ruleApprovalPolicyRejectsWrapperSudoAndUnsafeEffects() {
+        RuleApprovalPolicy policy = new RuleApprovalPolicy();
+        CommandNames approved = new CommandNames(List.of("id", "ls", "timeout", "env", "xargs", "find", "sed", "git")
+            .stream().map(name -> (io.github.jaeseongs95.portal.domain.command.PolicyName) new LinuxPolicyName(name)).toList());
+        TargetRule rule = new TargetRule(new TargetId("prod"), TargetConnection.of("a".repeat(64)), new ProfileAlias("writer"), TargetOs.LINUX,
+            approved, new CommandNames(List.of()), Toggle.OFF, Toggle.OFF, Toggle.OFF, Toggle.OFF, SourceContract.NONE);
+        RuleLookup lookup = new RuleLookup.Rule(rule);
+
+        for (String hiddenSudo : List.of("timeout 5 sudo id", "env sudo id", "xargs sudo id", "find /tmp -exec sudo id {} +")) {
+            CommandText text = new CommandText(hiddenSudo);
+            CommandLineAnalysis analysis = grammar.analyze(text);
+            DecisionReason reason = policy.decideCommand(lookup, new ApprovalSubject.ShellCommand(text, analysis), false, false);
+            assertThat(reason).as(hiddenSudo).isEqualTo(DecisionReason.SUDO_NOT_ENABLED);
+        }
+
+        for (String unsafeMutation : List.of("id > ~/.ssh/authorized_keys", "find /tmp -exec rm {} +", "sed -i 's/a/b/' /tmp/f", "git -c core.pager=sh status")) {
+            CommandText text = new CommandText(unsafeMutation);
+            CommandLineAnalysis analysis = grammar.analyze(text);
+            DecisionReason reason = policy.decideCommand(lookup, new ApprovalSubject.ShellCommand(text, analysis), false, false);
+            assertThat(reason).as(unsafeMutation).isEqualTo(DecisionReason.NO_MATCHING_RULE);
+        }
+
+        // Control: benign `id` still auto-approves under COMMAND_SET.
+        CommandText benign = new CommandText("id");
+        assertThat(policy.decideCommand(lookup, new ApprovalSubject.ShellCommand(benign, grammar.analyze(benign)), false, false)).isEqualTo(DecisionReason.COMMAND_SET);
     }
 }

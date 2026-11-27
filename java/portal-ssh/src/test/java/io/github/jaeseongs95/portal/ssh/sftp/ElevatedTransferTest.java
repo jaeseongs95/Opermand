@@ -22,6 +22,7 @@ import io.github.jaeseongs95.portal.app.remote.FileDiagnostic;
 import io.github.jaeseongs95.portal.app.remote.FileMode;
 import io.github.jaeseongs95.portal.app.remote.FixedRemoteCommand;
 import io.github.jaeseongs95.portal.app.remote.PathPolicyBinding;
+import io.github.jaeseongs95.portal.app.remote.PathPolicyDecision;
 import io.github.jaeseongs95.portal.app.remote.PermissionRequest;
 import io.github.jaeseongs95.portal.app.remote.PermissionResult;
 import io.github.jaeseongs95.portal.app.remote.PermissionSupport;
@@ -30,20 +31,32 @@ import io.github.jaeseongs95.portal.app.remote.RemoteExecution;
 import io.github.jaeseongs95.portal.app.remote.RemoteTarget;
 import io.github.jaeseongs95.portal.app.remote.ReplaceMethod;
 import io.github.jaeseongs95.portal.app.remote.SinkResult;
+import io.github.jaeseongs95.portal.app.remote.SshSettings;
 import io.github.jaeseongs95.portal.app.remote.StdinBytes;
 import io.github.jaeseongs95.portal.app.remote.TransferFailureCause;
 import io.github.jaeseongs95.portal.app.remote.TransferLimits;
 import io.github.jaeseongs95.portal.app.remote.UploadRequest;
 import io.github.jaeseongs95.portal.app.remote.UploadResult;
+import io.github.jaeseongs95.portal.app.target.TargetSource;
+import io.github.jaeseongs95.portal.ssh.profile.TestFiles;
+import io.github.jaeseongs95.portal.ssh.session.PoolSessionSource;
+import io.github.jaeseongs95.portal.ssh.testkit.AdapterFixture;
+import io.github.jaeseongs95.portal.ssh.testkit.EmbeddedSshServer;
 import io.github.jaeseongs95.portal.domain.error.DispatchFailure;
 import io.github.jaeseongs95.portal.domain.error.DispatchReason;
 import io.github.jaeseongs95.portal.domain.error.DispatchRefusedException;
 import io.github.jaeseongs95.portal.domain.error.DispatchStage;
 import io.github.jaeseongs95.portal.domain.error.TransferErrorCode;
+import io.github.jaeseongs95.portal.domain.id.Sha256Digester;
+import io.github.jaeseongs95.portal.domain.id.TargetId;
 import io.github.jaeseongs95.portal.domain.operation.CleanupState;
 import io.github.jaeseongs95.portal.domain.operation.OverwriteMode;
 import io.github.jaeseongs95.portal.domain.path.PosixRemotePath;
 import io.github.jaeseongs95.portal.domain.path.RemotePath;
+import io.github.jaeseongs95.portal.domain.target.AccessMode;
+import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
+import io.github.jaeseongs95.portal.domain.target.TargetLookup;
+import io.github.jaeseongs95.portal.domain.target.TargetRevision;
 import java.io.IOException;
 import java.nio.channels.ClosedChannelException;
 import java.nio.charset.StandardCharsets;
@@ -51,6 +64,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFileAttributeView;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.security.SecureRandom;
+import java.time.Clock;
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -60,9 +75,14 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
 import org.apache.sshd.client.session.ClientSession;
+import org.apache.sshd.common.channel.Channel;
+import org.apache.sshd.common.channel.ChannelFactory;
+import org.apache.sshd.common.session.Session;
 import org.apache.sshd.server.SshServer;
+import org.apache.sshd.server.command.CommandFactory;
 import org.apache.sshd.sftp.client.SftpClient;
 import org.apache.sshd.sftp.common.SftpConstants;
+import org.apache.sshd.sftp.server.SftpSubsystemFactory;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -70,6 +90,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
 import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
 /**
  * Elevated file work (S3-EL-01 to S3-EL-04, stage 3 design 6.1, decision Q8). A POSIX target is served by its SFTP server started with {@code sudo -n} and spoken to with
@@ -197,7 +218,7 @@ class ElevatedTransferTest {
 
         PermissionResult result = testBed.transfer().applyPermissions(request, testBed.control());
 
-        if (Files.getFileStore(root).supportsFileAttributeView(PosixFileAttributeView.class)) {
+        if (TestFiles.hasAbility("posix", Files.getFileStore(root).supportsFileAttributeView(PosixFileAttributeView.class))) {
             assertThat(result).isEqualTo(new PermissionResult.Applied());
             assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(file))).isEqualTo("rw-r-----");
         } else {
@@ -249,6 +270,7 @@ class ElevatedTransferTest {
         assertThat(download).isEqualTo(new DownloadResult.Failed(TransferFailureCause.CHANNEL_OPEN_FAILED));
         assertThat(upload).isEqualTo(new UploadResult.NotDispatched(TransferFailureCause.CHANNEL_OPEN_FAILED));
         assertThat(testBed.sessions().discards()).as("the connection is fine; the server only refused a channel").isZero();
+        assertThat(testBed.sessions().openRejections()).isEqualTo(2);
         assertThat(root.resolve("x.bin")).doesNotExist();
     }
 
@@ -261,6 +283,7 @@ class ElevatedTransferTest {
 
         assertThat(download).isEqualTo(new DownloadResult.Failed(TransferFailureCause.CHANNEL_OPEN_FAILED));
         assertThat(testBed.sessions().discards()).isZero();
+        assertThat(testBed.sessions().openRejections()).isEqualTo(1);
     }
 
     @Test
@@ -535,5 +558,137 @@ class ElevatedTransferTest {
         assertThat(linkExecutor.commandLines()).as("the first guard refused before the link probe sent a command").hasSize(1);
         assertThat(bed.sessions().leases()).as("no second SFTP session was leased").isEqualTo(1);
         assertThat(root.resolve("refused.bin")).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("SudoSftpChannels awaits the lookup channel close before opening sudo -n so elevated transfers succeed on a MaxSessions=1 server over one pooled session")
+    void elevatedTransferSucceedsUnderMaxSessionsOne() throws IOException {
+        Files.createDirectories(root.resolve("usr/lib/openssh"));
+        Files.writeString(root.resolve("usr/lib/openssh/sftp-server"), "placeholder");
+        AtomicReference<Channel> activeSessionChannel = new AtomicReference<>();
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setDaemon(true);
+        scheduler.initialize();
+        try (EmbeddedSshServer pooledServer = EmbeddedSshServer.builder()
+                .password(TestSessions.USER, TestSessions.PASSWORD)
+                .sftp(root)
+                .customize(sshd -> {
+                    CommandFactory original = sshd.getCommandFactory();
+                    SftpSubsystemFactory subsystem = new SftpSubsystemFactory.Builder().build();
+                    sshd.setCommandFactory((channel, command) -> TransferBed.SUDO_COMMAND.equals(command)
+                        ? subsystem.createSubsystem(channel) : original.createCommand(channel, command));
+                    sshd.setChannelFactories(sshd.getChannelFactories().stream().map(factory -> "session".equals(factory.getName())
+                        ? (ChannelFactory) new ChannelFactory() {
+                            @Override
+                            public String getName() {
+                                return factory.getName();
+                            }
+
+                            @Override
+                            public Channel createChannel(Session session) throws IOException {
+                                Channel current = activeSessionChannel.get();
+                                if (current != null && !current.isClosing() && !current.isClosed()) {
+                                    return null;
+                                }
+                                Channel created = factory.createChannel(session);
+                                if (created == null) {
+                                    return null;
+                                }
+                                if (!activeSessionChannel.compareAndSet(current, created)) {
+                                    created.close(true);
+                                    return null;
+                                }
+                                created.addCloseFutureListener(future -> activeSessionChannel.compareAndSet(created, null));
+                                return created;
+                            }
+                        }
+                        : factory).toList());
+                })
+                .start();
+             AdapterFixture fixture = AdapterFixture.start(AdapterFixture.defaultSettings())) {
+            fixture.profiles().put("writer", AdapterFixture.profileFor(pooledServer, TestSessions.USER));
+            fixture.credentials().password("writer", TestSessions.PASSWORD);
+            MinaRemoteFileTransfer pooledTransfer = pooledTransfer(fixture, scheduler);
+            RemoteTarget target = new RemoteTarget(new TargetId("files"), TargetRevision.of("a".repeat(64)), new ProfileAlias("writer"), AccessMode.READ_WRITE);
+            Sha256Digester digester = new Sha256Digester();
+
+            UploadRequest uploadRequest = new UploadRequest(target, new PosixRemotePath("/max1.bin"), CONTENT.length, digester.digest(CONTENT),
+                OverwriteMode.FAIL_IF_EXISTS, new FileAccess.Elevated(SUDO), new PathPolicyBinding.NoRootPolicy(), TransferLimits.defaults());
+            UploadResult uploaded = pooledTransfer.upload(uploadRequest, TransferBed.source(CONTENT), AdapterFixture.control());
+
+            assertThat(uploaded).isInstanceOf(UploadResult.Published.class);
+            assertThat(Files.readAllBytes(root.resolve("max1.bin"))).isEqualTo(CONTENT);
+
+            TransferBed.Collecting sink = new TransferBed.Collecting();
+            DownloadRequest downloadRequest = new DownloadRequest(target, new PosixRemotePath("/max1.bin"), new FileAccess.Elevated(SUDO),
+                new PathPolicyBinding.NoRootPolicy(), TransferLimits.defaults());
+            DownloadResult downloaded = pooledTransfer.download(downloadRequest, sink, AdapterFixture.control());
+
+            assertThat(downloaded).isEqualTo(new DownloadResult.Fetched(CONTENT.length, digester.digest(CONTENT)));
+            assertThat(sink.bytes()).isEqualTo(CONTENT);
+            assertThat(pooledServer.acceptedConnections().size()).as("both elevated transfers reused the single pooled session").isEqualTo(1);
+        } finally {
+            scheduler.shutdown();
+        }
+    }
+
+    @Test
+    @DisplayName("Three consecutive SFTP channel-open refusals signal openRejected() to SshSessionPool and evict the pooled session")
+    void threeConsecutiveSftpChannelOpenRefusalsEvictThePooledSession() throws IOException {
+        Files.write(root.resolve("probe.txt"), CONTENT);
+        SshSettings defaults = AdapterFixture.defaultSettings();
+        SshSettings settings = new SshSettings(defaults.connectTimeout(), defaults.heartbeatInterval(), defaults.heartbeatNoReplyMax(), defaults.idleProbeAfter(),
+            defaults.execReplyTimeout(), defaults.channelPermits(), 3, defaults.hostKeyMode(), defaults.knownHosts());
+        ThreadPoolTaskScheduler scheduler = new ThreadPoolTaskScheduler();
+        scheduler.setDaemon(true);
+        scheduler.initialize();
+        try (EmbeddedSshServer pooledServer = EmbeddedSshServer.builder()
+                .password(TestSessions.USER, TestSessions.PASSWORD)
+                .sftp(root)
+                .start();
+             AdapterFixture fixture = AdapterFixture.start(settings)) {
+            fixture.profiles().put("writer", AdapterFixture.profileFor(pooledServer, TestSessions.USER));
+            fixture.credentials().password("writer", TestSessions.PASSWORD);
+            MinaRemoteFileTransfer pooledTransfer = pooledTransfer(fixture, scheduler);
+            RemoteTarget target = new RemoteTarget(new TargetId("files"), TargetRevision.of("a".repeat(64)), new ProfileAlias("writer"), AccessMode.READ_WRITE);
+            DownloadRequest plainDownload = new DownloadRequest(target, new PosixRemotePath("/probe.txt"), new FileAccess.Direct(),
+                new PathPolicyBinding.NoRootPolicy(), TransferLimits.defaults());
+
+            assertThat(pooledTransfer.download(plainDownload, new TransferBed.Collecting(), AdapterFixture.control()))
+                .isInstanceOf(DownloadResult.Fetched.class);
+            assertThat(pooledServer.acceptedConnections().size()).isEqualTo(1);
+
+            pooledServer.refuseNewChannels(true);
+            for (int i = 0; i < 3; i++) {
+                assertThat(pooledTransfer.download(plainDownload, new TransferBed.Collecting(), AdapterFixture.control()))
+                    .isEqualTo(new DownloadResult.Failed(TransferFailureCause.CHANNEL_OPEN_FAILED));
+            }
+            pooledServer.refuseNewChannels(false);
+
+            TransferBed.Collecting sink = new TransferBed.Collecting();
+            assertThat(pooledTransfer.download(plainDownload, sink, AdapterFixture.control()))
+                .isInstanceOf(DownloadResult.Fetched.class);
+            assertThat(sink.bytes()).isEqualTo(CONTENT);
+            assertThat(pooledServer.acceptedConnections().size())
+                .as("three consecutive SFTP channel-open refusals evicted the old session and opened a fresh connection")
+                .isEqualTo(2);
+        } finally {
+            scheduler.shutdown();
+        }
+    }
+
+    private static MinaRemoteFileTransfer pooledTransfer(AdapterFixture fixture, ThreadPoolTaskScheduler scheduler) {
+        SftpChannels channels = new SftpChannels();
+        SftpFailureClassifier classifier = new SftpFailureClassifier();
+        RemotePathChecker checker = new RemotePathChecker((target, path) -> new PathPolicyDecision.NotApplicable(), classifier);
+        AtomicReplacer replacer = new AtomicReplacer(checker, classifier, new SecureRandom(), Clock.systemUTC());
+        SftpUploader uploader = new SftpUploader(checker, replacer, classifier, channels, new SpaceProbe());
+        SftpDownloader downloader = new SftpDownloader(checker, classifier, channels);
+        TargetSource noTargets = id -> new TargetLookup.NotRegistered(id);
+        ElevationProbe probe = new ElevationProbe(ScriptedExecutor.everythingSucceeds(), noTargets);
+        SudoSftpChannels sudoChannels = new SudoSftpChannels(channels, classifier,
+            target -> List.of(new SftpServerPath(TransferBed.EMPTY_PLACE), new SftpServerPath(TransferBed.SUDO_SERVER)));
+        return new MinaRemoteFileTransfer(new PoolSessionSource(fixture.pool()), channels, checker, uploader, downloader, classifier, sudoChannels, probe, scheduler,
+            Clock.systemUTC(), List.of());
     }
 }

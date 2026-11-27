@@ -12,6 +12,8 @@ import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.task.TaskExecutor;
 
 /**
@@ -28,6 +30,7 @@ import org.springframework.core.task.TaskExecutor;
  */
 final class OutputPump {
 
+    private static final Logger LOG = LoggerFactory.getLogger(OutputPump.class);
     private static final int FRAME_BYTES = 8192;
 
     private final StreamKind kind;
@@ -38,6 +41,7 @@ final class OutputPump {
     private final AtomicLong received = new AtomicLong();
     private final AtomicLong retained = new AtomicLong();
     private final AtomicBoolean sinkFailed = new AtomicBoolean();
+    private final AtomicBoolean readFailed = new AtomicBoolean();
 
     OutputPump(StreamKind kind, InputStream stream, OutputSink sink, long cap) {
         this.kind = kind;
@@ -51,6 +55,9 @@ final class OutputPump {
         try {
             executor.execute(this::pump);
         } catch (RuntimeException e) {
+            // The stream is never read: the output is not there, and the capture says so instead of looking like a stream that was empty (defect SSH_PORTAL-D-0053).
+            readFailed.set(true);
+            LOG.warn("The executor refused to read the {} stream of a channel; its output is lost", kind, e);
             done.complete(null);
         }
         return done;
@@ -64,6 +71,11 @@ final class OutputPump {
     /** True when the sink lost a frame. */
     boolean sinkFailed() {
         return sinkFailed.get();
+    }
+
+    /** True when reading the stream failed before its end: the bytes that arrived are all there is, and the output is not complete (a normal end is not a failure). */
+    boolean readFailed() {
+        return readFailed.get();
     }
 
     /** What was captured so far: the bytes received, the bytes the sink took, and whether the cap cut the stream. */
@@ -87,7 +99,10 @@ final class OutputPump {
                 }
             }
         } catch (IOException e) {
-            // The channel ended abnormally: what was read is what there is; the supervisor decides what the end means.
+            // The channel ended abnormally: what was read is what there is, and the capture says that the stream was not read to its end (defect SSH_PORTAL-D-0053); the
+            // supervisor decides what the end of the execution means.
+            readFailed.set(true);
+            LOG.debug("The {} stream of a channel ended with an I/O failure after {} bytes", kind, received.get(), e);
         } finally {
             done.complete(null);
         }

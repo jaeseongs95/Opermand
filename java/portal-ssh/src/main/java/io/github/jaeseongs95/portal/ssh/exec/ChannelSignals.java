@@ -1,5 +1,7 @@
 package io.github.jaeseongs95.portal.ssh.exec;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import io.github.jaeseongs95.portal.domain.operation.SignalDelivery;
 import java.io.IOException;
 import org.apache.sshd.client.channel.ClientChannel;
@@ -15,6 +17,8 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public final class ChannelSignals {
+
+    private static final Logger LOG = LoggerFactory.getLogger(ChannelSignals.class);
 
     static final String INTERRUPT = "INT";
     static final String TERMINATE = "TERM";
@@ -38,6 +42,7 @@ public final class ChannelSignals {
             session.writePacket(buffer);
             return SignalDelivery.REQUESTED;
         } catch (IOException | RuntimeException e) {
+            LOG.debug("A signal could not be sent on the channel; the delivery is reported as unsupported", e);
             return SignalDelivery.UNSUPPORTED;
         }
     }

@@ -19,6 +19,7 @@ import io.github.jaeseongs95.portal.app.remote.TransferLimits;
 import io.github.jaeseongs95.portal.app.remote.UnsupportedReason;
 import io.github.jaeseongs95.portal.app.remote.UploadRequest;
 import io.github.jaeseongs95.portal.app.remote.UploadResult;
+import io.github.jaeseongs95.portal.ssh.profile.TestFiles;
 import io.github.jaeseongs95.portal.domain.error.TransferErrorCode;
 import io.github.jaeseongs95.portal.domain.id.Sha256Digester;
 import io.github.jaeseongs95.portal.domain.operation.CleanupState;
@@ -214,13 +215,67 @@ class PolicyAndPermissionTest {
 
         PermissionResult result = testBed.transfer().applyPermissions(permission("/a.bin", 0640, new PermissionSupport.Supported()), testBed.control());
 
-        if (Files.getFileStore(root).supportsFileAttributeView(PosixFileAttributeView.class)) {
+        if (TestFiles.hasAbility("posix", Files.getFileStore(root).supportsFileAttributeView(PosixFileAttributeView.class))) {
             assertThat(result).isEqualTo(new PermissionResult.Applied());
             assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(file))).isEqualTo("rw-r-----");
         } else {
             // NTFS on the developer's PC has no POSIX modes; the adapter does not claim a change it could not read back.
             assertThat(result).isEqualTo(new PermissionResult.Refused(TransferErrorCode.INVALID_REQUEST, new FileDiagnostic.None()));
         }
+    }
+
+    @Test
+    @DisplayName("SSH_PORTAL-D-0085 a cancel that comes while the mode is being changed does not close the channel half way: the live session is kept and the result is not a lost transport")
+    void aCancelDuringTheModeChangeKeepsTheSession() throws IOException {
+        CancelSource cancel = new CancelSource();
+        TransferBed testBed = startWithFault(client -> new SftpDoubles().runningWhenTheModeIsChanged(client, cancel::cancel));
+        Path file = root.resolve("a.bin");
+        Files.write(file, CONTENT);
+
+        PermissionResult result = testBed.transfer().applyPermissions(permission("/a.bin", 0640, new PermissionSupport.Supported()), testBed.control(cancel));
+
+        assertThat(result).as("the change is one request that runs to its end: %s", result).isIn(new PermissionResult.Applied(),
+            new PermissionResult.Refused(TransferErrorCode.INVALID_REQUEST, new FileDiagnostic.None()));
+        assertThat(testBed.sessions().discards()).as("the connection is fine; the session is kept").isZero();
+    }
+
+    @Test
+    @DisplayName("SSH_PORTAL-D-0085 a cancel that came before the change was sent sends nothing: NotDispatched(CANCELLED)")
+    void aCancelBeforeTheModeChangeSendsNothing() throws IOException {
+        CancelSource cancel = new CancelSource();
+        TransferBed testBed = startWith((target, path) -> new PathPolicyDecision.NotApplicable());
+        Path file = root.resolve("a.bin");
+        Files.write(file, CONTENT);
+        cancel.cancel();
+
+        PermissionResult result = testBed.transfer().applyPermissions(permission("/a.bin", 0640, new PermissionSupport.Supported()), testBed.control(cancel));
+
+        assertThat(result).isEqualTo(new PermissionResult.NotDispatched(TransferFailureCause.CANCELLED));
+    }
+
+    @Test
+    @DisplayName("SSH_PORTAL-D-0086 a mode that was set and cannot be read back because the file is gone is FILE_NOT_FOUND, answered by a live server: the session is kept")
+    void aFileThatVanishedAfterTheModeWasSet() throws IOException {
+        TransferBed testBed = startWithFault(client -> new SftpDoubles().refusingToLookAfterTheModeIsSet(client, org.apache.sshd.sftp.common.SftpConstants.SSH_FX_NO_SUCH_FILE));
+        Files.write(root.resolve("a.bin"), CONTENT);
+
+        PermissionResult result = testBed.transfer().applyPermissions(permission("/a.bin", 0640, new PermissionSupport.Supported()), testBed.control());
+
+        assertThat(result).isInstanceOf(PermissionResult.Refused.class);
+        assertThat(((PermissionResult.Refused) result).code()).isEqualTo(TransferErrorCode.FILE_NOT_FOUND);
+        assertThat(testBed.sessions().discards()).as("a status of a live server is not a lost connection").isZero();
+    }
+
+    @Test
+    @DisplayName("SSH_PORTAL-D-0086 any other answer to the read-back look is unconfirmed, and the live session is kept (it used to be discarded as a lost connection)")
+    void aRefusedReadBackKeepsTheSession() throws IOException {
+        TransferBed testBed = startWithFault(client -> new SftpDoubles().refusingToLookAfterTheModeIsSet(client, org.apache.sshd.sftp.common.SftpConstants.SSH_FX_PERMISSION_DENIED));
+        Files.write(root.resolve("a.bin"), CONTENT);
+
+        PermissionResult result = testBed.transfer().applyPermissions(permission("/a.bin", 0640, new PermissionSupport.Supported()), testBed.control());
+
+        assertThat(result).isInstanceOf(PermissionResult.Unconfirmed.class);
+        assertThat(testBed.sessions().discards()).isZero();
     }
 
     private TransferBed startWithFault(UnaryOperator<SftpClient> fault) throws IOException {
@@ -259,7 +314,7 @@ class PolicyAndPermissionTest {
 
     /** The POSIX permissions of the file, or {@code null} on a file system that has none (the test then compares {@code null} with {@code null}). */
     private static Set<PosixFilePermission> posixPermissionsOrNull(Path file) throws IOException {
-        return Files.getFileStore(file).supportsFileAttributeView(PosixFileAttributeView.class) ? Files.getPosixFilePermissions(file) : null;
+        return TestFiles.hasAbility("posix", Files.getFileStore(file).supportsFileAttributeView(PosixFileAttributeView.class)) ? Files.getPosixFilePermissions(file) : null;
     }
 
     @Test

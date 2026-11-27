@@ -38,7 +38,7 @@ import org.springframework.stereotype.Component;
 public final class ExecOutcomes {
 
     /** What the supervisor knows when a dispatched execution ends. */
-    record Facts(ExitStatus exit, StopReason stop, boolean channelClosed, boolean outputDrained, SignalDelivery signals, StreamCapture stdout, StreamCapture stderr,
+    record Facts(ExitStatus exit, StopReason stop, boolean channelClosed, boolean outputDrained, boolean outputReadFailed, SignalDelivery signals, StreamCapture stdout, StreamCapture stderr,
                  boolean captureFailed, Duration deadline, boolean sessionLost) {
     }
 
@@ -109,6 +109,9 @@ public final class ExecOutcomes {
         }
         if (facts.captureFailed()) {
             texts.add("The output could not be stored completely.");
+        }
+        if (facts.outputReadFailed()) {
+            texts.add("The output was not read to its end.");
         }
         return new ExecutionOutcome(reason, remote, facts.exit(), facts.signals(), cleanup, reconciliation, outputState, facts.captureFailed() ? CaptureState.FAILED : CaptureState.OK,
             timeout, facts.stdout(), facts.stderr(), failure, flag, texts, evidence);

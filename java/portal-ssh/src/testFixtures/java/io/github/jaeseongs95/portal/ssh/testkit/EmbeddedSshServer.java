@@ -15,11 +15,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import org.apache.sshd.common.SshConstants;
 import org.apache.sshd.common.channel.Channel;
+import org.apache.sshd.common.channel.ChannelFactory;
 import org.apache.sshd.common.channel.ChannelListener;
 import org.apache.sshd.common.channel.RequestHandler;
 import org.apache.sshd.common.config.keys.KeyUtils;
@@ -35,6 +40,7 @@ import org.apache.sshd.server.SshServer;
 import org.apache.sshd.server.forward.AgentForwardingFilter;
 import org.apache.sshd.server.forward.ForwardingFilter;
 import org.apache.sshd.server.forward.TcpForwardingFilter;
+import org.apache.sshd.server.forward.TcpipServerChannel;
 import org.apache.sshd.server.forward.X11ForwardingFilter;
 import org.apache.sshd.sftp.SftpModuleProperties;
 import org.apache.sshd.sftp.common.extensions.openssh.PosixRenameExtensionParser;
@@ -59,6 +65,8 @@ public final class EmbeddedSshServer implements AutoCloseable {
     public static final String HOST = "127.0.0.1";
 
     private static final Duration DROP_LIMIT = Duration.ofSeconds(10);
+    /** How long a held channel open waits for its release before it fails, so a test that forgot to release it does not hang the server for ever. */
+    private static final Duration HOLD_LIMIT = Duration.ofSeconds(60);
 
     private final SshServer server;
     private final KeyPair hostKey;
@@ -74,8 +82,39 @@ public final class EmbeddedSshServer implements AutoCloseable {
     private final EventLog<AuthAttempt> authAttempts = new EventLog<>();
     private final EventLog<SshdSocketAddress> forwardRequests = new EventLog<>();
     private final EventLog<String> acceptedConnections = new EventLog<>();
+    private final EventLog<String> channelOpenRequests = new EventLog<>();
+    private final EventLog<String> closedChannels = new EventLog<>();
+    private volatile CompletableFuture<Void> channelOpenGate = CompletableFuture.completedFuture(null);
     private volatile boolean swallowKeepAlives;
     private volatile boolean refuseChannels;
+
+    /** A channel factory of MINA with a record of the request and the hold of {@link #holdChannelOpens()} in front of it. */
+    private final class GatedChannelFactory implements ChannelFactory {
+        private final ChannelFactory inner;
+
+        GatedChannelFactory(ChannelFactory inner) {
+            this.inner = inner;
+        }
+
+        @Override
+        public String getName() {
+            return inner.getName();
+        }
+
+        @Override
+        public Channel createChannel(Session session) throws IOException {
+            channelOpenRequests.add(inner.getName());
+            try {
+                channelOpenGate.get(HOLD_LIMIT.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("the test server was interrupted while a channel open was held", e);
+            } catch (ExecutionException | TimeoutException e) {
+                throw new IOException("a held channel open of the test server was never released", e);
+            }
+            return inner.createChannel(session);
+        }
+    }
 
     private EmbeddedSshServer(Builder builder) {
         this.hostKey = builder.hostKey != null ? builder.hostKey : newKeyPair();
@@ -135,8 +174,12 @@ public final class EmbeddedSshServer implements AutoCloseable {
             @Override
             public void channelClosed(Channel channel, Throwable reason) {
                 openChannels.remove(channel);
+                closedChannels.add(channel.getClass().getSimpleName());
             }
         });
+        // Every request to open a channel is recorded, and can be held (holdChannelOpens): the server thread of the session waits before it creates the channel, so the
+        // client's open stays unanswered for as long as the test wants and nothing is sent to the client meanwhile.
+        server.setChannelFactories(ServerBuilder.DEFAULT_CHANNEL_FACTORIES.stream().<ChannelFactory>map(GatedChannelFactory::new).toList());
         server.setForwardingFilter(ForwardingFilter.asForwardingFilter(AgentForwardingFilter.of(false), X11ForwardingFilter.of(false), new TcpForwardingFilter() {
             @Override
             public boolean canListen(SshdSocketAddress address, Session session) {
@@ -258,6 +301,33 @@ public final class EmbeddedSshServer implements AutoCloseable {
     /** The target of every direct-tcpip channel a client asked this server to open (allowed or not). */
     public EventLog<SshdSocketAddress> forwardRequests() {
         return forwardRequests;
+    }
+
+    /** One entry (the channel type, {@code session} or {@code direct-tcpip}) for every request to open a channel, recorded when the server gets it, before any hold. */
+    public EventLog<String> channelOpenRequests() {
+        return channelOpenRequests;
+    }
+
+    /** One entry (the simple class name of the server's channel) for every channel that was closed on the server, in order. */
+    public EventLog<String> closedChannels() {
+        return closedChannels;
+    }
+
+    /** The number of {@code direct-tcpip} channels (the server's connections to a target of a forward) that are open on the server right now. */
+    public int openForwardChannelCount() {
+        return (int) openChannels.stream().filter(channel -> channel instanceof TcpipServerChannel).count();
+    }
+
+    /**
+     * From now on the server leaves every request to open a channel unanswered until the returned future is completed (the test completes it; if it never does, the request
+     * fails after {@code HOLD_LIMIT}). Requests that arrive while it is held wait on the server thread of their session, so nothing else of that session is read either.
+     *
+     * @return the switch to release the held opens, and every later one
+     */
+    public CompletableFuture<Void> holdChannelOpens() {
+        CompletableFuture<Void> gate = new CompletableFuture<>();
+        this.channelOpenGate = gate;
+        return gate;
     }
 
     /** One entry (the client's address) for every TCP connection the server accepted, in order: the count is the number of connections a client made. */

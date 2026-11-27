@@ -52,7 +52,6 @@ public final class PythonSourceReceiver {
     private static final int MAX_POSIX_COMMAND_LINE_CHARS = 2000;
     private static final int MAX_WINDOWS_COMMAND_LINE_CHARS = 8000;
 
-    private static final String POSIX_INTERPRETER = "/usr/bin/python3";
     private static final List<String> START_FLAGS = List.of("-I", "-B", "-S", "-X", "utf8", "-c");
     private static final String WINDOWS_COMMAND_PREFIX = "powershell.exe -NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -Command \"";
 
@@ -74,19 +73,36 @@ public final class PythonSourceReceiver {
     }
 
     /**
-     * The command of a source run on a POSIX target (2.x buildPythonSource): {@code [sudo -n --] /usr/bin/python3 -I -B -S -X utf8 -c <receiver> <length> <sha256>
+     * The command of a source run on a POSIX target with the interpreter 2.x used, {@link PosixPythonExecutable#DEFAULT}; see
+     * {@link #prepareLinux(SourceText, SourceArguments, String, PosixPythonExecutable, boolean)}.
+     *
+     * @param source the source text
+     * @param args the arguments
+     * @param cwd the working directory
+     * @param elevate whether {@code sudo -n --} goes first
+     * @return the command with the kind {@link CommandKind#SOURCE}
+     * @throws RequestRefusedException as the other overload
+     */
+    public PreparedCommand prepareLinux(SourceText source, SourceArguments args, String cwd, boolean elevate) {
+        return prepareLinux(source, args, cwd, PosixPythonExecutable.DEFAULT, elevate);
+    }
+
+    /**
+     * The command of a source run on a POSIX target (2.x buildPythonSource): {@code [sudo -n --] <interpreter> -I -B -S -X utf8 -c <receiver> <length> <sha256>
      * <cwd> <arguments...>}, every word in single quotes. The standard input is the UTF-8 bytes of the source.
      *
      * @param source the source text
      * @param args the arguments, at most 16, each at most 512 UTF-8 bytes without CR, LF or NUL, together at most 4096 bytes as JSON
      * @param cwd the working directory: absolute (starts with {@code /}), at most 512 UTF-8 bytes, no control character
+     * @param interpreter the absolute path of the Python interpreter on the target (the counterpart of the Windows target's configured one)
      * @param elevate whether {@code sudo -n --} goes first
      * @return the command with the kind {@link CommandKind#SOURCE}
      * @throws RequestRefusedException {@link RequestErrorCode#INVALID_OPERATION_INPUT} for a bad argument or directory, or a command longer than 2000 characters
      */
-    public PreparedCommand prepareLinux(SourceText source, SourceArguments args, String cwd, boolean elevate) {
+    public PreparedCommand prepareLinux(SourceText source, SourceArguments args, String cwd, PosixPythonExecutable interpreter, boolean elevate) {
         Objects.requireNonNull(source, "source");
         Objects.requireNonNull(cwd, "cwd");
+        Objects.requireNonNull(interpreter, "interpreter");
         List<String> arguments = checkedArguments(args);
         requirePosixDirectory(cwd);
         byte[] bytes = source.value().getBytes(StandardCharsets.UTF_8);
@@ -94,7 +110,7 @@ public final class PythonSourceReceiver {
         if (elevate) {
             words.addAll(List.of("sudo", "-n", "--"));
         }
-        words.add(POSIX_INTERPRETER);
+        words.add(interpreter.value());
         words.addAll(START_FLAGS);
         words.add(scripts.text(RemoteScript.PYTHON_RECEIVER_POSIX));
         words.add(Integer.toString(bytes.length));

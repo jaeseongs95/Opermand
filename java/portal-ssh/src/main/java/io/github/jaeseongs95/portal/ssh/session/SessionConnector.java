@@ -1,5 +1,7 @@
 package io.github.jaeseongs95.portal.ssh.session;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import io.github.jaeseongs95.portal.app.remote.SshSettings;
 import io.github.jaeseongs95.portal.domain.target.ProfileAlias;
 import io.github.jaeseongs95.portal.ssh.hostkey.ServerKeyPolicy;
@@ -21,6 +23,8 @@ import org.springframework.stereotype.Component;
  */
 @Component
 public final class SessionConnector {
+
+    private static final Logger LOG = LoggerFactory.getLogger(SessionConnector.class);
 
     private final ProxyJumpResolver resolver;
     private final MinaClientFactory clients;
@@ -52,7 +56,7 @@ public final class SessionConnector {
             @Override
             public void sessionEvent(Session session, SessionListener.Event event) {
                 if (event == SessionListener.Event.Authenticated) {
-                    attempt.authenticated(routing.find(session));
+                    routing.find(session).ifPresent(attempt::authenticated);
                 }
             }
         });
@@ -68,6 +72,7 @@ public final class SessionConnector {
             session.auth().verify(settings.connectTimeout());
             return new ConnectOutcome.Connected(client, session, hops);
         } catch (IOException | RuntimeException e) {
+            LOG.debug("A connection could not be made; the diagnosis of the attempt is the result", e);
             client.stop();
             return new ConnectOutcome.Failed(attempt.diagnose(hops));
         }

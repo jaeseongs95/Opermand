@@ -10,7 +10,11 @@ import org.junit.jupiter.api.Test;
 
 import io.github.jaeseongs95.portal.domain.id.Digest;
 import io.github.jaeseongs95.portal.domain.id.TargetId;
+import io.github.jaeseongs95.portal.domain.operation.CleanupState;
+import io.github.jaeseongs95.portal.domain.operation.ExecutionReason;
+import io.github.jaeseongs95.portal.domain.operation.ExitStatus;
 import io.github.jaeseongs95.portal.domain.operation.OverwriteMode;
+import io.github.jaeseongs95.portal.domain.operation.RemoteState;
 import io.github.jaeseongs95.portal.domain.operation.UploadInput;
 import io.github.jaeseongs95.portal.domain.path.PathSyntax;
 import io.github.jaeseongs95.portal.domain.path.RemotePath;
@@ -144,6 +148,21 @@ class RemoteValuesTest {
     }
 
     @Test
+    @DisplayName("RC-A-817 RC-A-828 a stream's end is EXITED exactly when an exit was seen, and the close of a channel alone never makes the cleanup complete")
+    void streamEndHoldsTheEvidenceRule() {
+        assertThat(new StreamEnd(ExecutionReason.EXIT, RemoteState.EXITED, new ExitStatus.Exited(0), CleanupState.COMPLETE).cleanup()).isEqualTo(CleanupState.COMPLETE);
+        assertThat(new StreamEnd(ExecutionReason.CANCEL, RemoteState.UNKNOWN, new ExitStatus.NoExit(), CleanupState.INCOMPLETE).remoteState()).isEqualTo(RemoteState.UNKNOWN);
+        assertThat(new StreamEnd(ExecutionReason.TRANSPORT_LOST, RemoteState.UNKNOWN, new ExitStatus.NoExit(), CleanupState.COMPLETE).reason())
+            .isEqualTo(ExecutionReason.TRANSPORT_LOST);
+        assertThatThrownBy(() -> new StreamEnd(ExecutionReason.CANCEL, RemoteState.UNKNOWN, new ExitStatus.NoExit(), CleanupState.COMPLETE))
+            .as("a close without an exit and with the session alive proves nothing").isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new StreamEnd(ExecutionReason.CANCEL, RemoteState.EXITED, new ExitStatus.NoExit(), CleanupState.INCOMPLETE)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new StreamEnd(ExecutionReason.CANCEL, RemoteState.UNKNOWN, new ExitStatus.Exited(1), CleanupState.INCOMPLETE)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new StreamEnd(ExecutionReason.EXIT, RemoteState.UNKNOWN, new ExitStatus.NoExit(), CleanupState.INCOMPLETE)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new StreamEnd(ExecutionReason.DEADLINE, RemoteState.EXITED, new ExitStatus.Exited(0), CleanupState.COMPLETE)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
     @DisplayName("S3-SF-15 a path policy binding says whether a target has a root rule and in which syntax; a decision names the root it enforces")
     void pathPolicyValues() {
         assertThat(new PathPolicyBinding.RootPolicy(PathSyntax.WINDOWS).syntax()).isEqualTo(PathSyntax.WINDOWS);
@@ -160,6 +179,7 @@ class RemoteValuesTest {
         assertThat(execution.target().access()).isEqualTo(AccessMode.READ_WRITE);
         assertThatThrownBy(() -> new RemoteExecution(TARGET, command, ExecutionLimits.defaults(), null)).isInstanceOf(NullPointerException.class);
         assertThatThrownBy(() -> new RemoteTarget(null, TARGET.revision(), TARGET.profile(), AccessMode.READ_ONLY)).isInstanceOf(NullPointerException.class);
-        assertThatThrownBy(() -> new ForwardRequest(TARGET, "example.invalid", 0)).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new ForwardRequest(TARGET, "example.invalid", 0, ExecutionLimits.defaults())).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new ForwardRequest(TARGET, "example.invalid", 3389, null)).isInstanceOf(NullPointerException.class);
     }
 }

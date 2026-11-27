@@ -19,6 +19,8 @@ import org.apache.sshd.sftp.client.extensions.openssh.OpenSSHFsyncExtension;
 import org.apache.sshd.sftp.client.extensions.openssh.OpenSSHPosixRenameExtension;
 import org.apache.sshd.sftp.common.extensions.openssh.FsyncExtensionParser;
 import org.apache.sshd.sftp.common.extensions.openssh.PosixRenameExtensionParser;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 /**
@@ -55,6 +57,7 @@ import org.springframework.stereotype.Component;
 @Component
 public class AtomicReplacer {
 
+    private static final Logger LOG = LoggerFactory.getLogger(AtomicReplacer.class);
     private static final String TEMP_PREFIX = ".ssh-approval-";
     private static final String BACKUP_PREFIX = ".ssh-approval-bak-";
     private static final String TEMP_SUFFIX = ".part";
@@ -249,13 +252,34 @@ public class AtomicReplacer {
         } catch (IOException e) {
             return confirmationFailed(e);
         }
-        try (SftpClient.CloseableHandle handle = client.open(file, EnumSet.of(SftpClient.OpenMode.Read))) {
+        SftpClient.CloseableHandle handle;
+        try {
+            handle = client.open(file, EnumSet.of(SftpClient.OpenMode.Read));
+        } catch (IOException e) {
+            return confirmationFailed(e);
+        }
+        try {
             if (client.stat(handle).getSize() != job.expectedSize()) {
                 return new Confirmation.Failed(TransferErrorCode.FILE_CHANGED, new FileDiagnostic.None());
             }
             return new Confirmation.Confirmed(flush(client, handle));
         } catch (IOException e) {
             return confirmationFailed(e);
+        } finally {
+            closeAfterConfirming(handle);
+        }
+    }
+
+    /**
+     * The close of the read handle comes after the answer: a replacement that was read back and confirmed stays confirmed when the handle cannot be closed (defect
+     * SSH_PORTAL-D-0067; the close failure used to make the confirmation fail and the undo then took a published file back). The failure is logged with its cause; a handle
+     * that stays open goes with the channel.
+     */
+    private void closeAfterConfirming(SftpClient.CloseableHandle handle) {
+        try {
+            handle.close();
+        } catch (IOException e) {
+            LOG.warn("The handle that read the replacement back could not be closed; the replacement stays confirmed", e);
         }
     }
 
@@ -267,6 +291,7 @@ public class AtomicReplacer {
             client.getExtension(OpenSSHFsyncExtension.class).fsync(handle);
             return Durability.FLUSHED;
         } catch (IOException e) {
+            LOG.debug("The flush of the replaced file failed", e);
             return Durability.FAILED;
         }
     }

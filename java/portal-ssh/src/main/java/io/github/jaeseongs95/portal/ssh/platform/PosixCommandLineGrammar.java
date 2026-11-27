@@ -36,20 +36,55 @@ import org.springframework.stereotype.Component;
 @Component
 public final class PosixCommandLineGrammar implements CommandLineGrammar {
 
-    /** The depth of nested wrappers ({@code sudo}, {@code sh -c}) and substitutions a line may have (2.x command-line.mjs). */
+    /** The depth of nested wrappers ({@code sudo}, {@code sh -c}, prefix wrappers) and substitutions a line may have. */
     private static final int MAX_NESTING = 16;
     /** Shell reserved words: a line that starts a command with one of them is compound syntax this grammar does not read. */
     private static final Set<String> RESERVED = Set.of("if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case", "esac", "function", "select",
         "time", "!", "{", "}");
+    /** Programs that escalate or switch user privileges (defect SSH_PORTAL-D-0071). */
+    private static final Set<String> PRIVILEGE_WRAPPERS = Set.of("sudo", "su", "doas", "runuser", "pkexec");
+    /** Prefix wrappers whose inner command must be unwrapped recursively so privilege wrappers and denied commands cannot hide behind them (SSH_PORTAL-D-0071). */
+    private static final Set<String> PREFIX_WRAPPERS = Set.of("env", "timeout", "nice", "ionice", "stdbuf", "nohup", "setsid", "command", "builtin", "exec");
+    /** Command-launching wrappers whose inner invocation cannot be statically bounded: always INCOMPLETE, while scanning literal arguments for privilege wrappers. */
+    private static final Set<String> OPAQUE_WRAPPERS = Set.of("xargs", "parallel", "watch", "strace", "ltrace", "chrt", "taskset", "eval", "source", ".", "nsenter",
+        "chroot", "unshare", "flock", "script");
     private static final Set<String> SUDO_PLAIN_FLAGS = Set.of("-n", "--non-interactive", "-H", "-E", "--preserve-env", "-S", "-k");
     /** The sudo flags that take the next word as their value. */
     private static final Set<String> SUDO_VALUE_FLAGS = Set.of("-u", "--user", "-g", "--group", "-h", "--host", "-p", "--prompt", "-C", "-T", "-R", "-D");
     /** The sudo flags that only ask for information; they are accepted when nothing follows them. */
     private static final Set<String> SUDO_INFO_FLAGS = Set.of("-l", "--list", "-v", "--validate", "-V", "--version", "--help");
+    private static final Set<String> DOAS_PLAIN_FLAGS = Set.of("-n", "-s", "-L");
+    private static final Set<String> DOAS_VALUE_FLAGS = Set.of("-u", "-C");
+    private static final Set<String> PKEXEC_PLAIN_FLAGS = Set.of("--keep-cwd", "--disable-internal-agent");
+    private static final Set<String> ENV_PLAIN_FLAGS = Set.of("-i", "-0", "--ignore-environment", "--null", "-v", "--debug");
+    private static final Set<String> ENV_VALUE_FLAGS = Set.of("-u", "--unset", "-C", "--chdir");
+    private static final Set<String> TIMEOUT_PLAIN_FLAGS = Set.of("--preserve-status", "--foreground", "-v", "--verbose");
+    private static final Set<String> TIMEOUT_VALUE_FLAGS = Set.of("-k", "--kill-after", "-s", "--signal");
+    private static final Set<String> IONICE_PLAIN_FLAGS = Set.of("-t", "--ignore");
+    private static final Set<String> IONICE_VALUE_FLAGS = Set.of("-c", "--class", "-n", "--classdata");
+    private static final Set<String> IONICE_PID_FLAGS = Set.of("-p", "-P", "-u");
+    private static final Set<String> STDBUF_VALUE_FLAGS = Set.of("-i", "--input", "-o", "--output", "-e", "--error");
+    private static final Set<String> SETSID_PLAIN_FLAGS = Set.of("-c", "--ctty", "-f", "--fork", "-w", "--wait");
     private static final Set<String> SHELLS = Set.of("sh", "bash", "dash", "zsh");
     private static final Set<String> SHELL_PLAIN_FLAGS = Set.of("--noprofile", "--norc", "--posix", "--restricted");
+    private static final Set<String> AWK_NAMES = Set.of("awk", "gawk", "mawk", "nawk");
+    private static final Set<String> FIND_EXEC_FLAGS = Set.of("-exec", "-execdir", "-ok", "-okdir");
+    private static final Set<String> FIND_MUTATING_FLAGS = Set.of("-delete", "-fprint", "-fprint0", "-fprintf", "-fls");
+    private static final Set<String> TAR_UNSAFE_FLAGS = Set.of("--to-command", "--checkpoint-action", "--use-compress-program", "-I", "--rsh-command");
+    private static final Set<String> GIT_UNSAFE_FLAGS = Set.of("-c", "--config-env", "--exec-path", "--upload-pack", "--receive-pack");
+    private static final Set<String> CURL_UNSAFE_FLAGS = Set.of("-o", "--output", "-O", "--remote-name", "--remote-name-all", "-T", "--upload-file", "-d", "--data",
+        "--data-raw", "--data-binary", "--data-urlencode", "-F", "--form", "-X", "--request", "-K", "--config", "-D", "--dump-header", "-c", "--cookie-jar",
+        "--trace", "--trace-ascii");
+    private static final Set<String> WGET_UNSAFE_FLAGS = Set.of("-O", "--output-document", "-P", "--directory-prefix", "--post-data", "--post-file", "--method",
+        "-i", "--input-file", "--config");
+    private static final Set<String> SORT_UNSAFE_FLAGS = Set.of("-o", "--output", "--compress-program");
+    private static final Set<String> RSYNC_UNSAFE_FLAGS = Set.of("-e", "--rsh", "--rsync-path");
     /** The text of a program name that is written literally (the 2.x character class; the policy name adds its own 80-character limit). */
     private static final Pattern PROGRAM_NAME = Pattern.compile("[A-Za-z0-9_][A-Za-z0-9_.+-]*");
+    private static final Pattern ENV_ASSIGNMENT = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*=.*");
+    private static final Pattern NICE_SHORT_ADJUSTMENT = Pattern.compile("-[0-9]+");
+    private static final Pattern STDBUF_SHORT_COMBINED = Pattern.compile("-[ioe](?:[0-9]+[KMGTP]?|L)");
+    private static final Pattern SED_IN_PLACE_SHORT = Pattern.compile("-[A-Za-z]*i[A-Za-z]*");
     /** The option letters of a shell, with at most one {@code c} (2.x command-line.mjs). */
     private static final Pattern SHELL_FLAG = Pattern.compile("[+-][abefhkmnprtuvxBCEHPTilrs]*c?[abefhkmnprtuvxBCEHPTilrs]*");
     private static final Pattern SUDO_ASSIGNED_OPTION = Pattern.compile("--(?:user|group|host|prompt|preserve-env)=");
@@ -115,6 +150,7 @@ public final class PosixCommandLineGrammar implements CommandLineGrammar {
         private final Set<String> names = new LinkedHashSet<>();
         private int index;
         private boolean usesSudo;
+        private boolean unsafeEffect;
 
         Reader(String source, int nesting) {
             this.source = source;
@@ -132,7 +168,7 @@ public final class PosixCommandLineGrammar implements CommandLineGrammar {
                 // The line is not one the grammar knows: the names found so far are kept and the answer is incomplete.
                 complete = false;
             }
-            return new Reading(List.copyOf(names), complete, usesSudo);
+            return new Reading(List.copyOf(names), complete && !unsafeEffect, usesSudo);
         }
 
         private boolean withinLimit() {
@@ -156,17 +192,548 @@ public final class PosixCommandLineGrammar implements CommandLineGrammar {
             }
             Word head = words.get(0);
             String headText = head.text();
-            usesSudo |= SUDO.equals(headText.substring(headText.lastIndexOf('/') + 1));
+            String baseName = basename(headText);
+            usesSudo |= PRIVILEGE_WRAPPERS.contains(baseName);
             if (head.dynamic() || !PROGRAM_NAME.matcher(headText).matches() || RESERVED.contains(headText)) {
+                scanForPrivilegeWrappers(words, 1);
                 throw new Unknown();
             }
             names.add(headText);
             if (SUDO.equals(headText)) {
                 sudo(words, depth);
+            } else if ("doas".equals(headText)) {
+                doas(words, depth);
+            } else if ("pkexec".equals(headText)) {
+                pkexec(words, depth);
+            } else if ("su".equals(headText) || "runuser".equals(headText)) {
+                usesSudo = true;
+                scanForPrivilegeWrappers(words, 1);
+                throw new Unknown();
             } else if (SHELLS.contains(headText)) {
                 shell(words, depth);
+            } else if (PREFIX_WRAPPERS.contains(headText)) {
+                prefixWrapper(headText, words, depth);
+            } else if (OPAQUE_WRAPPERS.contains(headText)) {
+                scanForPrivilegeWrappers(words, 1);
+                unsafeEffect = true;
+            } else {
+                checkDangerousFlags(headText, words);
             }
-            // Registered programs own their argument capabilities, including interpreters. Only literal nested shell syntax adds further shell names.
+        }
+
+        private static String basename(String word) {
+            return word.substring(word.lastIndexOf('/') + 1);
+        }
+
+        private void scanForPrivilegeWrappers(List<Word> words, int fromIndex) {
+            for (int i = fromIndex; i < words.size(); i++) {
+                if (containsPrivilegeWrapper(words.get(i).text())) {
+                    usesSudo = true;
+                    return;
+                }
+            }
+        }
+
+        private static boolean containsPrivilegeWrapper(String text) {
+            int length = text.length();
+            int start = 0;
+            while (start < length) {
+                while (start < length && isWrapperDelimiter(text.charAt(start))) {
+                    start++;
+                }
+                int end = start;
+                while (end < length && !isWrapperDelimiter(text.charAt(end))) {
+                    end++;
+                }
+                if (end > start && PRIVILEGE_WRAPPERS.contains(basename(text.substring(start, end)))) {
+                    return true;
+                }
+                start = end;
+            }
+            return false;
+        }
+
+        private static boolean isWrapperDelimiter(char c) {
+            return Character.isWhitespace(c) || c == ';' || c == '&' || c == '|' || c == '(' || c == ')' || c == '<' || c == '>' || c == '\'' || c == '"' || c == '`';
+        }
+
+        private void doas(List<Word> words, int depth) {
+            usesSudo = true;
+            int n = 1;
+            while (n < words.size() && words.get(n).text().startsWith("-")) {
+                if (words.get(n).dynamic()) {
+                    scanForPrivilegeWrappers(words, n);
+                    throw new Unknown();
+                }
+                String flag = words.get(n).text();
+                n++;
+                if ("--".equals(flag)) {
+                    break;
+                }
+                if (DOAS_PLAIN_FLAGS.contains(flag)) {
+                    continue;
+                }
+                if (DOAS_VALUE_FLAGS.contains(flag)) {
+                    if (n >= words.size() || words.get(n).dynamic()) {
+                        scanForPrivilegeWrappers(words, n);
+                        throw new Unknown();
+                    }
+                    n++;
+                    continue;
+                }
+                scanForPrivilegeWrappers(words, n);
+                throw new Unknown();
+            }
+            if (n == words.size()) {
+                throw new Unknown();
+            }
+            invocation(words.subList(n, words.size()), depth + 1);
+        }
+
+        private void pkexec(List<Word> words, int depth) {
+            usesSudo = true;
+            int n = 1;
+            while (n < words.size() && words.get(n).text().startsWith("-")) {
+                if (words.get(n).dynamic()) {
+                    scanForPrivilegeWrappers(words, n);
+                    throw new Unknown();
+                }
+                String flag = words.get(n).text();
+                n++;
+                if ("--".equals(flag)) {
+                    break;
+                }
+                if (PKEXEC_PLAIN_FLAGS.contains(flag) || flag.startsWith("--user=")) {
+                    continue;
+                }
+                if ("--user".equals(flag)) {
+                    if (n >= words.size() || words.get(n).dynamic()) {
+                        scanForPrivilegeWrappers(words, n);
+                        throw new Unknown();
+                    }
+                    n++;
+                    continue;
+                }
+                scanForPrivilegeWrappers(words, n);
+                throw new Unknown();
+            }
+            if (n == words.size()) {
+                throw new Unknown();
+            }
+            invocation(words.subList(n, words.size()), depth + 1);
+        }
+
+        private void prefixWrapper(String wrapper, List<Word> words, int depth) {
+            int n = 1;
+            switch (wrapper) {
+                case "env" -> {
+                    while (n < words.size()) {
+                        Word current = words.get(n);
+                        String text = current.text();
+                        if ("--".equals(text)) {
+                            n++;
+                            break;
+                        }
+                        if ("-".equals(text)) {
+                            n++;
+                            continue;
+                        }
+                        if (text.startsWith("-")) {
+                            if (current.dynamic()) {
+                                scanForPrivilegeWrappers(words, n);
+                                throw new Unknown();
+                            }
+                            if (ENV_PLAIN_FLAGS.contains(text) || text.startsWith("--unset=") || text.startsWith("--chdir=")) {
+                                n++;
+                                continue;
+                            }
+                            if (ENV_VALUE_FLAGS.contains(text)) {
+                                if (n + 1 >= words.size() || words.get(n + 1).dynamic()) {
+                                    scanForPrivilegeWrappers(words, n);
+                                    throw new Unknown();
+                                }
+                                n += 2;
+                                continue;
+                            }
+                            // Flags such as -S/--split-string or -P alter parsing/lookup and must fail closed.
+                            scanForPrivilegeWrappers(words, n);
+                            throw new Unknown();
+                        }
+                        if (ENV_ASSIGNMENT.matcher(text).matches()) {
+                            n++;
+                            continue;
+                        }
+                        break;
+                    }
+                    if (n >= words.size()) {
+                        return; // plain `env` printing environment variables
+                    }
+                }
+                case "timeout" -> {
+                    while (n < words.size() && words.get(n).text().startsWith("-")) {
+                        Word current = words.get(n);
+                        if (current.dynamic()) {
+                            scanForPrivilegeWrappers(words, n);
+                            throw new Unknown();
+                        }
+                        String flag = current.text();
+                        n++;
+                        if ("--".equals(flag)) {
+                            break;
+                        }
+                        if (TIMEOUT_PLAIN_FLAGS.contains(flag) || flag.startsWith("--kill-after=") || flag.startsWith("--signal=")) {
+                            continue;
+                        }
+                        if (TIMEOUT_VALUE_FLAGS.contains(flag)) {
+                            if (n >= words.size() || words.get(n).dynamic()) {
+                                scanForPrivilegeWrappers(words, n);
+                                throw new Unknown();
+                            }
+                            n++;
+                            continue;
+                        }
+                        scanForPrivilegeWrappers(words, n);
+                        throw new Unknown();
+                    }
+                    // Consume the duration positional operand before the wrapped command.
+                    if (n >= words.size() || words.get(n).dynamic()) {
+                        scanForPrivilegeWrappers(words, n);
+                        throw new Unknown();
+                    }
+                    n++;
+                    if (n >= words.size()) {
+                        throw new Unknown();
+                    }
+                }
+                case "nice" -> {
+                    while (n < words.size() && words.get(n).text().startsWith("-")) {
+                        Word current = words.get(n);
+                        if (current.dynamic()) {
+                            scanForPrivilegeWrappers(words, n);
+                            throw new Unknown();
+                        }
+                        String flag = current.text();
+                        n++;
+                        if ("--".equals(flag)) {
+                            break;
+                        }
+                        if (flag.startsWith("--adjustment=") || NICE_SHORT_ADJUSTMENT.matcher(flag).matches()) {
+                            continue;
+                        }
+                        if ("-n".equals(flag) || "--adjustment".equals(flag)) {
+                            if (n >= words.size() || words.get(n).dynamic()) {
+                                scanForPrivilegeWrappers(words, n);
+                                throw new Unknown();
+                            }
+                            n++;
+                            continue;
+                        }
+                        scanForPrivilegeWrappers(words, n);
+                        throw new Unknown();
+                    }
+                    if (n >= words.size()) {
+                        return; // plain `nice` prints current niceness
+                    }
+                }
+                case "ionice" -> {
+                    boolean targetsExistingProcess = false;
+                    while (n < words.size() && words.get(n).text().startsWith("-")) {
+                        Word current = words.get(n);
+                        if (current.dynamic()) {
+                            scanForPrivilegeWrappers(words, n);
+                            throw new Unknown();
+                        }
+                        String flag = current.text();
+                        n++;
+                        if ("--".equals(flag)) {
+                            break;
+                        }
+                        if (IONICE_PLAIN_FLAGS.contains(flag) || flag.startsWith("--class=") || flag.startsWith("--classdata=")) {
+                            continue;
+                        }
+                        if (IONICE_VALUE_FLAGS.contains(flag)) {
+                            if (n >= words.size() || words.get(n).dynamic()) {
+                                scanForPrivilegeWrappers(words, n);
+                                throw new Unknown();
+                            }
+                            n++;
+                            continue;
+                        }
+                        if (IONICE_PID_FLAGS.contains(flag)) {
+                            targetsExistingProcess = true;
+                            if (n >= words.size() || words.get(n).dynamic()) {
+                                scanForPrivilegeWrappers(words, n);
+                                throw new Unknown();
+                            }
+                            n++;
+                            continue;
+                        }
+                        scanForPrivilegeWrappers(words, n);
+                        throw new Unknown();
+                    }
+                    if (targetsExistingProcess || n >= words.size()) {
+                        return;
+                    }
+                }
+                case "stdbuf" -> {
+                    while (n < words.size() && words.get(n).text().startsWith("-")) {
+                        Word current = words.get(n);
+                        if (current.dynamic()) {
+                            scanForPrivilegeWrappers(words, n);
+                            throw new Unknown();
+                        }
+                        String flag = current.text();
+                        n++;
+                        if ("--".equals(flag)) {
+                            break;
+                        }
+                        if (STDBUF_SHORT_COMBINED.matcher(flag).matches()
+                            || flag.startsWith("--input=") || flag.startsWith("--output=") || flag.startsWith("--error=")) {
+                            continue;
+                        }
+                        if (STDBUF_VALUE_FLAGS.contains(flag)) {
+                            if (n >= words.size() || words.get(n).dynamic()) {
+                                scanForPrivilegeWrappers(words, n);
+                                throw new Unknown();
+                            }
+                            n++;
+                            continue;
+                        }
+                        scanForPrivilegeWrappers(words, n);
+                        throw new Unknown();
+                    }
+                    if (n >= words.size()) {
+                        throw new Unknown();
+                    }
+                }
+                case "nohup" -> {
+                    if (n < words.size() && "--".equals(words.get(n).text())) {
+                        n++;
+                    }
+                    if (n >= words.size()) {
+                        throw new Unknown();
+                    }
+                }
+                case "setsid" -> {
+                    while (n < words.size() && words.get(n).text().startsWith("-")) {
+                        Word current = words.get(n);
+                        if (current.dynamic()) {
+                            scanForPrivilegeWrappers(words, n);
+                            throw new Unknown();
+                        }
+                        String flag = current.text();
+                        n++;
+                        if ("--".equals(flag)) {
+                            break;
+                        }
+                        if (SETSID_PLAIN_FLAGS.contains(flag)) {
+                            continue;
+                        }
+                        scanForPrivilegeWrappers(words, n);
+                        throw new Unknown();
+                    }
+                    if (n >= words.size()) {
+                        throw new Unknown();
+                    }
+                }
+                case "command" -> {
+                    boolean queryOnly = false;
+                    while (n < words.size() && words.get(n).text().startsWith("-")) {
+                        Word current = words.get(n);
+                        if (current.dynamic()) {
+                            scanForPrivilegeWrappers(words, n);
+                            throw new Unknown();
+                        }
+                        String flag = current.text();
+                        n++;
+                        if ("--".equals(flag)) {
+                            break;
+                        }
+                        if ("-p".equals(flag)) {
+                            continue;
+                        }
+                        if ("-v".equals(flag) || "-V".equals(flag) || "-pv".equals(flag) || "-pV".equals(flag)) {
+                            queryOnly = true;
+                            continue;
+                        }
+                        scanForPrivilegeWrappers(words, n);
+                        throw new Unknown();
+                    }
+                    if (queryOnly) {
+                        return;
+                    }
+                    if (n >= words.size()) {
+                        throw new Unknown();
+                    }
+                }
+                case "builtin" -> {
+                    if (n < words.size() && "--".equals(words.get(n).text())) {
+                        n++;
+                    }
+                    if (n >= words.size()) {
+                        throw new Unknown();
+                    }
+                }
+                case "exec" -> {
+                    while (n < words.size() && words.get(n).text().startsWith("-")) {
+                        Word current = words.get(n);
+                        if (current.dynamic()) {
+                            scanForPrivilegeWrappers(words, n);
+                            throw new Unknown();
+                        }
+                        String flag = current.text();
+                        n++;
+                        if ("--".equals(flag)) {
+                            break;
+                        }
+                        if ("-c".equals(flag) || "-l".equals(flag)) {
+                            continue;
+                        }
+                        if ("-a".equals(flag)) {
+                            if (n >= words.size() || words.get(n).dynamic()) {
+                                scanForPrivilegeWrappers(words, n);
+                                throw new Unknown();
+                            }
+                            n++;
+                            continue;
+                        }
+                        scanForPrivilegeWrappers(words, n);
+                        throw new Unknown();
+                    }
+                    if (n >= words.size()) {
+                        throw new Unknown();
+                    }
+                }
+                default -> {
+                    scanForPrivilegeWrappers(words, 1);
+                    throw new Unknown();
+                }
+            }
+            invocation(words.subList(n, words.size()), depth + 1);
+        }
+
+        /**
+         * Flags known file-writing or nested command-execution options on common utilities as {@code unsafeEffect} (INCOMPLETE) so COMMAND_SET cannot auto-approve arbitrary
+         * file mutation or hidden execution (defect SSH_PORTAL-D-0072).
+         */
+        private void checkDangerousFlags(String headText, List<Word> words) {
+            if (words.size() <= 1) {
+                return;
+            }
+            if ("find".equals(headText)) {
+                for (int i = 1; i < words.size(); i++) {
+                    String arg = words.get(i).text();
+                    if (FIND_MUTATING_FLAGS.contains(arg)) {
+                        unsafeEffect = true;
+                    } else if (FIND_EXEC_FLAGS.contains(arg)) {
+                        unsafeEffect = true;
+                        int next = i + 1;
+                        if (next < words.size()) {
+                            Word execHead = words.get(next);
+                            String execText = execHead.text();
+                            String execBase = basename(execText);
+                            if (PRIVILEGE_WRAPPERS.contains(execBase)) {
+                                usesSudo = true;
+                            }
+                            if (!execHead.dynamic() && PROGRAM_NAME.matcher(execText).matches() && !RESERVED.contains(execText)) {
+                                names.add(execText);
+                            }
+                            // Also scan remaining tokens in the -exec block up to `;` or `+` for privilege wrappers and inner command after sudo.
+                            for (int j = next + 1; j < words.size(); j++) {
+                                String tok = words.get(j).text();
+                                if (";".equals(tok) || "+".equals(tok)) {
+                                    break;
+                                }
+                                if (PRIVILEGE_WRAPPERS.contains(basename(tok))) {
+                                    usesSudo = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                return;
+            }
+            if ("sed".equals(headText)) {
+                for (int i = 1; i < words.size(); i++) {
+                    String arg = words.get(i).text();
+                    if ("--".equals(arg)) {
+                        break;
+                    }
+                    if ("--in-place".equals(arg) || arg.startsWith("--in-place=") || "-i".equals(arg) || arg.startsWith("-i")
+                        || SED_IN_PLACE_SHORT.matcher(arg).matches() || "-f".equals(arg) || "--file".equals(arg) || arg.startsWith("--file=")) {
+                        unsafeEffect = true;
+                        return;
+                    }
+                }
+                return;
+            }
+            if (AWK_NAMES.contains(headText)) {
+                for (int i = 1; i < words.size(); i++) {
+                    String arg = words.get(i).text();
+                    if ("-i".equals(arg) || "--include".equals(arg) || arg.startsWith("--include=") || "-f".equals(arg) || "--file".equals(arg)
+                        || arg.startsWith("--file=") || arg.contains("system") || arg.contains("getline") || arg.contains(">") || arg.contains("|")) {
+                        unsafeEffect = true;
+                        return;
+                    }
+                }
+                return;
+            }
+            if ("tar".equals(headText)) {
+                if (hasAnyFlag(words, TAR_UNSAFE_FLAGS)) {
+                    unsafeEffect = true;
+                }
+                return;
+            }
+            if ("git".equals(headText)) {
+                if (hasAnyFlag(words, GIT_UNSAFE_FLAGS)) {
+                    unsafeEffect = true;
+                }
+                return;
+            }
+            if ("curl".equals(headText)) {
+                if (hasAnyFlag(words, CURL_UNSAFE_FLAGS)) {
+                    unsafeEffect = true;
+                }
+                return;
+            }
+            if ("wget".equals(headText)) {
+                if (hasAnyFlag(words, WGET_UNSAFE_FLAGS)) {
+                    unsafeEffect = true;
+                }
+                return;
+            }
+            if ("sort".equals(headText)) {
+                if (hasAnyFlag(words, SORT_UNSAFE_FLAGS)) {
+                    unsafeEffect = true;
+                }
+                return;
+            }
+            if ("rsync".equals(headText)) {
+                if (hasAnyFlag(words, RSYNC_UNSAFE_FLAGS)) {
+                    unsafeEffect = true;
+                }
+            }
+        }
+
+        private static boolean hasAnyFlag(List<Word> words, Set<String> flags) {
+            for (int i = 1; i < words.size(); i++) {
+                String arg = words.get(i).text();
+                if ("--".equals(arg)) {
+                    break;
+                }
+                if (flags.contains(arg)) {
+                    return true;
+                }
+                int eq = arg.indexOf('=');
+                if (eq > 0 && flags.contains(arg.substring(0, eq))) {
+                    return true;
+                }
+                // Short attached form like `-o/tmp/file` or `-cfoo=bar`.
+                if (arg.length() > 2 && arg.charAt(0) == '-' && arg.charAt(1) != '-' && flags.contains(arg.substring(0, 2))) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private void sudo(List<Word> words, int depth) {
@@ -372,6 +939,22 @@ public final class PosixCommandLineGrammar implements CommandLineGrammar {
                     index = descriptor.end();
                     continue;
                 }
+                if (c == '&' && at(index + 1) == '>') {
+                    // Bash stdout+stderr output redirection (`&>` / `&>>`): parse destination to keep extracting substitutions, then mark INCOMPLETE (SSH_PORTAL-D-0072).
+                    index += 2;
+                    if (at(index) == '>') {
+                        index++;
+                    }
+                    if (at(index) == '(' || at(index) == '&') {
+                        throw new Unknown();
+                    }
+                    while (index < source.length() && (source.charAt(index) == ' ' || source.charAt(index) == '\t')) {
+                        index++;
+                    }
+                    word(depth);
+                    unsafeEffect = true;
+                    continue;
+                }
                 if (c == ';' || c == '&' || c == '|') {
                     if (words.isEmpty()) {
                         throw new Unknown();
@@ -388,14 +971,23 @@ public final class PosixCommandLineGrammar implements CommandLineGrammar {
                     continue;
                 }
                 if (c == '<' || c == '>') {
-                    // Redirection stays part of the approved command's effects; only substitutions in the destination are read, the path is never judged.
+                    // Output and read-write redirections (`>`, `>>`, `>|`, `<>`) can overwrite arbitrary files and must never establish COMMAND_SET auto-approval
+                    // (SSH_PORTAL-D-0072). Destination words are still parsed so substitutions inside them remain visible to deny-list and sudo checks.
                     char operator = c;
                     index++;
-                    if (at(index) == operator) {
-                        if (operator == '<') {
+                    boolean writesFile = operator == '>';
+                    if (operator == '>') {
+                        if (at(index) == '>' || at(index) == '|') {
+                            index++;
+                        }
+                    } else {
+                        if (at(index) == '<') {
                             throw new Unknown();
                         }
-                        index++;
+                        if (at(index) == '>') {
+                            index++;
+                            writesFile = true;
+                        }
                     }
                     if (at(index) == '(' || at(index) == '&') {
                         throw new Unknown();
@@ -404,6 +996,9 @@ public final class PosixCommandLineGrammar implements CommandLineGrammar {
                         index++;
                     }
                     word(depth);
+                    if (writesFile) {
+                        unsafeEffect = true;
+                    }
                     continue;
                 }
                 words.add(word(depth));

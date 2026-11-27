@@ -74,6 +74,11 @@ public final class ServerKeyPolicy {
      */
     private Path preparedFile(Path file, PrivateFiles privateFiles) {
         try {
+            if (Files.isSymbolicLink(file) && !Files.exists(file)) {
+                // A link follows to a target that is not there: nothing is created behind it (that would write where the link points), and the answer is the one for any
+                // path that is not a regular file (defect SSH_PORTAL-D-0146), not an I/O failure of the creation.
+                throw new ProfileConfigException(ProfileConfigException.Code.KNOWN_HOSTS_UNSAFE, "The file of known hosts " + file + " is not a regular file");
+            }
             privateFiles.createPrivateFile(file);
             if (!Files.isRegularFile(file)) {
                 throw new ProfileConfigException(ProfileConfigException.Code.KNOWN_HOSTS_UNSAFE, "The file of known hosts " + file + " is not a regular file");

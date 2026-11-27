@@ -51,33 +51,50 @@ final class SftpDoubles {
             if ("read".equals(method.getName()) && arguments != null && arguments.length == 1 && arguments[0] instanceof String path && path.endsWith(pathSuffix)) {
                 return new FlippedFirstByte(real.read(path));
             }
-            return passThrough(real, method, arguments);
-        });
-    }
-
-    /**
-     * A client that hands out the file's bytes as they are, but whose read stream throws an {@link IOException} from {@code close()} (the real stream is closed first)
-     * while the channel stays alive: a close that fails by itself, after the last block. Only a read of a path that ends with the suffix is changed.
-     */
-    SftpClient failingToCloseWhenReading(SftpClient real, String pathSuffix) {
-        return proxy(real, (method, arguments) -> {
-            if ("read".equals(method.getName()) && arguments != null && arguments.length == 1 && arguments[0] instanceof String path && path.endsWith(pathSuffix)) {
-                return new ClosedStream(real.read(path), true, new AtomicBoolean());
+            if ("read".equals(method.getName()) && arguments != null && arguments.length == 5
+                && arguments[0] instanceof SftpClient.Handle handle && handle.getPath().endsWith(pathSuffix)
+                && arguments[1] instanceof Long fileOffset && arguments[2] instanceof byte[] dst && arguments[3] instanceof Integer dstOffset) {
+                Object result = passThrough(real, method, arguments);
+                if (result instanceof Integer count && count > 0 && fileOffset == 0L) {
+                    dst[dstOffset] ^= 1;
+                }
+                return result;
             }
             return passThrough(real, method, arguments);
         });
     }
 
     /**
-     * A client whose channel ends after the read: once the read stream of a path with the suffix is closed, every {@code lstat} (the look at the file after the read) runs
-     * {@code atTheLook} and then fails with a {@link ClosedChannelException}, what a client that was closed from outside answers. The bytes of the read are the real ones;
-     * with {@code closeFails} the {@code close()} of the stream fails as well (the real stream is closed first), which is the close failure and the channel end together.
+     * A client that hands out the file's bytes as they are, but whose read stream or handle throws an {@link IOException} from {@code close()} (the real resource is
+     * closed first) while the channel stays alive: a close that fails by itself, after the last block. Only a read of a path that ends with the suffix is changed.
+     */
+    SftpClient failingToCloseWhenReading(SftpClient real, String pathSuffix) {
+        return proxy(real, (method, arguments) -> {
+            if ("read".equals(method.getName()) && arguments != null && arguments.length == 1 && arguments[0] instanceof String path && path.endsWith(pathSuffix)) {
+                return new ClosedStream(real.read(path), true, new AtomicBoolean());
+            }
+            if ("open".equals(method.getName()) && arguments != null && arguments.length == 2 && arguments[0] instanceof String path && path.endsWith(pathSuffix)
+                && arguments[1] instanceof java.util.Collection<?> modes && modes.equals(java.util.Set.of(SftpClient.OpenMode.Read))) {
+                return new ClosingFails((SftpClient.CloseableHandle) passThrough(real, method, arguments), true, new AtomicBoolean());
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client whose channel ends after the read: once the read stream or handle of a path with the suffix is closed, every {@code lstat} (the look at the file after the
+     * read) runs {@code atTheLook} and then fails with a {@link ClosedChannelException}, what a client that was closed from outside answers. The bytes of the read are the
+     * real ones; with {@code closeFails} the {@code close()} fails as well (the real resource is closed first), which is the close failure and the channel end together.
      */
     SftpClient channelEndingAfterTheRead(SftpClient real, String pathSuffix, boolean closeFails, Runnable atTheLook) {
         AtomicBoolean readClosed = new AtomicBoolean();
         return proxy(real, (method, arguments) -> {
             if ("read".equals(method.getName()) && arguments != null && arguments.length == 1 && arguments[0] instanceof String path && path.endsWith(pathSuffix)) {
                 return new ClosedStream(real.read(path), closeFails, readClosed);
+            }
+            if ("open".equals(method.getName()) && arguments != null && arguments.length == 2 && arguments[0] instanceof String path && path.endsWith(pathSuffix)
+                && arguments[1] instanceof java.util.Collection<?> modes && modes.equals(java.util.Set.of(SftpClient.OpenMode.Read))) {
+                return new ClosingFails((SftpClient.CloseableHandle) passThrough(real, method, arguments), closeFails, readClosed);
             }
             if ("lstat".equals(method.getName()) && readClosed.get()) {
                 atTheLook.run();
@@ -128,6 +145,145 @@ final class SftpDoubles {
             }
             return passThrough(real, method, arguments);
         });
+    }
+
+    /**
+     * A client whose request to set the attributes of an open file (a handle: the mode of a file just made) is answered with the SFTP status, as a server does that cannot
+     * give the new file its mode. Every other call goes to the real client.
+     */
+    SftpClient refusingToSetTheModeOfAHandle(SftpClient real, int status) {
+        return proxy(real, (method, arguments) -> {
+            if ("setStat".equals(method.getName()) && arguments != null && arguments.length == 2 && arguments[0] instanceof SftpClient.Handle) {
+                throw new SftpException(status, "injected: the mode of the file is refused");
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client that runs {@code atTheChange} when the attributes of a path are set by name (the change of a mode: a cancel or a time limit that comes in the middle of it)
+     * and then does the real call. Every other call goes to the real client.
+     */
+    SftpClient runningWhenTheModeIsChanged(SftpClient real, Runnable atTheChange) {
+        return proxy(real, (method, arguments) -> {
+            if ("setStat".equals(method.getName()) && arguments != null && arguments.length == 2 && arguments[0] instanceof String) {
+                atTheChange.run();
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client whose {@code lstat} is answered with the SFTP status once the attributes of a path were set by name: a server that took the change of the mode and then
+     * refuses to say what the file is now (the look that reads the mode back). Every other call goes to the real client.
+     */
+    SftpClient refusingToLookAfterTheModeIsSet(SftpClient real, int status) {
+        AtomicBoolean set = new AtomicBoolean();
+        return proxy(real, (method, arguments) -> {
+            if ("setStat".equals(method.getName()) && arguments != null && arguments.length == 2 && arguments[0] instanceof String) {
+                Object result = passThrough(real, method, arguments);
+                set.set(true);
+                return result;
+            }
+            if ("lstat".equals(method.getName()) && set.get()) {
+                throw new SftpException(status, "injected: the status of the file is refused after its mode was set");
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client whose handle for reading a path that ends with the suffix (the look that reads a replaced file back) fails in {@code close()} after the real handle was
+     * closed: a close that fails by itself after the file was read and confirmed. Every other call goes to the real client.
+     */
+    SftpClient failingToCloseTheReadHandle(SftpClient real, String pathSuffix) {
+        return proxy(real, (method, arguments) -> {
+            if ("open".equals(method.getName()) && arguments != null && arguments.length == 2 && arguments[0] instanceof String path && path.endsWith(pathSuffix)
+                && arguments[1] instanceof java.util.Collection<?> modes && modes.equals(java.util.Set.of(SftpClient.OpenMode.Read))) {
+                return new ClosingFails((SftpClient.CloseableHandle) passThrough(real, method, arguments));
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client that runs {@code beforeOpen} immediately before opening a path ending with {@code pathSuffix} for reading (simulating a TOCTOU file or symlink swap
+     * between {@code lstat} and {@code open}, defect SSH_PORTAL-D-0082). Every other call goes to the real client.
+     */
+    SftpClient runningBeforeReadOpen(SftpClient real, String pathSuffix, Runnable beforeOpen) {
+        AtomicBoolean ran = new AtomicBoolean();
+        return proxy(real, (method, arguments) -> {
+            if ("open".equals(method.getName()) && arguments != null && arguments.length == 2 && arguments[0] instanceof String path && path.endsWith(pathSuffix)
+                && arguments[1] instanceof java.util.Collection<?> modes && modes.equals(java.util.Set.of(SftpClient.OpenMode.Read))
+                && ran.compareAndSet(false, true)) {
+                beforeOpen.run();
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client that throws {@link AssertionError} if any path-based {@code setStat(String, ...)}, {@code write(String, ...)}, or {@code read(String)} is invoked on a
+     * path ending with {@code pathSuffix}, verifying that all temporary-file staging runs exclusively over the pinned handle (defect SSH_PORTAL-D-0082).
+     */
+    SftpClient forbiddingPathOperationsOn(SftpClient real, String pathSuffix) {
+        return proxy(real, (method, arguments) -> {
+            if (arguments != null && arguments.length >= 1 && arguments[0] instanceof String path && path.endsWith(pathSuffix)) {
+                String name = method.getName();
+                if ("setStat".equals(name) || "write".equals(name) || "read".equals(name)) {
+                    throw new AssertionError("Unexpected path-based SFTP " + name + " on " + path + " (SSH_PORTAL-D-0082)");
+                }
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /**
+     * A client whose channel ends when the temporary file of an upload is created: the open of a path of the portal's temporary files with the exclusive-create mode runs
+     * {@code atTheOpen} and then fails with a {@link ClosedChannelException}, what a client that was closed from outside (by a cancel or the time limit) answers. Every other
+     * call goes to the real client.
+     */
+    SftpClient channelEndingAtTheTemporaryFile(SftpClient real, Runnable atTheOpen) {
+        return proxy(real, (method, arguments) -> {
+            if ("open".equals(method.getName()) && arguments != null && arguments.length == 2 && arguments[0] instanceof String path && path.contains(".ssh-approval-")
+                && arguments[1] instanceof java.util.Collection<?> modes && modes.contains(SftpClient.OpenMode.Exclusive)) {
+                atTheOpen.run();
+                throw new ClosedChannelException();
+            }
+            return passThrough(real, method, arguments);
+        });
+    }
+
+    /** A handle of the real client whose {@code close()} closes the real handle first, marks {@code closed}, and optionally throws. */
+    private static final class ClosingFails extends SftpClient.CloseableHandle {
+        private final SftpClient.CloseableHandle real;
+        private final boolean failOnClose;
+        private final AtomicBoolean closed;
+
+        ClosingFails(SftpClient.CloseableHandle real) {
+            this(real, true, new AtomicBoolean());
+        }
+
+        ClosingFails(SftpClient.CloseableHandle real, boolean failOnClose, AtomicBoolean closed) {
+            super(real.getPath(), real.getIdentifier());
+            this.real = real;
+            this.failOnClose = failOnClose;
+            this.closed = closed;
+        }
+
+        @Override
+        public boolean isOpen() {
+            return real.isOpen();
+        }
+
+        @Override
+        public void close() throws IOException {
+            real.close();
+            closed.set(true);
+            if (failOnClose) {
+                throw new IOException("injected: closing the read handle failed");
+            }
+        }
     }
 
     /** Opens the real client of a session and puts a fault in front of it. */

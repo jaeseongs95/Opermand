@@ -11,6 +11,14 @@ public interface SessionLease extends AutoCloseable {
     /** The authenticated session; valid until the lease is closed or discarded. */
     ClientSession session();
 
+    /** The server accepted opening a channel on this session; clears any consecutive open-rejection streak. */
+    default void openAccepted() {
+    }
+
+    /** The server refused to open a channel on this live session ({@code SSH_MSG_CHANNEL_OPEN_FAILURE}); counted toward pool eviction. */
+    default void openRejected() {
+    }
+
     /** The session is dead or its state is unknown: the pool must not hand it out again. */
     void discard();
 
