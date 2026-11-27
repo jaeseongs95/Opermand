@@ -25,7 +25,7 @@ final class SourceRules {
         }
     }
 
-    private static final Pattern PROJECT_DEPENDENCY = Pattern.compile("project\\(\":portal-([a-z-]+)\"\\)");
+    private static final Pattern PROJECT_DEPENDENCY = Pattern.compile("project\\(\":opermand-([a-z-]+)\"\\)");
 
     private final ModuleTable table;
 
