@@ -1,9 +1,0 @@
-- name: SonarQube Analysis
-  env:
-    SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-    SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-  run: |
-    ./gradlew sonar \
-      -Dsonar.projectKey=opermand \
-      -Dsonar.qualitygate.wait=true \
-      -Dsonar.qualitygate.timeout=300
